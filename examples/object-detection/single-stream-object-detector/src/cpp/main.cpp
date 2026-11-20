@@ -18,6 +18,7 @@
 #include "neat.h"
 #include "sima_examples/config.h"
 #include "sima_examples/detection_egress.h"
+#include "sima_examples/example_utils.h"
 #include "sima_examples/labels.h"
 #include "sima_examples/pull_status.h"
 #include "sima_examples/rtsp_probe.h"
@@ -40,8 +41,6 @@ namespace groups = simaai::neat::nodes::groups;
 namespace {
 
 constexpr int kPullTimeoutMs = 100;
-// RTP/JPEG (RFC 2435) carries a USB camera's JPEG to Insight in 8-pixel blocks, 2040 at most.
-constexpr int kRtpJpegMaxSide = 2040;
 
 struct AppConfig {
   fs::path model_path;
@@ -94,19 +93,6 @@ CliOptions parse_args(int argc, char** argv) {
   return options;
 }
 
-// The string at `key`, which must not be null or empty.
-std::string required_string(const sima_examples::Config& config, const std::string& key) {
-  std::string value = config.string(key);
-  // Config::string() returns a YAML null as the text "null"; Python's Config rejects it.
-  if (!config.string_value(key)) {
-    throw std::runtime_error(key + " must be a string, got null");
-  }
-  if (value.empty()) {
-    throw std::runtime_error(key + " must not be empty");
-  }
-  return value;
-}
-
 AppConfig load_app_config(const fs::path& path) {
   const auto config = sima_examples::Config::load(path);
   AppConfig cfg;
@@ -116,9 +102,9 @@ AppConfig load_app_config(const fs::path& path) {
   }
   const bool rtsp = cfg.input_type == "rtsp";
   // Only the keys of input.type are read, so reject_unread_keys() fails on another type's.
-  cfg.model_path = fs::absolute(path).parent_path() / required_string(config, "model.path");
-  cfg.labels_path = required_string(config, "model.labels");
-  cfg.source = required_string(config, "input.source");
+  cfg.model_path = fs::absolute(path).parent_path() / config.string("model.path");
+  cfg.labels_path = config.string("model.labels");
+  cfg.source = config.string("input.source");
   cfg.codec = rtsp ? config.string("input.codec") : "mjpeg";
   cfg.width = config.integer("input.width");
   cfg.height = config.integer("input.height");
@@ -131,7 +117,7 @@ AppConfig load_app_config(const fs::path& path) {
   cfg.min_score = config.number("inference.min_score");
   cfg.nms_iou = config.number("inference.nms_iou");
   cfg.max_detections = config.integer("inference.max_detections");
-  cfg.insight_host = required_string(config, "output.insight.host");
+  cfg.insight_host = config.string("output.insight.host");
   cfg.video_port_base = config.integer("output.insight.video_port_base");
   cfg.metadata_port_base = config.integer("output.insight.metadata_port_base");
   if (cfg.input_type == "http") {
@@ -141,45 +127,12 @@ AppConfig load_app_config(const fs::path& path) {
   if (cfg.codec != "h264" && cfg.codec != "h265" && cfg.codec != "mjpeg") {
     throw std::runtime_error("input.codec must be h264, h265, or mjpeg");
   }
-  if (!rtsp && (cfg.width <= 0 || cfg.height <= 0 || cfg.fps <= 0)) {
-    throw std::runtime_error(
-        "input.width, input.height, and input.fps must be above 0 for an HTTP or USB source");
-  }
-  if (rtsp && (cfg.width < 0 || cfg.height < 0 || cfg.fps < 0)) {
-    throw std::runtime_error(
-        "input.width, input.height, and input.fps must be 0 or more for an RTSP source");
-  }
-  if (cfg.rtsp_latency_ms < 0) {
-    throw std::runtime_error("input.rtsp.latency_ms must be 0 or more");
+  // Core sends to 127.0.0.1 when the host is empty.
+  if (cfg.insight_host.empty()) {
+    throw std::runtime_error("output.insight.host must not be empty");
   }
   if (cfg.frames < 0) {
     throw std::runtime_error("inference.frames must be 0 or more");
-  }
-  if (cfg.max_detections <= 0) {
-    throw std::runtime_error("inference.max_detections must be above 0");
-  }
-  if (!(cfg.min_score >= 0.0 && cfg.min_score <= 1.0)) {
-    throw std::runtime_error("inference.min_score must be from 0 to 1");
-  }
-  if (!(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0)) {
-    throw std::runtime_error("inference.nms_iou must be from 0 to 1");
-  }
-  for (const auto& [key, port] :
-       {std::pair{"output.insight.video_port_base", cfg.video_port_base},
-        std::pair{"output.insight.metadata_port_base", cfg.metadata_port_base}}) {
-    if (port < 1 || port > 65535) {
-      throw std::runtime_error(std::string(key) + " must be from 1 to 65535");
-    }
-  }
-  // Core candidate: Core rejects a larger JPEG only when the video sender's caps fail to
-  // negotiate, with no message that names the RTP/JPEG limit.
-  const auto rtp_jpeg_side = [](int side) {
-    return side > 0 && side <= kRtpJpegMaxSide && side % 8 == 0;
-  };
-  if (cfg.input_type == "usb" && !(rtp_jpeg_side(cfg.width) && rtp_jpeg_side(cfg.height))) {
-    throw std::runtime_error("input.width and input.height of a USB camera must be multiples of "
-                             "8 and at most " +
-                             std::to_string(kRtpJpegMaxSide) + " (RTP/JPEG)");
   }
   return cfg;
 }
@@ -208,17 +161,17 @@ neat::Model::Options model_options(const AppConfig& cfg, neat::FormatTag frame_f
   return options;
 }
 
-groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg, int fps) {
+groups::RtspEncodedInputOptions rtsp_options(const AppConfig& cfg) {
   groups::RtspEncodedInputOptions options;
   options.url = cfg.source;
   options.codec = rtsp_codec(cfg);
   options.tcp = cfg.rtsp_tcp;
   options.latency_ms = cfg.rtsp_latency_ms;
-  options.source_fps = fps;
+  options.source_fps = cfg.fps;
   if (cfg.codec == "h264") {
     options.fallback_h264_width = cfg.width;
     options.fallback_h264_height = cfg.height;
-    options.fallback_h264_fps = fps;
+    options.fallback_h264_fps = cfg.fps;
   }
   return options;
 }
@@ -253,7 +206,7 @@ neat::Graph camera_graph(const AppConfig& cfg, const neat::UsbCameraInfo& camera
 }
 
 // Hardware decode of the RTSP stream or the camera's JPEG: NV12, or NV16 for a 4:2:2 camera.
-neat::Graph decoder_graph(const AppConfig& cfg, int fps, neat::FormatTag frame_format) {
+neat::Graph decoder_graph(const AppConfig& cfg, neat::FormatTag frame_format) {
   neat::SimaDecodeOptions decode;
   decode.type = cfg.codec == "h264"   ? neat::SimaDecodeType::H264
                 : cfg.codec == "h265" ? neat::SimaDecodeType::H265
@@ -261,11 +214,7 @@ neat::Graph decoder_graph(const AppConfig& cfg, int fps, neat::FormatTag frame_f
   decode.out_format = frame_format;
   decode.dec_width = cfg.width;
   decode.dec_height = cfg.height;
-  decode.dec_fps = fps;
-  if (cfg.codec == "mjpeg") {
-    // Leaves free decode surfaces while inference and the video encoder hold frames.
-    decode.num_buffers = 32;
-  }
+  decode.dec_fps = cfg.fps;
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
   return graph;
@@ -279,25 +228,17 @@ neat::Graph detector_graph(neat::Model& model) {
   return graph;
 }
 
-// H.264, H.265, and a USB camera's JPEG go to Insight as received; decoded HTTP and RTSP MJPEG
-// frames are encoded as H.264.
-groups::VideoSenderOptions video_options(const AppConfig& cfg, int fps) {
-  auto options = cfg.input_type == "usb"
-                     ? groups::VideoSenderOptions::Passthrough(groups::RtspCodec::MJPEG)
-                 : cfg.codec == "mjpeg" ? groups::VideoSenderOptions::FromRaw({.fps = fps})
-                                        : groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg));
+// RTSP H.264, H.265, and MJPEG and a USB camera's JPEG go to Insight as received; decoded HTTP
+// MJPEG frames are encoded as H.264.
+groups::VideoSenderOptions video_options(const AppConfig& cfg) {
+  // Core candidate: no HTTP MJPEG input keeps the stream encoded, so its decoded frames are
+  // encoded again for Insight. Passthrough(MJPEG) carries RTP/JPEG, at most 2040 pixels per side.
+  auto options = cfg.input_type == "http"
+                     ? groups::VideoSenderOptions::FromRaw({.fps = cfg.fps})
+                     : groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg));
   options.host = cfg.insight_host;
   options.video_port_base = cfg.video_port_base;
   return options;
-}
-
-// Bound the decoded frames the H.264 encoder holds, so it cannot starve the decoder.
-neat::GraphLinkOptions encoder_link() {
-  neat::GraphLinkOptions link;
-  link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
-  link.max_inflight_per_stream = 2;
-  link.max_inflight_total = 2;
-  return link;
 }
 
 // Send the camera's newest JPEG, so a slow video sender cannot hold back the camera.
@@ -395,55 +336,49 @@ int run_app(const CliOptions& cli) {
 
   const auto labels = sima_examples::load_labels(configured.labels_path);
   const AppConfig cfg = with_stream_info(configured);
-  const int fps = cfg.fps;
   const auto camera = cfg.input_type == "usb"
                           ? std::optional(neat::usb_camera_info(usb_camera_options(cfg)))
                           : std::nullopt;
   const neat::FormatTag frame_format = camera ? camera->decoded_format : neat::FormatTag::NV12;
   neat::Model model(cfg.model_path.string(), model_options(cfg, frame_format));
   const neat::Graph detector = detector_graph(model);
-  const neat::Graph video = groups::VideoSender(video_options(cfg, fps));
+  const neat::Graph video = groups::VideoSender(video_options(cfg));
 
   neat::Graph graph;
   neat::Graph frames;
   if (cfg.input_type == "http") {
     frames = groups::HttpMjpegDecodedInput(http_options(cfg));
-    graph.connect(frames, video, encoder_link());
+    graph.connect(frames, video);
   } else if (cfg.input_type == "usb") {
     const neat::Graph source = camera_graph(cfg, *camera);
-    frames = decoder_graph(cfg, fps, frame_format);
+    frames = decoder_graph(cfg, frame_format);
     graph.connect(source, frames);
     graph.connect(source, video, camera_video_link());
   } else {
-    const neat::Graph source = groups::RtspEncodedInput(rtsp_options(cfg, fps));
-    frames = decoder_graph(cfg, fps, frame_format);
+    const neat::Graph source = groups::RtspEncodedInput(rtsp_options(cfg));
+    frames = decoder_graph(cfg, frame_format);
     graph.connect(source, frames);
-    if (cfg.codec == "mjpeg") {
-      graph.connect(frames, video, encoder_link());
-    } else {
-      // A plain link lets Core tee the encoded stream to the decoder and the video sender.
-      graph.connect(source, video);
-    }
+    // A plain link lets Core tee the encoded stream to the decoder and the video sender.
+    graph.connect(source, video);
   }
   graph.connect(frames, detector);
 
   std::string error;
   neat::MetadataSender metadata_sender(metadata_options(cfg), &error);
-  if (!metadata_sender.ok()) {
-    throw std::runtime_error("metadata sender failed: " + error);
-  }
+  sima_examples::require(metadata_sender.ok(), error);
   const std::atomic<bool>& stop = sima_examples::stop_on_signals();
   // The Run's destructor closes it when send_detections throws.
   neat::Run run = graph.build(run_options());
   std::cout << "source=" << cfg.source << " type=" << cfg.input_type << " codec=" << cfg.codec
-            << " stream=" << cfg.width << "x" << cfg.height << "@" << fps
+            << " stream=" << cfg.width << "x" << cfg.height << "@" << cfg.fps
             << " insight=" << cfg.insight_host << " video=" << cfg.video_port_base
             << " metadata=" << cfg.metadata_port_base << "\n";
   const int processed = send_detections(run, metadata_sender, labels, cfg, stop);
   run.close();
 
-  // Core candidate: on a pipe or a file, text still in the stdout buffer when the process exits
-  // is lost although the exit code is 0, so std::endl flushes each result line.
+  // Core candidate: after an RTSP or HTTP MJPEG run, the process exits with code 0 without
+  // flushing stdout, so on a pipe or a file the lines below are lost unless std::endl flushes
+  // them. Reproduce: inference.frames: 30 on an RTSP MJPEG source, piped through cat.
   std::cout << "processed=" << processed << " video_sender=" << cfg.insight_host << ":"
             << cfg.video_port_base << std::endl;
   const auto failures = metadata_sender.stats().send_failures;

@@ -18,7 +18,7 @@ from tests.utils.pytest_fixtures import usb_camera_cases
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().split("\n")
+LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitlines()
 FRAMES = 100
 # Above the shipped 0.30, so the scores show that the example applies inference.min_score.
 MIN_SCORE = 0.5
@@ -146,8 +146,9 @@ def test_publishes_insight_video_and_metadata(
         for entry in json.loads(message.payload)["data"]["objects"]:
             assert entry["label"] in LABELS, entry
             assert entry["confidence"] >= MIN_SCORE, entry
-    # H.265 goes to Insight as received (RTP payload type 98), and so does a USB camera's JPEG
-    # (26). H.264 is passed through and decoded MJPEG and HTTP frames are encoded as H.264 (96).
-    payload_type = 26 if source["type"] == "usb" else 98 if source.get("codec") == "h265" else 96
+    # RTSP H.264 (RTP payload type 96), H.265 (98), and MJPEG (26) and a USB camera's JPEG (26)
+    # go to Insight as received; decoded HTTP frames are encoded as H.264 (96).
+    codec = "mjpeg" if source["type"] == "usb" else source.get("codec")
+    payload_type = 96 if source["type"] == "http" else {"h264": 96, "h265": 98, "mjpeg": 26}[codec]
     assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
     assert video_packet[1] & 0x7F == payload_type

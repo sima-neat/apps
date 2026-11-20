@@ -21,13 +21,13 @@ How does a frame move through single-stream-object-detector?
 
 ╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
 ┆ RUN, input.type rtsp                                                              ┆
-┆  ┌────────────────────────────────┐  H.264, H.265       ┌──────────────────────┐  ┆
+┆  ┌────────────────────────────────┐  H.264, H.265,      ┌──────────────────────┐  ┆
 ┆  │ RtspEncodedInput               │────────────────────►│ VideoSender          │──┼─────┐
-┆  └────────────────────────────────┘  as received        └──────────────────────┘  ┆     │
-┆             │ encoded frames                                        ▲             ┆     │ video
-┆             ▼                                                       │             ┆     │
-┆  ┌────────────────────────────────┐  MJPEG: NV12, latest, 2 held    │             ┆     │
-┆  │ SimaDecode                     │─────────────────────────────────┘             ┆     │
+┆  └────────────────────────────────┘  MJPEG as received  └──────────────────────┘  ┆     │
+┆             │ encoded frames                                                      ┆     │ video
+┆             ▼                                                                     ┆     │
+┆  ┌────────────────────────────────┐                                               ┆     │
+┆  │ SimaDecode                     │                                               ┆     │
 ┆  └────────────────────────────────┘                                               ┆     │
 ┆             │ NV12 frames                                                         ┆     │
 ┆             ▼                                                                     ┆     │
@@ -49,7 +49,7 @@ With input.type http, one group receives and decodes the MJPEG stream:
 
  ┌────────────────────────────────┐  NV12 frames,       ┌──────────────────────┐
  │ HttpMjpegDecodedInput          │────────────────────►│ VideoSender          │
- └────────────────────────────────┘  latest, 2 held     └──────────────────────┘
+ └────────────────────────────────┘  encoded as H.264   └──────────────────────┘
             │ NV12 frames to the YOLO26 Model, as above
 
 With input.type usb, the camera's own JPEG goes to Insight:
@@ -65,7 +65,7 @@ With input.type usb, the camera's own JPEG goes to Insight:
             │ NV12, or NV16 from a 4:2:2 camera, to the YOLO26 Model
 ```
 
-H.264 and H.265 go to Insight as received, while the decoder feeds the model. An MJPEG stream, over RTSP or HTTP, is decoded once and its frames are encoded as H.264 for Insight; the link to the encoder keeps the newest frames and holds at most two, so the encoder cannot starve the decoder. A USB camera's own JPEG goes to Insight unchanged, and only the model reads the decoded frame. Each detection message carries the frame's timestamp, which Insight uses to draw the boxes on the frame they came from.
+An RTSP stream, H.264, H.265, or MJPEG, goes to Insight as received, while the decoder feeds the model; MJPEG travels as RTP/JPEG, at most 2040 pixels per side. An HTTP MJPEG stream is decoded once and its frames are encoded as H.264 for Insight, because Core has no HTTP input that keeps the stream encoded. A USB camera's own JPEG goes to Insight unchanged, and only the model reads the decoded frame. Each detection message carries the frame's timestamp, which Insight uses to draw the boxes on the frame they came from.
 
 ## Preview
 
@@ -115,7 +115,7 @@ To use another model, replace `yolo26m` and `w16a16` in both commands and in `mo
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL into `input.source`. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. For RTSP, set `input.codec` to `h264`, `h265`, or `mjpeg`; an HTTP stream is MJPEG and takes no codec. H.264 and H.265 streams and a USB camera's JPEG go to Insight as received; RTSP and HTTP MJPEG frames are decoded and re-encoded as H.264, as Concept shows. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the source and its frame size on startup.
+In the Insight Web UI, start the required stream and copy its source URL into `input.source`. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. For RTSP, set `input.codec` to `h264`, `h265`, or `mjpeg`; an HTTP stream is MJPEG and takes no codec. RTSP streams and a USB camera's JPEG go to Insight as received; HTTP MJPEG frames are decoded and re-encoded as H.264, as Concept shows. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the source and its frame size on startup.
 
 ## Configure
 
@@ -138,7 +138,7 @@ python3 -c "import pyneat; print(pyneat.usb_camera_ids())"
 v4l2-ctl --list-devices && v4l2-ctl -d /dev/video<N> --list-formats-ext
 ```
 
-The camera's own JPEG goes to Insight unchanged as RTP/JPEG, with no re-encoding, so view it with an Insight version that shows JPEG channels. The same JPEG is decoded on the hardware decoder only for the model, in the camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model reads it directly. RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8, so 4K modes are rejected at startup. A 1080p webcam's MJPEG is about 66-90 Mbit/s on the network.
+The camera's own JPEG goes to Insight unchanged as RTP/JPEG, with no re-encoding, so view it with an Insight version that shows JPEG channels. The same JPEG is decoded on the hardware decoder only for the model, in the camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model reads it directly. RTP/JPEG carries sizes up to 2040 pixels per side in multiples of 8, so pick a mode within that, not a 4K one. A 1080p webcam's MJPEG is about 66-90 Mbit/s on the network.
 
 ## Run
 

@@ -41,8 +41,6 @@ DECODE_TYPES = {
 }
 INPUT_TYPES = ("rtsp", "http", "usb")
 PULL_TIMEOUT_MS = 100
-# RTP/JPEG (RFC 2435) carries a USB camera's JPEG to Insight in 8-pixel blocks, 2040 at most.
-RTP_JPEG_MAX_SIDE = 2040
 
 
 @dataclass(frozen=True)
@@ -77,14 +75,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def required_string(config: Config, key: str) -> str:
-    """The string at `key`, which must not be empty."""
-    value = config.string(key)
-    if not value:
-        raise ValueError(f"{key} must not be empty")
-    return value
-
-
 def load_app_config(path: Path) -> AppConfig:
     config = Config.load(path)
     input_type = config.string("input.type")
@@ -93,10 +83,10 @@ def load_app_config(path: Path) -> AppConfig:
     rtsp = input_type == "rtsp"
     # Only the keys of input.type are read, so reject_unread_keys() fails on another type's.
     app_config = AppConfig(
-        model_path=path.absolute().parent / required_string(config, "model.path"),
-        labels_path=Path(required_string(config, "model.labels")),
+        model_path=path.absolute().parent / config.string("model.path"),
+        labels_path=Path(config.string("model.labels")),
         input_type=input_type,
-        source=required_string(config, "input.source"),
+        source=config.string("input.source"),
         codec=config.string("input.codec") if rtsp else "mjpeg",
         width=config.integer("input.width"),
         height=config.integer("input.height"),
@@ -107,7 +97,7 @@ def load_app_config(path: Path) -> AppConfig:
         min_score=config.number("inference.min_score"),
         nms_iou=config.number("inference.nms_iou"),
         max_detections=config.integer("inference.max_detections"),
-        insight_host=required_string(config, "output.insight.host"),
+        insight_host=config.string("output.insight.host"),
         video_port_base=config.integer("output.insight.video_port_base"),
         metadata_port_base=config.integer("output.insight.metadata_port_base"),
         ssl_strict=config.boolean("app.ssl_strict") if input_type == "http" else True,
@@ -115,40 +105,11 @@ def load_app_config(path: Path) -> AppConfig:
     config.reject_unread_keys()
     if app_config.codec not in RTSP_CODECS:
         raise ValueError("input.codec must be h264, h265, or mjpeg")
-    if not rtsp and min(app_config.width, app_config.height, app_config.fps) <= 0:
-        raise ValueError(
-            "input.width, input.height, and input.fps must be above 0 for an HTTP or USB source"
-        )
-    if rtsp and min(app_config.width, app_config.height, app_config.fps) < 0:
-        raise ValueError(
-            "input.width, input.height, and input.fps must be 0 or more for an RTSP source"
-        )
-    if app_config.rtsp_latency_ms < 0:
-        raise ValueError("input.rtsp.latency_ms must be 0 or more")
+    # Core sends to 127.0.0.1 when the host is empty.
+    if not app_config.insight_host:
+        raise ValueError("output.insight.host must not be empty")
     if app_config.frames < 0:
         raise ValueError("inference.frames must be 0 or more")
-    if app_config.max_detections <= 0:
-        raise ValueError("inference.max_detections must be above 0")
-    if not 0.0 <= app_config.min_score <= 1.0:
-        raise ValueError("inference.min_score must be from 0 to 1")
-    if not 0.0 <= app_config.nms_iou <= 1.0:
-        raise ValueError("inference.nms_iou must be from 0 to 1")
-    for key, port in (
-        ("output.insight.video_port_base", app_config.video_port_base),
-        ("output.insight.metadata_port_base", app_config.metadata_port_base),
-    ):
-        if not 1 <= port <= 65535:
-            raise ValueError(f"{key} must be from 1 to 65535")
-    # Core candidate: Core rejects a larger JPEG only when the video sender's caps fail to
-    # negotiate, with no message that names the RTP/JPEG limit.
-    if app_config.input_type == "usb" and not all(
-        0 < side <= RTP_JPEG_MAX_SIDE and side % 8 == 0
-        for side in (app_config.width, app_config.height)
-    ):
-        raise ValueError(
-            "input.width and input.height of a USB camera must be multiples of 8 "
-            f"and at most {RTP_JPEG_MAX_SIDE} (RTP/JPEG)"
-        )
     return app_config
 
 
@@ -172,17 +133,17 @@ def model_options(cfg: AppConfig, frame_format: pyneat.Format) -> pyneat.ModelOp
     return options
 
 
-def rtsp_options(cfg: AppConfig, fps: int) -> pyneat.RtspEncodedInputOptions:
+def rtsp_options(cfg: AppConfig) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
     options.url = cfg.source
     options.codec = RTSP_CODECS[cfg.codec]
     options.tcp = cfg.rtsp_tcp
     options.latency_ms = cfg.rtsp_latency_ms
-    options.source_fps = fps
+    options.source_fps = cfg.fps
     if cfg.codec == "h264":
         options.fallback_h264_width = cfg.width
         options.fallback_h264_height = cfg.height
-        options.fallback_h264_fps = fps
+        options.fallback_h264_fps = cfg.fps
     return options
 
 
@@ -215,7 +176,7 @@ def camera_graph(cfg: AppConfig, camera: pyneat.UsbCameraInfo) -> pyneat.Graph:
     return graph
 
 
-def decoder_graph(cfg: AppConfig, fps: int, frame_format: pyneat.Format) -> pyneat.Graph:
+def decoder_graph(cfg: AppConfig, frame_format: pyneat.Format) -> pyneat.Graph:
     """Hardware decode of the RTSP stream or the camera's JPEG: NV12, or NV16 for a 4:2:2
     camera."""
     decode = pyneat.SimaDecodeOptions()
@@ -223,10 +184,7 @@ def decoder_graph(cfg: AppConfig, fps: int, frame_format: pyneat.Format) -> pyne
     decode.out_format = frame_format
     decode.dec_width = cfg.width
     decode.dec_height = cfg.height
-    decode.dec_fps = fps
-    if cfg.codec == "mjpeg":
-        # Leaves free decode surfaces while inference and the video encoder hold frames.
-        decode.num_buffers = 32
+    decode.dec_fps = cfg.fps
     graph = pyneat.Graph("decoder")
     graph.add(pyneat.nodes.sima_decode(decode))
     return graph
@@ -240,29 +198,21 @@ def detector_graph(model: pyneat.Model) -> pyneat.Graph:
     return graph
 
 
-def video_options(cfg: AppConfig, fps: int) -> pyneat.VideoSenderOptions:
-    """H.264, H.265, and a USB camera's JPEG go to Insight as received; decoded HTTP and RTSP
-    MJPEG frames are encoded as H.264."""
-    if cfg.input_type == "usb":
-        options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.MJPEG)
-    elif cfg.codec == "mjpeg":
+def video_options(cfg: AppConfig) -> pyneat.VideoSenderOptions:
+    """RTSP H.264, H.265, and MJPEG and a USB camera's JPEG go to Insight as received; decoded
+    HTTP MJPEG frames are encoded as H.264."""
+    if cfg.input_type == "http":
+        # Core candidate: no HTTP MJPEG input keeps the stream encoded, so its decoded frames are
+        # encoded again for Insight.
         encode = pyneat.SimaEncodeOptions()
-        encode.fps = fps
+        encode.fps = cfg.fps
         options = pyneat.VideoSenderOptions.from_raw(encode)
     else:
+        # Passthrough(MJPEG) carries RTP/JPEG, at most 2040 pixels per side.
         options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[cfg.codec])
     options.host = cfg.insight_host
     options.video_port_base = cfg.video_port_base
     return options
-
-
-def encoder_link() -> pyneat.GraphLinkOptions:
-    """Bound the decoded frames the H.264 encoder holds, so it cannot starve the decoder."""
-    link = pyneat.GraphLinkOptions()
-    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    link.max_inflight_per_stream = 2
-    link.max_inflight_total = 2
-    return link
 
 
 def camera_video_link() -> pyneat.GraphLinkOptions:
@@ -326,10 +276,7 @@ def send_detections(
         sample = run.pull("detections", PULL_TIMEOUT_MS)
         if sample is None:
             if run.last_error() or not run.running():
-                # pyneat's pull returns no detail, so a run that stopped without an error of
-                # its own has reached the end of the stream, which C++ reports the same way.
-                reason = run.last_error() or "source reached EOS"
-                raise RuntimeError(f"detections output closed unexpectedly: {reason}")
+                raise RuntimeError(f"detections output closed: {run.last_error()}")
             continue
         payload = detection_egress.serialize(
             decode_boxes(sample, cfg),
@@ -340,10 +287,7 @@ def send_detections(
         )
         # A nonblocking send drops the message while the socket buffer is full; the drops are
         # counted in the sender's stats and reported when the run ends. Any other failure raises.
-        try:
-            metadata_sender.send_raw_json(payload)
-        except RuntimeError as error:
-            raise RuntimeError(f"metadata send failed: {error}") from error
+        metadata_sender.send_raw_json(payload)
         processed += 1
     return processed
 
@@ -363,33 +307,29 @@ def main(argv: list[str] | None = None) -> int:
 
     labels = load_labels(cfg.labels_path)
     cfg = with_stream_info(cfg)
-    fps = cfg.fps
     camera = (
         pyneat.usb_camera_info(usb_camera_options(cfg)) if cfg.input_type == "usb" else None
     )
     frame_format = camera.decoded_format if camera else pyneat.Format.NV12
     model = pyneat.Model(str(cfg.model_path), model_options(cfg, frame_format))
     detector = detector_graph(model)
-    video = pyneat.groups.video_sender(video_options(cfg, fps))
+    video = pyneat.groups.video_sender(video_options(cfg))
 
     graph = pyneat.Graph()
     if cfg.input_type == "http":
         frames = pyneat.groups.http_mjpeg_decoded_input(http_options(cfg))
-        graph.connect(frames, video, encoder_link())
+        graph.connect(frames, video)
     elif cfg.input_type == "usb":
         source = camera_graph(cfg, camera)
-        frames = decoder_graph(cfg, fps, frame_format)
+        frames = decoder_graph(cfg, frame_format)
         graph.connect(source, frames)
         graph.connect(source, video, camera_video_link())
     else:
-        source = pyneat.groups.rtsp_encoded_input(rtsp_options(cfg, fps))
-        frames = decoder_graph(cfg, fps, frame_format)
+        source = pyneat.groups.rtsp_encoded_input(rtsp_options(cfg))
+        frames = decoder_graph(cfg, frame_format)
         graph.connect(source, frames)
-        if cfg.codec == "mjpeg":
-            graph.connect(frames, video, encoder_link())
-        else:
-            # A plain link lets Core tee the encoded stream to the decoder and the video sender.
-            graph.connect(source, video)
+        # A plain link lets Core tee the encoded stream to the decoder and the video sender.
+        graph.connect(source, video)
     graph.connect(frames, detector)
 
     metadata_sender = pyneat.MetadataSender(metadata_options(cfg))
@@ -397,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     run = graph.build(run_options())
     print(
         f"source={cfg.source} type={cfg.input_type} codec={cfg.codec} "
-        f"stream={cfg.width}x{cfg.height}@{fps} insight={cfg.insight_host} "
+        f"stream={cfg.width}x{cfg.height}@{cfg.fps} insight={cfg.insight_host} "
         f"video={cfg.video_port_base} metadata={cfg.metadata_port_base}"
     )
     try:
