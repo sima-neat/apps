@@ -346,9 +346,6 @@ create_example() {
   render_cpp_unit_test > "${module_dir}/tests/cpp/test_unit.cpp"
   render_cpp_e2e_test > "${module_dir}/tests/cpp/test_e2e.cpp"
 
-  # main.py imports the shared helpers through this link; build.sh and get-example.sh copy
-  # the files it points to.
-  ln -s ../../../../../support/python/sima_examples "${module_dir}/src/python/sima_examples"
   render_python_main "${example_name}" > "${module_dir}/src/python/main.py"
   render_python_requirements > "${module_dir}/src/python/requirements.txt"
   render_python_unit_test > "${module_dir}/tests/python/test_unit.py"

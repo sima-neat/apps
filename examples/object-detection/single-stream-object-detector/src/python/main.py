@@ -13,8 +13,14 @@ from pathlib import Path
 
 import pyneat
 
-# The helpers the examples share: a link to support/python in the repository, a copy of it in
-# the installed bundle.
+# The helpers the examples share live in <apps root>/support/python.
+for apps_root in Path(__file__).resolve().parents:
+    if (apps_root / "support" / "python" / "sima_examples").is_dir():
+        sys.path.insert(0, str(apps_root / "support" / "python"))
+        break
+else:
+    raise SystemExit("support/python not found above this example; reinstall the Apps package")
+
 from sima_examples import detection_egress
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
