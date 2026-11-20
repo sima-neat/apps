@@ -26,9 +26,9 @@ A module in both columns has the same file name, function names, and behavior in
 | --- | --- | --- | --- |
 | `config` | Reads `config.yaml` by dotted key, such as `input.rtsp.tcp`. A missing key or a value of the wrong type raises with the key's name | `config.py` | `config.h` |
 | `labels` | Reads a class-label file with one label per line | `labels.py` | `labels.h` |
-| `rtsp_probe` | Reads an RTSP stream's frame size and frame rate before the graph is built, for each value the config leaves at 0 | `rtsp_probe.py` | `rtsp_probe.h` |
+| `rtsp_probe` | Reads an RTSP stream's frame size and frame rate before the graph is built, for each value the config leaves at 0 or below | `rtsp_probe.py` | `rtsp_probe.h` |
 | `stop_signals` | Sets a stop flag on Ctrl-C, SIGTERM, or a dropped ssh session (SIGHUP), so the pull loop ends and the run closes | `stop_signals.py` | `stop_signals.h` |
-| `detection_egress` | Builds the object-detection metadata message that Insight draws over the video | `detection_egress.py` | `detection_egress.h` |
+| `detection_egress` | Builds the object-detection metadata message that Insight draws over the video, and `frame_metadata` copies a pulled sample's frame identity into it | `detection_egress.py` | `detection_egress.h` |
 | `pull_status` | Reads the status of one `Run::pull`: a sample arrived, or the pull timed out and the loop tries again. A closed output or a pull error throws with the reason | | `pull_status.h` |
 | `example_utils` | Converts tensors to OpenCV images and float vectors, and other small C++ helpers | | `example_utils.h` |
 | `obj_detection_utils` | Parses and draws bounding boxes from a box tensor | | `obj_detection_utils.h` |
