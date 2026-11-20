@@ -369,14 +369,15 @@ MJPEG URLs.
 
 - Stage 1 (eLxr runner): `./build.sh --all --clean` builds the Apps, then
   `scripts/ci/package-apps.sh` creates a runtime candidate and an ephemeral test
-  bundle, which the post-build step validates. The portal builds in its own job.
+  bundle, which the post-build step validates. The published portal builds in
+  its own job on branch pushes.
 - Stage 2 (Modalix runner): overlays the test bundle, runs
   `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
   every activated test passes.
 - Alongside both, an Ubuntu job runs the repository contract tests under
   `tests/scripts` against the source checkout, because they read `build.sh`, the
-  workflows and the portal sources, which the test bundle does not carry.
-  Publishing waits for it too.
+  workflows and the portal sources, which the test bundle does not carry. It
+  also builds the portal on every ref. Publishing waits for it too.
 
 ## Nightly Integration
 
