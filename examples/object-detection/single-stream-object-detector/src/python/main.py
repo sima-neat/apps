@@ -182,6 +182,7 @@ def rtsp_options(cfg: AppConfig, fps: int) -> pyneat.RtspEncodedInputOptions:
     if cfg.codec == "h264":
         options.fallback_h264_width = cfg.width
         options.fallback_h264_height = cfg.height
+        options.fallback_h264_fps = fps
     return options
 
 
