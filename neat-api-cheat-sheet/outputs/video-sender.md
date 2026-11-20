@@ -18,8 +18,9 @@ Two nodes from this page can also be used on their own:
 
 - `nodes::SimaEncode` is the hardware encoder. It turns raw frames into H.264,
   H.265 or MJPEG frames and does not send them anywhere. `FromRaw` uses it.
-- `nodes::UdpOutput` writes each buffer to a UDP address. `VideoSender` ends
-  with it.
+- `nodes::UdpOutput` writes each buffer to a UDP address. An H.264 or H.265
+  `VideoSender` ends with it. An MJPEG sender may end in an internal sink
+  (`JpegRtpUdpSink`) that packetizes and sends in one step instead.
 
 ## When to use it
 
@@ -38,9 +39,10 @@ through `VideoSender`.
 
 ## Minimal example
 
-Encode frames pushed by the application and send them to Insight on
-channel 0. `Input` is the node the application pushes frames into, see
-[Input (#748)](https://github.com/sima-neat/apps/issues/748).
+Encode raw frames and send them to Insight on channel 0. In the example a
+`Branch` fills `Input("video")` with the frames decoded from the RTSP source,
+so the application does not push them itself. `Input` is explained on the
+Input page of this cheat sheet.
 
 C++
 
@@ -139,8 +141,9 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
   creates `pyneat.SimaEncodeOptions()` first and sets its fields.
 - Invalid options throw `std::invalid_argument` in C++. Python raises
   `ValueError` with the same message.
-- The deprecated factories warn at compile time in C++. Python gives no
-  warning.
+- In C++ only `H264RtpUdpFromEncoded()` warns at compile time.
+  `H264RtpUdpFromRaw()` is deprecated without a warning. Python gives no
+  warning for either.
 
 ## Pitfalls
 
@@ -149,11 +152,11 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
   of them is set. Changing `encoder.*` after `FromRaw` with MJPEG throws
   `VideoSender: MJPEG does not accept legacy video encoder overrides`. Use
   `quality` for MJPEG.
-- **An option outside its range throws when the options are created.** For
-  example `SimaEncode: quality applies only to MJPEG`, `SimaEncode: gop_length
-  must be within 0..1000`, or `SimaEncode: num_buffers must be -1 or within
-  1..20`. Fix the value named
-  in the message.
+- **An option outside its range throws.** `SimaEncodeOptions` values are
+  checked when `FromRaw()` or `SimaEncode()` takes them, for example
+  `SimaEncode: gop_length must be within 0..1000`. The `rtp.*` and `encoder.*`
+  values are checked later, when `VideoSender()` builds the group. Fix the
+  value named in the message.
 - **The resolution is fixed by the first frame.** `SimaEncode` takes its
   size from the first frames and keeps it for the whole run. It does not
   resize. If frame sizes change, scale them to one size before the sender.
@@ -176,4 +179,4 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 
 - C++ headers: `include/nodes/groups/VideoSender.h`, `include/nodes/sima/SimaEncode.h`, `include/nodes/io/UdpOutput.h`, `include/nodes/groups/RtspCodec.h`
 - Python binding: `python/src/module.cpp`, `VideoSenderOptions`, `VideoSenderRtpOptions`, `VideoSenderEncoderOptions`, `SimaEncodeOptions`, `SimaEncodeType`, `RtspCodec`, `UdpOutputOptions`, `groups.video_sender`, `nodes.sima_encode`, `nodes.udp_output`
-- Core commit: `7e5317be`
+- Core commit: `3f8b8d04`

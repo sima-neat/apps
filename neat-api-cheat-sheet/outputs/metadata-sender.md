@@ -102,7 +102,7 @@ other threads send
 
 | Field | C++ and Python | What it counts |
 |---|---|---|
-| Attempts | `send_attempts` | Sends that reached the network |
+| Attempts | `send_attempts` | Every UDP send call, including failed ones. A message split into several packets counts once per packet |
 | Sent | `datagrams_sent` | UDP packets the system accepted |
 | Failures | `send_failures` | Failed or partial sends |
 | Would block | `would_block` | Failures because the send buffer was full |
@@ -156,4 +156,4 @@ other threads send
 
 - C++ header: `include/nodes/io/MetadataSender.h`
 - Python binding: `python/src/module.cpp`, `MetadataSenderOptions`, `MetadataSenderSendOptions`, `MetadataSenderStats`, `MetadataSender`
-- Core commit: `7e5317be`
+- Core commit: `3f8b8d04`

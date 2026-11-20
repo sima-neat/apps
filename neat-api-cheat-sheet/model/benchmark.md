@@ -96,7 +96,7 @@ why.
 | `throughput_samples`, `throughput_duration_ms` | How many inputs the throughput pass measured, and for how long | count, ms |
 | `avg_power_watts`, `peak_power_watts` | Estimated mean and highest power of the whole SoM (system on module) during the throughput pass | W |
 | `energy_joules` | `avg_power_watts` multiplied by the time the measured throughput needs for `num_samples` inputs. It is not the energy of the whole run | J |
-| `telemetry` | Everything Sentinel recorded: `status` (`"ok"` or the reason there is no data), `samples`, temperatures, CPU usage, and memory such as `mla_memory_mib` (DMA buffers the MLA holds) and `ev74_memory_mib` (buffers of the EV74 vision processor) | per field |
+| `telemetry` | Everything Sentinel recorded: `status` (`"ok"` or the reason there is no data), `samples`, temperatures, CPU usage, and memory such as `mla_memory_mib` (DMA buffers the MLA holds) and `ev74_memory_mib` (buffers of the EV74 vision processor). Every field is listed under [Telemetry](../outputs/measuring.md#telemetry) | per field |
 | `mla_layer_stats`, `mla_stage_stats` | `status` (`"not requested"`, `"ok"` or the failure) and the per-layer or per-stage `latency_us` | µs |
 | `input` | `"synthetic"` or `"provided"` (you set `inputs`) | — |
 

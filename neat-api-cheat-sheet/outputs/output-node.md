@@ -6,8 +6,8 @@
 itself. A graph is the chain of nodes that Core runs. Each result is a
 sample: one frame, tensor or set of tensors, with its presentation timestamp
 (PTS, the time on the video timeline that the frame belongs to) and its frame
-ID. The application reads samples with `Run::pull()`, see
-[run (#746)](https://github.com/sima-neat/apps/issues/746).
+ID. The application reads samples with `Run::pull()`, see the Run page of
+this cheat sheet.
 
 `OutputOptions` sets how many samples may wait for the application, what
 happens when the application pulls slower than the graph produces, and
@@ -78,7 +78,7 @@ Complete flow: [single-stream-thermal-face-detector](../../examples/face-detecti
 | Form | C++ | Python | What it does |
 |---|---|---|---|
 | Unnamed | `nodes::Output(opt)` | `pyneat.nodes.output(opt)` | Output read with `pull()` without a name. Options default to `OutputOptions{}` |
-| Named | `nodes::Output("name", opt)` | `pyneat.nodes.output("name", opt)` | Output read with `pull("name", ...)`. Other fragments can connect to it by name, see [links (#745)](https://github.com/sima-neat/apps/issues/745) |
+| Named | `nodes::Output("name", opt)` | `pyneat.nodes.output("name", opt)` | Output read with `pull("name", ...)`. Other fragments can connect to it by name, see the Links page |
 
 `OutputOptions` presets. Pick one and change a field only when the preset is
 close but not right.
@@ -96,20 +96,7 @@ close but not right.
 | Max buffers | `max_buffers` | `max_buffers` | `4` | Most samples that can wait for `pull()`. `0` means no limit. A negative value counts as `0` | Raise it when the pull loop pauses now and then, for example to write a file, and frames must not be lost. Use `1` for the lowest latency |
 | Drop | `drop` | `drop` | `false` | What happens when `max_buffers` samples are waiting. `false`: the graph waits until the application pulls. `true`: the oldest waiting sample is thrown away | Set `true` for a live camera or RTSP stream. With `false`, an application that is slower than the stream sees the delay to live video grow until the stream stalls |
 | Sync | `sync` | `sync` | `false` | `true` holds each sample until the pipeline clock reaches its PTS. The pipeline clock is the running time Core uses to schedule media | A video file that should play at its recorded speed. Leave it `false` for live sources, which already arrive at video speed |
-| Combine policy | `combine_policy` | `combine_policy` | `CombinePolicy::None` (`pyneat.CombinePolicy.None_`) | How a named output merges samples when two or more fragments connect to it. See the `CombinePolicy` table | Set it only when several producers connect to one output. Otherwise the build fails with the error below |
-
-`CombinePolicy`
-
-| Value | C++ | Python | What it does | When to use it |
-|---|---|---|---|---|
-| None | `CombinePolicy::None` | `pyneat.CombinePolicy.None_` | One producer only. A second producer fails the build | Default. Keeps two streams from being mixed by accident |
-| By frame | `CombinePolicy::ByFrame` | `pyneat.CombinePolicy.ByFrame` | Waits for one sample from each producer with the same frame ID and delivers them together. A sample without a frame ID is an error | A frame and its model result that must stay paired, for example to draw boxes on the right frame |
-| By PTS | `CombinePolicy::ByPts` | `pyneat.CombinePolicy.ByPts` | Same as by frame, but matches on PTS | The producers keep PTS but do not carry frame IDs |
-| Round robin | `CombinePolicy::RoundRobin` | `pyneat.CombinePolicy.RoundRobin` | Forwards samples from each producer in turn, one at a time, without pairing them | Several independent streams share one output and the application handles them one by one |
-
-[patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/)
-sets `combine_policy` on `OutputOptions` directly. Most examples use
-`graphs::Combine`, see [Branch and Combine (#745)](https://github.com/sima-neat/apps/issues/745).
+| Combine policy | `combine_policy` | `combine_policy` | `CombinePolicy::None` (`pyneat.CombinePolicy.None_`) | How a named output merges samples when two or more fragments connect to it: `ByFrame`, `ByPts` or `RoundRobin`. The values are explained on the Branch and Combine page | Several producers connect to one output without realtime links, see Pitfalls. [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/) sets it here. Most examples use `graphs::Combine` instead |
 
 ## Language differences
 
@@ -117,14 +104,16 @@ sets `combine_policy` on `OutputOptions` directly. Most examples use
   because `None` is a reserved word in Python.
 - `pull()` returns a status and fills a `Sample` in C++. In Python it returns
   the sample, returns `None` on a timeout or when the run is closed, and
-  raises on an error. See [run (#746)](https://github.com/sima-neat/apps/issues/746).
+  raises on an error. See the Run page.
 
 ## Pitfalls
 
 - **Two producers on one output without a policy.** Symptom: the build fails
-  with `public endpoint has multiple producers; set an explicit
-  CombinePolicy::ByFrame, CombinePolicy::ByPts, or CombinePolicy::RoundRobin`.
-  Fix: set `combine_policy`, or join the producers with `graphs::Combine`.
+  with `public endpoint has multiple producers`. It does not fail when every
+  producer connects through a realtime link
+  (`GraphLinkPolicy::RealtimeLatestByStream`), as several examples do, because
+  such a link keeps only the latest sample of each stream. Otherwise, fix it
+  by setting `combine_policy`, or join the producers with `graphs::Combine`.
 - **`OutputOptions` replace the run's queue settings for the last node.** When
   the graph ends in an `Output`, its `max_buffers`, `drop` and `sync` decide
   the final queue. `RunOptions::queue_depth` and `overflow_policy` do not. A
@@ -133,8 +122,8 @@ sets `combine_policy` on `OutputOptions` directly. Most examples use
   `drop = false`, so a slow pull loop now holds up the stream. Fix: use
   `OutputOptions::Latest()`, or set `drop = true`, for live sources.
 - **`Clocked()` drops samples.** It sets `drop = true` as well as `sync =
-  true`. The header comment names only `sync`. Use
-  `EveryFrame(n)` and set `sync = true` yourself when no sample may be lost.
+  true`. Use `EveryFrame(n)` and set `sync = true` yourself when no sample may
+  be lost.
 - **A negative `max_buffers` means no limit.** Core turns it into `0`, which
   is an unbounded queue. Memory then grows while the application is slower
   than the graph.
@@ -151,4 +140,4 @@ sets `combine_policy` on `OutputOptions` directly. Most examples use
 
 - C++ headers: `include/nodes/common/Output.h`, `include/nodes/common/Caps.h` (`nodes::Custom`)
 - Python binding: `python/src/module.cpp`, `OutputOptions`, `CombinePolicy`, `nodes.output`, `nodes.custom`
-- Core commit: `7e5317be`
+- Core commit: `3f8b8d04`
