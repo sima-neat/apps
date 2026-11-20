@@ -1,7 +1,5 @@
-if (NOT TARGET PkgConfig::YAML_CPP)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/YamlCpp.cmake")
+sima_neat_apps_ensure_yaml_cpp()
 
 add_library(sima_neat_apps_support_runtime STATIC
   sima_examples/asset_utils.cpp
@@ -21,7 +19,7 @@ target_link_libraries(sima_neat_apps_support_runtime
 target_link_libraries(sima_neat_apps_support_runtime
   PUBLIC
     nlohmann_json::nlohmann_json
-    PkgConfig::YAML_CPP
+    SimaNeatApps::yaml_cpp
 )
 
 target_include_directories(sima_neat_apps_support_runtime
@@ -53,7 +51,7 @@ if (BUILD_TESTING)
       SimaNeatApps::support_runtime
       nlohmann_json::nlohmann_json
       PkgConfig::OPENCV
-      PkgConfig::YAML_CPP
+      SimaNeatApps::yaml_cpp
   )
   target_include_directories(sima_neat_apps_support_testing
     PUBLIC
