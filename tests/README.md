@@ -367,8 +367,9 @@ MJPEG URLs.
 
 ## Two-Stage Vulcan CI
 
-- Stage 1 (eLxr runner): `./build.sh --all --clean` validates the Apps and portal
-  builds, then creates a runtime candidate and an ephemeral test bundle.
+- Stage 1 (eLxr runner): `./build.sh --all --clean` builds the Apps, then
+  `scripts/ci/package-apps.sh` creates a runtime candidate and an ephemeral test
+  bundle, which the post-build step validates. The portal builds in its own job.
 - Stage 2 (Modalix runner): overlays the test bundle, runs
   `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
   every activated test passes.

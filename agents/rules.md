@@ -45,8 +45,8 @@ Place each piece of code by the first question it answers yes to:
 - The C++ `utils/` files join the example's target through `target_sources`. A Python
   entrypoint imports them with `from utils import <module>`.
 - A Python entrypoint finds `support/python` in a folder above itself, as the high-density
-  example does. `build.sh` and `scripts/get-example.sh` ship that folder, `support/README.md`,
-  and `support/cpp/sima_examples/` without `testing/` as reference source.
+  example does. `scripts/ci/package-apps.sh` and `scripts/get-example.sh` ship that folder,
+  `support/README.md`, and `support/cpp/sima_examples/` without `testing/` as reference source.
 - Platform tooling owns provisioning, recovery, and setup of the host, network, mounts,
   devices, and the SDK. Examples start from a prepared system.
 

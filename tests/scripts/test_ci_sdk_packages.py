@@ -95,8 +95,10 @@ def test_sdk_package_operations_precede_build(
         assert "fixture package failure" in result.stderr
 
 
-@pytest.mark.parametrize("missing_policy", [False, True])
-def test_build_artifact_has_one_root_and_resolver_policy(tmp_path, missing_policy):
+@pytest.mark.parametrize(
+    "broken", [None, "missing-policy", "nine-coco-images", "no-goldfish"]
+)
+def test_build_artifact_has_one_root_and_resolver_policy(tmp_path, broken):
     workflow = yaml.safe_load(
         (APPS_ROOT / ".github/workflows/vulcan-ci.yml").read_text()
     )
@@ -105,13 +107,21 @@ def test_build_artifact_has_one_root_and_resolver_policy(tmp_path, missing_polic
     assert build["artifact_path"] == "_vulcan-build-artifacts"
     runtime_name = "neat-apps-fixture.tar.gz"
     (tmp_path / runtime_name).write_bytes(b"runtime fixture")
+    coco_count = 9 if broken == "nine-coco-images" else 10
+    test_members = [
+        "neat-apps-tests/tests/test.sh",
+        *(f"neat-apps-tests/assets/datasets-test/coco/{i}.jpg" for i in range(coco_count)),
+    ]
+    if broken != "no-goldfish":
+        test_members.append("neat-apps-tests/assets/datasets-test/imagenet/goldfish.jpeg")
     with tarfile.open(tmp_path / "neat-apps-tests.tar.gz", "w:gz") as archive:
-        member = tarfile.TarInfo("neat-apps-tests/tests/test.sh")
-        member.size = 4
-        archive.addfile(member, io.BytesIO(b"test"))
+        for name in test_members:
+            member = tarfile.TarInfo(name)
+            member.size = 4
+            archive.addfile(member, io.BytesIO(b"test"))
     policy = tmp_path / "deps/scheduler-sdk-policy.json"
     policy.parent.mkdir()
-    if not missing_policy:
+    if broken != "missing-policy":
         policy.write_text('{"elxr_version":"3.0.0_master_B2499"}\n')
     # Archive-content validation has its own tests; exercise staging here.
     validator = tmp_path / "scripts/ci/validate_apps_runtime_archive.sh"
@@ -123,9 +133,13 @@ def test_build_artifact_has_one_root_and_resolver_policy(tmp_path, missing_polic
         cwd=tmp_path, text=True, capture_output=True,
     )
     staged = tmp_path / build["artifact_path"]
-    if missing_policy:
+    if broken:
         assert result.returncode != 0
         assert not staged.exists()
+        if broken == "nine-coco-images":
+            assert "expected 10 COCO test images, found 9" in result.stderr
+        if broken == "no-goldfish":
+            assert "goldfish.jpeg" in result.stderr
         return
     assert result.returncode == 0, result.stderr
     resolver_path = workflow["jobs"]["resolve-test-runner"]["with"]["manifest_path"]
