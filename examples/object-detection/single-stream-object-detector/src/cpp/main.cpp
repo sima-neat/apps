@@ -99,8 +99,9 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
   options.codec = kRtspCodecs.at(config.string("input.codec"));
   options.tcp = config.boolean("input.rtsp.tcp");
   options.latency_ms = config.integer("input.rtsp.latency_ms");
-  // The probe already read the size and rate, so Core uses them as given.
-  options.auto_caps_from_stream = false;
+  // With input.fps at 0, Core also takes the caps from the stream: above 60 fps, caps set from
+  // the probed values alone failed to negotiate in some runs.
+  options.auto_caps_from_stream = config.integer("input.fps") == 0;
   options.source_fps = stream.fps;
   if (options.codec == groups::RtspCodec::H264) {
     options.fallback_h264_width = stream.width;

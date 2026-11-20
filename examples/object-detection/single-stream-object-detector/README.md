@@ -119,7 +119,7 @@ In the Insight Web UI, start the required stream and copy its source URL into `i
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. It sets one input type, `input.type: rtsp`, with only the keys that type reads; a key of another type fails at startup and names the key. Set:
+Open `${APP_DIR}/src/common/config.yaml`. It sets one input type, `input.type: rtsp`, with only the keys that type reads. Set:
 
 - `input.source`: the RTSP URL.
 - `input.codec`: `h264`, `h265`, or `mjpeg`.
