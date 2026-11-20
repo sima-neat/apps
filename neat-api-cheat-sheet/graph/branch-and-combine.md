@@ -82,7 +82,7 @@ A hand-built fan-in on a plain `nodes::Output` takes the same values through
 
 | Value | C++ | Python | What it does | When to use it |
 |---|---|---|---|---|
-| None | `CombinePolicy::None` | `pyneat.CombinePolicy.None_` | Accepts one producer. More than one producer fails when the graph is built, unless every producer connects through a `RealtimeLatestByStream` link | Default of a plain `Output`, so an accidental fan-in does not mix samples |
+| None | `CombinePolicy::None` | `pyneat.CombinePolicy.None_` | Accepts one producer. More than one producer fails when the graph is built, with the exception in Pitfalls | Default of a plain `Output`, so an accidental fan-in does not mix samples |
 | By frame | `CombinePolicy::ByFrame` | `pyneat.CombinePolicy.ByFrame` | Waits for one sample from every input with the same `Sample::frame_id` and emits them as one bundle | A frame and the results computed from it, as in the detector above |
 | By PTS | `CombinePolicy::ByPts` | `pyneat.CombinePolicy.ByPts` | Same, matched on `Sample::pts_ns`, the presentation timestamp | Producers that keep media timestamps but do not carry frame IDs |
 | Round robin | `CombinePolicy::RoundRobin` | `pyneat.CombinePolicy.RoundRobin` | Forwards samples from all inputs fairly, one at a time, without bundling | Several independent live streams that share one model path |

@@ -59,8 +59,7 @@ Three calls help when a graph does not behave:
   segments instead, which `gst-launch-1.0` cannot run.
 - `validate()` checks the graph's structure without starting it, for unit tests
   and CI. In C++, a linear graph that starts with a pushed `Input` needs
-  `validate(options, input)` with a sample input. Python has only
-  `validate(options)`, so it cannot validate such a graph.
+  `validate(options, input)` with a sample image (`cv::Mat`).
 
 `save(path)` and `Graph::load(path)` write the graph to JSON and read it back.
 `custom(fragment)` splices raw GStreamer launch text into the pipeline for a
@@ -106,19 +105,23 @@ Complete flow: [multi-stream-multi-model](../../examples/multi-model/multi-strea
 | Element name suffix | `element_name_suffix` | `element_name_suffix` | `""` | Appended to the name of every GStreamer element the graph creates | Same as the prefix |
 | Verbosity | `verbose` | `verbose` | `VerbosityLevel::Production`, progress on, topic flags off | Diagnostic output of this graph | Turn topics on while you debug how the graph is planned and built. Keep production output in a shipped app |
 | A65 workers | `kernel_runner_a65_workers` | `kernel_runner_a65_workers` | `2` | Number of worker threads for the numerical kernels that run on the A65, the board's Arm CPU cores. 1 to 64. Created only when the graph has such kernels | Numerical stages on the A65 are the bottleneck and the CPU has spare cores |
-| Execution controls | `advanced_execution` | `advanced_execution` | every field unset: no effect | Where and how the model stages of the graph run: preprocessing and postprocessing placement, asynchronous submission, the model output buffer pool, and the depth of the queues Neat inserts. Its fields and their defaults are listed on the [Model](../model/model.md#options) page. Set here, a field applies to every model in the graph | The [thermal face detector](../../examples/face-detection/single-stream-thermal-face-detector/) moves postprocessing off the CPU with `postprocess_target = "EV74"`. The EV74 is the board's vision processor. The [high-density detector](../../examples/object-detection/high-density-multi-stream-object-detector/) sets `internal_queue_depth`, which adds bounded queues between the stages of the graph, including between the nodes of a linear graph |
+| Execution controls | `advanced_execution` | `advanced_execution` | every field unset: no effect | Where and how the model stages of the graph run: preprocessing and postprocessing placement, asynchronous submission, the model output buffer pool, and the depth of the queues Neat inserts. Its fields and their defaults are listed on the [Model](../model/model.md#options) page. Set here, a field applies to every model in the graph | The [thermal face detector](../../examples/face-detection/single-stream-thermal-face-detector/) moves postprocessing off the CPU with `postprocess_target = "EV74"`. The EV74 is the board's vision processor. The [high-density detector](../../examples/object-detection/high-density-multi-stream-object-detector/) sets `internal_queue_depth`, the depth of the queues Neat inserts between stages. On live fan-in, as in that detector, a positive value also inserts those queues. On a linear graph the run preset decides whether they exist |
 
 C++ also keeps older execution fields for existing code: `processcvu`,
 `processmla`, `async_queue_depth`, `processcvu_requested_run_target`, and
-`prepared_runner`. They still take effect, but `advanced_execution` replaces
-them in new code and overrides any field it sets. Python has only
-`advanced_execution`. `prepared_runner` is a retired experiment: a non-empty
-value fails when the graph is built.
+`prepared_runner`. `advanced_execution` replaces them in new code and
+overrides any field it sets. Two settings are retired and fail when the graph
+is built: `prepared_runner` with any field changed from its default (a mode of
+`passthrough` or `off` is still accepted), and
+`processmla.defer_output_invalidate = false`.
 
 ## Language differences
 
 - Python has extra names for the same calls: `add_node()`, `add_graph()`,
-  `add_model()`, `build_source()`, `run_source()`, and `custom_with_role()`.
+  `add_model()`, `build_source()`, and `custom_with_role()`.
+- Python has no `set_tensor_callback()`, so source-mode `run()` and
+  `run_source()` fail with `tensor callback not set`, and `callback_timeout_ms`
+  has no effect. Use `build()` and `Run::pull()` instead.
 - C++ `connect(node, "src_N", graph)` for named pads is not available in Python.
 - C++ `validate(options, input)` is not available in Python, so Python cannot
   validate a linear graph that starts with a pushed `Input`.

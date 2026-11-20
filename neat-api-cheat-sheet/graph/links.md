@@ -29,9 +29,9 @@ policy a slow branch holds back the source, and through the source every other
 branch.
 
 Keep the default policy on a link that carries encoded H.264 or H.265 video
-into a decoder whose frames the application processes. Each encoded frame depends on the frames before it, so a frame
-dropped on such a link corrupts the decoded picture until the next keyframe
-(a frame that decodes on its own). The
+into a decoder whose frames the application processes. Each encoded frame
+depends on the frames before it, so a frame dropped on such a link corrupts the
+decoded picture until the next keyframe (a frame that decodes on its own). The
 [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/)
 example keeps that link lossless for this reason, and still uses a realtime
 link for the encoded video it passes to Insight, where a dropped frame affects

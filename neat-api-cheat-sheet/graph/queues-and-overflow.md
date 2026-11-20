@@ -22,9 +22,10 @@ slowing the decoder and everything that shares it.
 Neat has other queues, each set in its own place. Use the matching option
 instead of adding a `Queue`:
 
-- The `Run` input queue and the queues Neat inserts are set with `RunOptions`,
-  and their defaults depend on the run preset. See the Run page of this cheat
-  sheet.
+- The `Run` input queue is set with `RunOptions`, and its defaults depend on
+  the run preset. See the Run page of this cheat sheet.
+- The depth of the queues Neat inserts between stages is set with
+  `advanced_execution.internal_queue_depth`, see [Graph](graph.md#options).
 - The queue in front of `pull()` is set with `OutputOptions`, see
   [Output](../outputs/output-node.md).
 - A link between fragments can keep only the newest frame, see
@@ -75,7 +76,7 @@ options uses the defaults.
 | Block | `OverflowPolicy::Block` | `pyneat.OverflowPolicy.Block` | Waits for space and keeps every item | Files and batches where no item may be lost |
 | Keep latest | `OverflowPolicy::KeepLatest` | `pyneat.OverflowPolicy.KeepLatest` | Drops the oldest queued item to make room for the new one | Live cameras and streams, where the newest frame matters most |
 | Drop incoming | `OverflowPolicy::DropIncoming` | `pyneat.OverflowPolicy.DropIncoming` | Drops the new item and keeps what is already queued | Items already accepted must be finished, and new ones may be skipped while the stage is busy |
-| Auto | `OverflowPolicy::Auto` | `pyneat.OverflowPolicy.Auto` | Lets the run preset decide: `KeepLatest` with the Realtime preset, `Block` otherwise. It is the default of `RunOptions::overflow_policy`, where it decides what `Run::try_push()` does on a full input queue and whether the run's own output queue drops results. `push()` always waits, and an `Output` node uses its own `OutputOptions`. A `Queue` set to `Auto` blocks | Leave it on `RunOptions`. On a `Queue`, pick an explicit value |
+| Auto | `OverflowPolicy::Auto` | `pyneat.OverflowPolicy.Auto` | Lets the run preset decide: `KeepLatest` with the Realtime preset, `Block` otherwise. It is the default of `RunOptions::overflow_policy`, see the Run page of this cheat sheet. A `Queue` set to `Auto` blocks | Leave it on `RunOptions`. On a `Queue`, pick an explicit value |
 
 ## Language differences
 
@@ -94,8 +95,6 @@ None. Python has `pyneat.nodes.queue()` with and without options, both
 - **A blocked `Output` is not a `Queue` problem.** When `pull()` stalls after a
   few samples, the full queue is usually the `Output` queue, which holds four
   samples and waits by default. Change `OutputOptions`, not `QueueOptions`.
-- **`Auto` on a `Queue` is `Block`.** Only `RunOptions` maps `Auto` to the
-  run preset. Set `KeepLatest` explicitly on a live-video `Queue`.
 - **`GraphLinkOptions::queue_depth` is not a queue.** It is reserved and does
   nothing, see [links](links.md).
 
