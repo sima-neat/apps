@@ -53,16 +53,10 @@ def model_options(config: Config) -> pyneat.ModelOptions:
     return options
 
 
-def detector_graph(
-    model: pyneat.Model, config: Config, frame: RtspStreamInfo
-) -> pyneat.Graph:
+def detector_graph(model: pyneat.Model, config: Config) -> pyneat.Graph:
     """The model every stream shares: "detector_frame" input -> model -> "detections" output."""
-    input_options = model.input_appsrc_options(False)
-    input_options.max_bytes = (
-        frame.width * frame.height * 3 // 2 * input_options.pool_max_buffers
-    )
     frames = pyneat.Graph()
-    frames.add(pyneat.nodes.input("detector_frame", input_options))
+    frames.add(pyneat.nodes.input("detector_frame", model.input_appsrc_options(False)))
 
     detections = pyneat.Graph()
     detections.add(
@@ -267,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     labels = load_labels(Path(config.string("model.labels")).expanduser())
     model_path = args.config.resolve().parent / Path(config.string("model.path")).expanduser()
     model = pyneat.Model(str(model_path), model_options(config))
-    detector = detector_graph(model, config, streams[0])
+    detector = detector_graph(model, config)
 
     graph = pyneat.Graph(options=graph_options(config))
     metadata_senders = []

@@ -83,13 +83,9 @@ neat::Model::Options model_options(const sima_examples::Config& config) {
 }
 
 // The model every stream shares: "detector_frame" input -> model -> "detections" output.
-neat::Graph detector_graph(neat::Model& model, const sima_examples::Config& config,
-                           const sima_examples::RtspStreamInfo& frame) {
-  auto input_options = model.input_appsrc_options(false);
-  input_options.max_bytes = static_cast<std::uint64_t>(frame.width) * frame.height * 3 / 2 *
-                            static_cast<std::uint64_t>(input_options.pool_max_buffers);
+neat::Graph detector_graph(neat::Model& model, const sima_examples::Config& config) {
   neat::Graph frames;
-  frames.add(neat::nodes::Input("detector_frame", input_options));
+  frames.add(neat::nodes::Input("detector_frame", model.input_appsrc_options(false)));
 
   neat::Graph detections;
   detections.add(neat::nodes::Output(
@@ -295,7 +291,7 @@ int run_app(const fs::path& config_path) {
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
   neat::Model model(model_path.string(), model_options(config));
-  const neat::Graph detector = detector_graph(model, config, streams.front());
+  const neat::Graph detector = detector_graph(model, config);
 
   neat::Graph graph(graph_options(config));
   std::vector<neat::MetadataSender> metadata_senders;
