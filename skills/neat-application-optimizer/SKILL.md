@@ -21,7 +21,10 @@ belongs to the `neat-application-builder` skill.
    count, the per-stream and total frames per second, the warm-up and window, and the MLA
    clock.
    - `Run::start_measurement()` returns a `MeasureScope` for one window of the application's own
-     loop. For board power, start a `TelemetryMonitor` and stop it around the same window.
+     loop. `MeasureOptions` `duration_ms`, `warmup_ms` and `timeout_ms` have no effect
+     (core#1471), so push the warm-up frames before you start it and call `stop()` yourself
+     when the window ends. For board power, start a `TelemetryMonitor` and stop it around the
+     same window.
      `TelemetryMonitor` replaces the deprecated `PowerMonitor` and `RunOptions::power_monitor`.
    - Telemetry comes from Sentinel and covers the whole board. Quote power only when `status`
      is `ok` and the metric reports samples.
