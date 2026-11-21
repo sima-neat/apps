@@ -115,6 +115,7 @@ def test_routes_payloads_and_response_formats(tmp_path, tls_mode):
         certificate, key = make_certificate(backend / ".local-certs",
             host="127.0.0.2" if tls_mode == "wrong_host" else "127.0.0.1")
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(str(certificate), str(key))
         server.socket = context.wrap_socket(server.socket, server_side=True)
         if tls_mode == "env":
