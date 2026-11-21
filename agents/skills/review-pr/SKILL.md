@@ -22,8 +22,9 @@ each finding cites the owning file and section.
    fits the requirement, so judge it with `skills/neat-application-builder/SKILL.md`. The step
    is done when every claimed behavior maps to code you read, or is reported missing.
 4. Check every item under Shape and under Evidence, and report each one that fails.
-5. Compare the change with the customer skills, as `agents/rules.md` "Customer skills"
-   defines, and name the skill file and the text to add or change.
+5. Compare the change with the customer skills and their API reference, as `agents/rules.md`
+   "Customer skills" defines. Check each Core API the change uses or changes against its page,
+   and each added lesson against "Generalize". Name the file and the text to add or change.
 6. Report the two verdicts `AGENTS.md` requires, then the findings.
 
 ## Shape

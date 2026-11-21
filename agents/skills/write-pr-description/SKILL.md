@@ -71,8 +71,8 @@ and why, and every test and number in it traces to a file or a run.
 
 ## Skill updates
 
-<The customer skill files changed and the lesson each teaches, as `agents/rules.md`
-"Customer skills" defines, or `Skill updates: none` with the reason.>
+<The customer skill and API reference files changed and the lesson each teaches, as
+`agents/rules.md` "Customer skills" defines, or `Skill updates: none` with the reason.>
 
 Refs #<issue>, #<issue>
 ```

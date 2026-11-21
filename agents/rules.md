@@ -113,17 +113,37 @@ Place each piece of code by the first question it answers yes to:
 
 `skills/neat-application-builder` and `skills/neat-application-optimizer` teach customers'
 agents the public Neat APIs for any project: inputs, graph topologies, runs, options, and
-tuning. This repository's conventions stay in `agents/` and `CONTRIBUTING.md`.
+tuning. The builder's `references/api/` holds one page per Core API, with its options,
+defaults, and C++ and Python differences. sima-cli ships only `skills/`, so `skills/` links
+Core paths and public URLs, never `agents/` or other repository files. This repository's
+conventions stay in `agents/` and `CONTRIBUTING.md`.
 
-A pull request updates them when it shows something they lack or contradict:
+Every pull request feeds what its work taught back into these files:
 
-- A node, node group, or link policy used in a way the builder skill does not describe.
-- A topology pattern, such as a shared model across streams, that no reference covers.
-- A tuning choice with its measurement that the optimizer skill does not cover.
-- A default, error, or pitfall the change uncovered.
-- A skill statement the change proves wrong.
+- **Check:** before an example uses, sets, or changes a Core API, read its page and compare it
+  with the header and `python/src/module.cpp` at the Core that `deps/manifest.json` names as
+  `neat-core`. A wrong or missing option, default, or language difference is fixed in the same
+  pull request, and the page's Core commit is updated.
+- **Lesson:** a finding the work established, by reading Core source or by a measurement on a
+  board, goes where it applies:
 
-Keep routing in `SKILL.md` and detail in `references/`, and point to Core docs, installed
-headers, and examples instead of copying them. `version` in `playbook.yml` stays unchanged.
-The pull request description lists each change under `Skill updates`, or writes
+  | The finding is about | It goes in |
+  |---|---|
+  | An API option, default, error, or behavior | Its page in `references/api/`, following `agents/references/api-page-template.md` |
+  | A node, link, or topology pattern, and when to choose it | The builder's other `references/` |
+  | A tuning choice, with its measurement | `skills/neat-application-optimizer/references/tuning.md` |
+  | How this repository's examples are written, tested, or reviewed | `agents/` |
+
+- **Generalize:** write a lesson as a rule with its condition: when X, do Y, because Z. It
+  names the condition, not the example where it was found, and holds for any application that
+  meets the condition. A fact that holds only for one example stays in that example's README.
+  A fact about one API, such as a `BoxDecodeType` value or an option default, is stated
+  exactly, because it holds wherever that API is used.
+- **Correct:** a statement the work proves wrong is fixed in the same pull request, even when
+  the pull request is about something else.
+- **Merge:** extend or generalize an existing statement before adding a new one, so each fact
+  lives in one place.
+
+Keep routing in `SKILL.md` and detail in `references/`. `version` in `playbook.yml` stays
+unchanged. The pull request description lists each change under `Skill updates`, or writes
 `Skill updates: none` with the reason.
