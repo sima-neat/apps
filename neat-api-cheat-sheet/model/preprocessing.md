@@ -36,7 +36,7 @@ image is on [decoding.md](decoding.md).
 ## Minimal example
 
 C++, from
-[`yolo26-object-detector/src/cpp/main.cpp`](https://github.com/sima-neat/apps/blob/main/examples/object-detection/yolo26-object-detector/src/cpp/main.cpp)
+[`yolo26-object-detector/src/cpp/main.cpp`](../../examples/object-detection/yolo26-object-detector/src/cpp/main.cpp)
 (lines 248–252 and 258, de-indented):
 
 ```cpp
@@ -49,7 +49,7 @@ simaai::neat::Model model(cfg.model_path, model_opt);
 ```
 
 Python, from
-[`yolo26-object-detector/src/python/main.py`](https://github.com/sima-neat/apps/blob/main/examples/object-detection/yolo26-object-detector/src/python/main.py)
+[`yolo26-object-detector/src/python/main.py`](../../examples/object-detection/yolo26-object-detector/src/python/main.py)
 (lines 171–175 and 180, de-indented):
 
 ```python
@@ -65,7 +65,7 @@ The example then sends each OpenCV frame as a BGR image tensor
 (`pyneat.Tensor.from_numpy(..., image_format=pyneat.PixelFormat.BGR)`), and
 Neat letterboxes it to 640 × 640 and scales pixels to 0–1.
 
-Complete flow: [YOLO26 Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/yolo26-object-detector)
+Complete flow: [YOLO26 Object Detector](../../examples/object-detection/yolo26-object-detector/)
 
 ## Options
 
@@ -324,13 +324,13 @@ use `input_specs()` to know what to send.
 
 ## Used in
 
-- [YOLO26 Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/yolo26-object-detector): BGR images, `COCO_YOLO`
-- [Single-Stream Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/single-stream-object-detector): NV12 or NV16 video frames, input capacity set to the frame size
-- [Depth Estimator](https://github.com/sima-neat/apps/tree/main/examples/depth-estimation/depth-estimator): `Stretch` with an explicit size and `"BICUBIC"`
-- [PatchCore Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector): `ImageNet` preset, letterbox for a camera
-- [FastFlow Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/fastflow-anomaly-detector): explicit mean and stddev
-- [Image Classification Explorer](https://github.com/sima-neat/apps/tree/main/examples/classification/image-classification-explorer): `ImageNet` preset with input capacity per model
-- [MIPI Multi-Model](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/mipi-multi-model) (Python): NV12 camera input; `Letterbox` for YOLO26, `Stretch` with mean and stddev 0.5 for SSD
+- [YOLO26 Object Detector](../../examples/object-detection/yolo26-object-detector/): BGR images, `COCO_YOLO`
+- [Single-Stream Object Detector](../../examples/object-detection/single-stream-object-detector/): NV12 or NV16 video frames, input capacity set to the frame size
+- [Depth Estimator](../../examples/depth-estimation/depth-estimator/): `Stretch` with an explicit size and `"BICUBIC"`
+- [PatchCore Anomaly Detector](../../examples/anomaly-detection/patchcore-anomaly-detector/): `ImageNet` preset, letterbox for a camera
+- [FastFlow Anomaly Detector](../../examples/anomaly-detection/fastflow-anomaly-detector/): explicit mean and stddev
+- [Image Classification Explorer](../../examples/classification/image-classification-explorer/): `ImageNet` preset with input capacity per model
+- [MIPI Multi-Model](../../examples/benchmarking/mipi-multi-model/) (Python): NV12 camera input; `Letterbox` for YOLO26, `Stretch` with mean and stddev 0.5 for SSD
 - Other detection, pose, segmentation and tracking examples set `preprocess` too; list them with `git grep -n "preprocess\." -- examples`.
 
 ## Source

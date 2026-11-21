@@ -7,7 +7,7 @@ itself. A graph is the chain of nodes that Core runs. Each result is a
 sample: one frame, tensor or set of tensors, with its presentation timestamp
 (PTS, the time on the video timeline that the frame belongs to) and its frame
 ID. The application reads samples with `Run::pull()`, see the Run page of
-this reference.
+this cheat sheet.
 
 `OutputOptions` sets how many samples may wait for the application, what
 happens when the application pulls slower than the graph produces, and
@@ -35,7 +35,7 @@ Core does not check that the elements in the text exist, so a typo fails only
 when the graph is built. An empty fragment becomes a pass-through element.
 Prefer a typed node when one exists. The only Apps use of `Custom` adds an
 extra decode step in
-[yolo26-tiny-drone-tracker](https://github.com/sima-neat/apps/tree/main/examples/tracking/yolo26-tiny-drone-tracker),
+[yolo26-tiny-drone-tracker](../../examples/tracking/yolo26-tiny-drone-tracker/),
 not an end node.
 
 ## Minimal example
@@ -69,7 +69,7 @@ graph.connect(model_graph, detections_graph)
 sample = runtime.run.pull("detections", 20000)
 ```
 
-Complete flow: [single-stream-thermal-face-detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/single-stream-thermal-face-detector)
+Complete flow: [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/)
 
 ## Options
 
@@ -96,7 +96,7 @@ close but not right.
 | Max buffers | `max_buffers` | `max_buffers` | `4` | Most samples that can wait for `pull()`. `0` means no limit. A negative value counts as `0` | Raise it when the pull loop pauses now and then, for example to write a file, and frames must not be lost. Use `1` for the lowest latency |
 | Drop | `drop` | `drop` | `false` | What happens when `max_buffers` samples are waiting. `false`: the graph waits until the application pulls. `true`: the oldest waiting sample is thrown away | Set `true` for a live camera or RTSP stream. With `false`, an application that is slower than the stream sees the delay to live video grow until the stream stalls |
 | Sync | `sync` | `sync` | `false` | `true` holds each sample until the pipeline clock reaches its PTS. The pipeline clock is the running time Core uses to schedule media | A video file that should play at its recorded speed. Leave it `false` for live sources, which already arrive at video speed |
-| Combine policy | `combine_policy` | `combine_policy` | `CombinePolicy::None` (`pyneat.CombinePolicy.None_`) | How a named output merges samples when two or more fragments connect to it: `ByFrame`, `ByPts` or `RoundRobin`. The values are explained on the Branch and Combine page | Several producers connect to one output without realtime links, see Pitfalls. [patchcore-anomaly-detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector) sets it here. Most examples use `graphs::Combine` instead |
+| Combine policy | `combine_policy` | `combine_policy` | `CombinePolicy::None` (`pyneat.CombinePolicy.None_`) | How a named output merges samples when two or more fragments connect to it: `ByFrame`, `ByPts` or `RoundRobin`. The values are explained on the Branch and Combine page | Several producers connect to one output without realtime links, see Pitfalls. [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/) sets it here. Most examples use `graphs::Combine` instead |
 
 ## Language differences
 
@@ -130,11 +130,11 @@ close but not right.
 
 ## Used in
 
-- [single-stream-thermal-face-detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/single-stream-thermal-face-detector): one named output, `EveryFrame(4)`
-- [patchcore-anomaly-detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector): `Latest()` with `CombinePolicy::ByFrame`
-- [face-recognizer](https://github.com/sima-neat/apps/tree/main/examples/face-recognition/face-recognizer): two named outputs joined with `graphs::Combine`
-- [multi-stream-multi-model](https://github.com/sima-neat/apps/tree/main/examples/multi-model/multi-stream-multi-model): `drop = true` on a frame output
-- [superpoint-feature-extractor](https://github.com/sima-neat/apps/tree/main/examples/feature-extraction/superpoint-feature-extractor): `max_buffers` set by hand
+- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/): one named output, `EveryFrame(4)`
+- [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/): `Latest()` with `CombinePolicy::ByFrame`
+- [face-recognizer](../../examples/face-recognition/face-recognizer/): two named outputs joined with `graphs::Combine`
+- [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/): `drop = true` on a frame output
+- [superpoint-feature-extractor](../../examples/feature-extraction/superpoint-feature-extractor/): `max_buffers` set by hand
 
 ## Source
 

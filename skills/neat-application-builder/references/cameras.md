@@ -2,8 +2,7 @@
 
 Core's `mipi-camera-input.md` and `usb-camera-input.md`, under
 `docs/develop-apps/advanced-concepts/application-design/`, list the supported cameras and
-modes. `include/nodes/io/CameraInput.h` and `UsbCameraInput.h` define the options, and
-[Cameras](api/inputs/cameras.md) explains them.
+modes. `include/nodes/io/CameraInput.h` and `UsbCameraInput.h` define the options.
 
 - **MIPI camera:** capture is zero-copy. Set `allow_cpu_fallback` only as a deliberate
   compatibility choice. `CameraInputOptions::leaky_queue` defaults to `true` with a

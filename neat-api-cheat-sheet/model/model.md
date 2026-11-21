@@ -45,7 +45,7 @@ calls `runner.run` once per frame. `image_model_options()` and
 frame (scales it to fit the model input and pads the rest) into an RGB tensor.
 
 C++, from
-[`patchcore-anomaly-detector/src/cpp/main.cpp`](https://github.com/sima-neat/apps/blob/main/examples/anomaly-detection/patchcore-anomaly-detector/src/cpp/main.cpp)
+[`patchcore-anomaly-detector/src/cpp/main.cpp`](../../examples/anomaly-detection/patchcore-anomaly-detector/src/cpp/main.cpp)
 (lines 623–624, 638, 674, de-indented):
 
 ```cpp
@@ -56,7 +56,7 @@ runner.close();
 ```
 
 Python, from
-[`patchcore-anomaly-detector/src/python/main.py`](https://github.com/sima-neat/apps/blob/main/examples/anomaly-detection/patchcore-anomaly-detector/src/python/main.py)
+[`patchcore-anomaly-detector/src/python/main.py`](../../examples/anomaly-detection/patchcore-anomaly-detector/src/python/main.py)
 (lines 542–545, 560, 594, de-indented):
 
 ```python
@@ -72,7 +72,7 @@ For single calibration images the same example skips the runner and calls
 `model.run(simaai::neat::TensorList{model_input_tensor(bgr)})` in C++
 (line 319) and `model.run([model_input_tensor(bgr)])` in Python (line 279).
 
-Complete flow: [PatchCore Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector)
+Complete flow: [PatchCore Anomaly Detector](../../examples/anomaly-detection/patchcore-anomaly-detector/)
 
 ## Options
 
@@ -309,18 +309,18 @@ These calls ask a loaded model about itself. All of them except
 ## Used in
 
 - One-shot `run`:
-  [FastFlow Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/fastflow-anomaly-detector),
-  [Image Classification Explorer](https://github.com/sima-neat/apps/tree/main/examples/classification/image-classification-explorer),
-  [PatchCore Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector)
+  [FastFlow Anomaly Detector](../../examples/anomaly-detection/fastflow-anomaly-detector/),
+  [Image Classification Explorer](../../examples/classification/image-classification-explorer/),
+  [PatchCore Anomaly Detector](../../examples/anomaly-detection/patchcore-anomaly-detector/)
   (calibration)
 - `build` and a runner:
-  [Depth Estimator](https://github.com/sima-neat/apps/tree/main/examples/depth-estimation/depth-estimator),
-  [PatchCore Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector)
+  [Depth Estimator](../../examples/depth-estimation/depth-estimator/),
+  [PatchCore Anomaly Detector](../../examples/anomaly-detection/patchcore-anomaly-detector/)
   (video file),
-  [YOLO26 Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/yolo26-object-detector),
-  [SSD-MobileNet Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/ssd-mobilenet-object-detector),
-  [DETR Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/detr-object-detector),
-  [PCB Defect Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/pcb-defect-detector)
+  [YOLO26 Object Detector](../../examples/object-detection/yolo26-object-detector/),
+  [SSD-MobileNet Object Detector](../../examples/object-detection/ssd-mobilenet-object-detector/),
+  [DETR Object Detector](../../examples/object-detection/detr-object-detector/),
+  [PCB Defect Detector](../../examples/object-detection/pcb-defect-detector/)
 - `Model` inside a `Graph`: most streaming examples; see [routes.md](routes.md).
 
 ## Source

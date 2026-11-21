@@ -75,7 +75,7 @@ print(f"serving GenAI API on http://{host}:{port}", flush=True)
 genai_server.start()
 ```
 
-Complete flow: [detection-to-vlm-assistant](https://github.com/sima-neat/apps/tree/main/examples/genai/detection-to-vlm-assistant)
+Complete flow: [detection-to-vlm-assistant](../../examples/genai/detection-to-vlm-assistant/)
 
 ## Options
 
@@ -301,7 +301,7 @@ running.
   request arrives, which is then slow and is where a load or out-of-memory
   failure shows up. A text or image model has no such delay: it loads inside
   `add_model()`. Fix: after adding a speech model, send one short request
-  yourself, as [neat-genai-studio](https://github.com/sima-neat/apps/tree/main/examples/genai/neat-genai-studio)
+  yourself, as [neat-genai-studio](../../examples/genai/neat-genai-studio/)
   does.
 - **Same served name twice.** `add_model()` throws `OpenAI served model already
   exists`. Fix: pass a different name, or call `remove_model()` first. Two
@@ -342,8 +342,8 @@ running.
 
 ## Used in
 
-- [detection-to-vlm-assistant](https://github.com/sima-neat/apps/tree/main/examples/genai/detection-to-vlm-assistant) (`GenAIServerOptions`, `GenAIServer`, `add_model`, `start`, `stop`; Python)
-- [neat-genai-studio](https://github.com/sima-neat/apps/tree/main/examples/genai/neat-genai-studio) (`GenAIServer` with `add_model`, `remove_model`, `model_names`, `start`, `stop`; `ASRModel` and `GenerationRequest` with `audio_file` and `language` in `src/python/server/probe_asr.py`; Python)
+- [detection-to-vlm-assistant](../../examples/genai/detection-to-vlm-assistant/) (`GenAIServerOptions`, `GenAIServer`, `add_model`, `start`, `stop`; Python)
+- [neat-genai-studio](../../examples/genai/neat-genai-studio/) (`GenAIServer` with `add_model`, `remove_model`, `model_names`, `start`, `stop`; `ASRModel` and `GenerationRequest` with `audio_file` and `language` in `src/python/server/probe_asr.py`; Python)
 
 No shipped example uses C++, `VisionLanguageModel`, `GenAIModel`,
 `GenerationStream`, or the graph fragments.

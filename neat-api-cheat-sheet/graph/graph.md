@@ -6,7 +6,8 @@ A `Graph` is where an application assembles its pipeline. You add nodes (the
 building blocks: an input, a decoder, a model, an output), reusable graph
 fragments (small graphs that you insert into a bigger one as one piece), and
 models. `build()` turns the graph into a running pipeline and returns a `Run`,
-the handle you push inputs to and pull outputs from (see [Run](../run/run.md)).
+the handle you push inputs to and pull outputs from (see the Run page of this
+cheat sheet).
 
 Core runs the pipeline on GStreamer, the open-source media framework that
 moves frames between the stages. While it builds, GStreamer agrees on the
@@ -24,7 +25,7 @@ model, several models, or named inputs and outputs.
 
 When the application only runs a model on tensors it already holds, skip the
 graph. Use `Model::run()` for one call or `Model::build()` for a reusable runner,
-as [depth-estimator](https://github.com/sima-neat/apps/tree/main/examples/depth-estimation/depth-estimator) does. See
+as [depth-estimator](../../examples/depth-estimation/depth-estimator/) does. See
 [Model](../model/model.md).
 
 Two ways to compose a graph:
@@ -91,7 +92,7 @@ graph.add(pyneat.nodes.output(
     MODEL_OUTPUT, pyneat.OutputOptions.every_frame(max(1, cfg.max_inflight_per_stream))))
 ```
 
-Complete flow: [multi-stream-multi-model](https://github.com/sima-neat/apps/tree/main/examples/multi-model/multi-stream-multi-model)
+Complete flow: [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/)
 
 ## Options
 
@@ -104,7 +105,7 @@ Complete flow: [multi-stream-multi-model](https://github.com/sima-neat/apps/tree
 | Element name suffix | `element_name_suffix` | `element_name_suffix` | `""` | Appended to the name of every GStreamer element the graph creates | Same as the prefix |
 | Verbosity | `verbose` | `verbose` | `VerbosityLevel::Production`, progress on, topic flags off | Diagnostic output of this graph | Turn topics on while you debug how the graph is planned and built. Keep production output in a shipped app |
 | A65 workers | `kernel_runner_a65_workers` | `kernel_runner_a65_workers` | `2` | Number of worker threads for the numerical kernels that run on the A65, the board's Arm CPU cores. 1 to 64. Created only when the graph has such kernels | Numerical stages on the A65 are the bottleneck and the CPU has spare cores |
-| Execution controls | `advanced_execution` | `advanced_execution` | every field unset: no effect | Where and how the model stages of the graph run: preprocessing and postprocessing placement, asynchronous submission, the model output buffer pool, and the depth of the queues Neat inserts. Its fields and their defaults are listed on the [Model](../model/model.md#options) page. Set here, a field applies to every model in the graph | The [thermal face detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/single-stream-thermal-face-detector) moves postprocessing off the CPU with `postprocess_target = "EV74"`. The EV74 is the board's vision processor. The [high-density detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector) sets `internal_queue_depth`, the depth of the queues Neat inserts between stages. On live fan-in, as in that detector, a positive value also inserts those queues. On a linear graph the run preset decides whether they exist |
+| Execution controls | `advanced_execution` | `advanced_execution` | every field unset: no effect | Where and how the model stages of the graph run: preprocessing and postprocessing placement, asynchronous submission, the model output buffer pool, and the depth of the queues Neat inserts. Its fields and their defaults are listed on the [Model](../model/model.md#options) page. Set here, a field applies to every model in the graph | The [thermal face detector](../../examples/face-detection/single-stream-thermal-face-detector/) moves postprocessing off the CPU with `postprocess_target = "EV74"`. The EV74 is the board's vision processor. The [high-density detector](../../examples/object-detection/high-density-multi-stream-object-detector/) sets `internal_queue_depth`, the depth of the queues Neat inserts between stages. On live fan-in, as in that detector, a positive value also inserts those queues. On a linear graph the run preset decides whether they exist |
 
 C++ also keeps older execution fields for existing code: `processcvu`,
 `processmla`, `async_queue_depth`, `processcvu_requested_run_target`, and
@@ -154,12 +155,12 @@ is built: `prepared_runner` with any field changed from its default (a mode of
 
 ## Used in
 
-- [single-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/single-stream-object-detector)
-- [single-stream-thermal-face-detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/single-stream-thermal-face-detector) (`GraphOptions.advanced_execution.postprocess_target`)
-- [high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector) (`advanced_execution.internal_queue_depth`)
-- [multi-stream-multi-model](https://github.com/sima-neat/apps/tree/main/examples/multi-model/multi-stream-multi-model)
-- [mipi-multi-model](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/mipi-multi-model) (`describe_backend`)
-- [face-recognizer](https://github.com/sima-neat/apps/tree/main/examples/face-recognition/face-recognizer)
+- [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/)
+- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/) (`GraphOptions.advanced_execution.postprocess_target`)
+- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) (`advanced_execution.internal_queue_depth`)
+- [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/)
+- [mipi-multi-model](../../examples/benchmarking/mipi-multi-model/) (`describe_backend`)
+- [face-recognizer](../../examples/face-recognition/face-recognizer/)
 
 Most other live examples build a `Graph` as well.
 

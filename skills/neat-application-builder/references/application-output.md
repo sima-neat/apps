@@ -4,9 +4,7 @@ Live results go to Insight, which shows them in a browser: video through the `Vi
 graph fragment and results through `MetadataSender`. Offline applications can save results or
 show annotated images in a local window. `include/nodes/groups/VideoSender.h`,
 `include/nodes/io/MetadataSender.h`, and Core's `video_sender.md` and `metadata_sender.md`
-under `docs/develop-apps/advanced-concepts/application-design/` define both senders.
-[VideoSender](api/outputs/video-sender.md) and [MetadataSender](api/outputs/metadata-sender.md)
-explain their options. Viewer
+under `docs/develop-apps/advanced-concepts/application-design/` define both senders. Viewer
 setup belongs to the Insight documentation or the installed Insight skill.
 
 ## Video to Insight

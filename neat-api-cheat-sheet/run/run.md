@@ -54,7 +54,7 @@ run_opt.output_memory = pyneat.OutputMemory.ZeroCopy
 run = graph.build(run_opt)
 ```
 
-Complete flow: [high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector)
+Complete flow: [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/)
 
 ## Options
 
@@ -146,11 +146,11 @@ tears the pipeline down.
 
 ## Used in
 
-- [high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector) — `Realtime`, `ZeroCopy`, `queue_depth` from config, `overflow_policy` left `Auto`
-- [depth-estimator](https://github.com/sima-neat/apps/tree/main/examples/depth-estimation/depth-estimator) — `Block`, explicit `queue_depth`, folder-of-images workload
-- [fastflow-anomaly-detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/fastflow-anomaly-detector)
-- [multi-stream-pose-estimator](https://github.com/sima-neat/apps/tree/main/examples/pose-estimation/multi-stream-pose-estimator)
-- [single-stream-instance-segmenter](https://github.com/sima-neat/apps/tree/main/examples/segmentation/single-stream-instance-segmenter)
+- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) — `Realtime`, `ZeroCopy`, `queue_depth` from config, `overflow_policy` left `Auto`
+- [depth-estimator](../../examples/depth-estimation/depth-estimator/) — `Block`, explicit `queue_depth`, folder-of-images workload
+- [fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/)
+- [multi-stream-pose-estimator](../../examples/pose-estimation/multi-stream-pose-estimator/)
+- [single-stream-instance-segmenter](../../examples/segmentation/single-stream-instance-segmenter/)
 
 ## Source
 

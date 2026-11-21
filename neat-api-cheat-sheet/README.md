@@ -1,10 +1,10 @@
-# Neat API Reference
+# Neat API cheat sheet
 
 This folder explains the Neat Core APIs that applications use, in plain English.
 Each page covers one API in C++ and Python. It says what the API does, which
 options it has, what each option defaults to, and why you would change it.
 
-This reference does not replace the Core documentation or the Core headers.
+The cheat sheet does not replace the Core documentation or the Core headers.
 It is a short guide to choosing options. When a page and Core disagree, Core is
 right and the page needs a fix.
 
@@ -20,6 +20,8 @@ languages. There are no separate C++ and Python pages.
 | `model/` | `Model`, model options, route options, preprocessing, box decoding, benchmarking |
 | `inputs/` | The `Input` node, RTSP and HTTP inputs, cameras, decoding, caps, PCIe |
 | `outputs/` | The `Output` node, `VideoSender`, `MetadataSender`, GenAI, measuring |
+
+Every page follows [TEMPLATE.md](TEMPLATE.md).
 
 ## Pages
 
@@ -90,10 +92,27 @@ the options table on every page has one column per language. A cell says
 
 ## Where the facts come from
 
-Each page ends with the C++ header, the Python binding, and the Core commit it was
-checked against. The installed headers and Python bindings are the callable contract: find
-them as the `neat-application-builder` skill's step 1 says. When a page and the installed Core
-disagree, the installed Core is right.
+Read these in the Core repository, [sima-neat/core](https://github.com/sima-neat/core), at the
+commit that `deps/manifest.json` names as `neat-core`:
 
-Each page links the Apps examples that use the API. An example sets only the options it
-needs, so it shows how an API is used, not which options exist.
+- `include/` has the public C++ headers. They hold the C++ options and defaults.
+- `python/src/module.cpp` has the Python bindings. They decide which options
+  Python has and what Python calls them.
+- `docs/develop-apps/` and `docs/reference/` have the Core documentation.
+
+The examples in this repository show how the APIs are used. They do not show
+which options exist, because an example sets only the options it needs.
+
+Each page records the Core commit it was written against. When Core changes an
+API, update the page and its commit.
+
+## Rules for a page
+
+- Follow [TEMPLATE.md](TEMPLATE.md) and keep its section order.
+- Write for an application developer who has not read the Core source.
+- Give every option a default and a reason to change it.
+- Take the C++ column from the header and the Python column from the bindings.
+- Keep each code block to 10 lines or fewer.
+- Link to a shipped example for the complete flow.
+- Do not document environment variables such as `SIMA_*`. They are internal
+  Core switches, not supported API. Give the API-level fix instead.

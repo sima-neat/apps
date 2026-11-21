@@ -38,7 +38,7 @@ No shipped example calls `benchmark` from C++. C++ uses the same call,
 the same fields.
 
 Python, from
-[`model-benchmark/src/python/main.py`](https://github.com/sima-neat/apps/blob/main/examples/benchmarking/model-benchmark/src/python/main.py)
+[`model-benchmark/src/python/main.py`](../../examples/benchmarking/model-benchmark/src/python/main.py)
 (lines 156, 162–165, 172–174, de-indented):
 
 ```python
@@ -52,7 +52,7 @@ print(f"latency_p99_ms={report.latency_p99_ms}")
 print(f"fps={report.fps}")
 ```
 
-Complete flow: [Model Benchmark](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/model-benchmark)
+Complete flow: [Model Benchmark](../../examples/benchmarking/model-benchmark/)
 
 ## Options
 
@@ -163,7 +163,7 @@ any other ending. It creates missing directories and replaces an existing file.
 
 ## Used in
 
-- [Model Benchmark](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/model-benchmark) (Python)
+- [Model Benchmark](../../examples/benchmarking/model-benchmark/) (Python)
 
 ## Source
 

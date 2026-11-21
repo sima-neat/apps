@@ -40,7 +40,7 @@ route, C++ has `stages::BoxDecode`; see [decoding.md](decoding.md).
 ## Minimal example
 
 C++, from
-[`patchcore-anomaly-detector/src/cpp/main.cpp`](https://github.com/sima-neat/apps/blob/main/examples/anomaly-detection/patchcore-anomaly-detector/src/cpp/main.cpp)
+[`patchcore-anomaly-detector/src/cpp/main.cpp`](../../examples/anomaly-detection/patchcore-anomaly-detector/src/cpp/main.cpp)
 (lines 795–797 and 814–817, de-indented). A branch splits the RTSP source
 into `"model"` and `"frame"`. The model's route sits behind a named `Input`
 endpoint, and its output feeds the `"embedding"` graph:
@@ -56,7 +56,7 @@ rt.graph.connect(model_graph, embedding_graph);
 ```
 
 Python, from
-[`mipi-multi-model/src/python/main.py`](https://github.com/sima-neat/apps/blob/main/examples/benchmarking/mipi-multi-model/src/python/main.py)
+[`mipi-multi-model/src/python/main.py`](../../examples/benchmarking/mipi-multi-model/src/python/main.py)
 (lines 172–178 and 188–189, de-indented). `CAMERA_BUFFER` is `"camera0"`,
 the `buffer_name` of the MIPI camera node. With Insight on, the frames reach
 the model through a branch output named `"images"` instead:
@@ -73,8 +73,8 @@ model_graph = model.graph(route)
 model_graph.add(pyneat.nodes.output(OUTPUT_NAME))
 ```
 
-Complete flow: [MIPI Multi-Model](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/mipi-multi-model),
-[PatchCore Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector)
+Complete flow: [MIPI Multi-Model](../../examples/benchmarking/mipi-multi-model/),
+[PatchCore Anomaly Detector](../../examples/anomaly-detection/patchcore-anomaly-detector/)
 
 ## Options
 
@@ -166,11 +166,11 @@ pass that undoes the tile layout and converts INT8 back to float. Both are
 Neat places on the EV74 or the A65 (see `advanced_execution` on
 [model.md](model.md#options)).
 
-The [Face Detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/face-detector) loads
+The [Face Detector](../../examples/face-detection/face-detector/) loads
 its RetinaFace model with `preprocess.kind = InputKind::Tensor` and builds
 this chain by hand
-([`main.cpp`](https://github.com/sima-neat/apps/blob/main/examples/face-detection/face-detector/src/cpp/main.cpp)
-lines 587–591, [`main.py`](https://github.com/sima-neat/apps/blob/main/examples/face-detection/face-detector/src/python/main.py)
+([`main.cpp`](../../examples/face-detection/face-detector/src/cpp/main.cpp)
+lines 587–591, [`main.py`](../../examples/face-detection/face-detector/src/python/main.py)
 lines 404–408):
 
 | Node | C++ | Python |
@@ -274,29 +274,29 @@ change them.
 ## Used in
 
 - `model.graph()` inside a `Graph`:
-  [PatchCore Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector),
-  [MIPI Multi-Model](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/mipi-multi-model) (Python,
+  [PatchCore Anomaly Detector](../../examples/anomaly-detection/patchcore-anomaly-detector/),
+  [MIPI Multi-Model](../../examples/benchmarking/mipi-multi-model/) (Python,
   with route names and placement),
-  [High-Density Multi-Stream Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector)
+  [High-Density Multi-Stream Object Detector](../../examples/object-detection/high-density-multi-stream-object-detector/)
   (Python),
-  [Multi-Stream BlazePose 3D](https://github.com/sima-neat/apps/tree/main/examples/pose-estimation/multi-stream-blazepose3d)
+  [Multi-Stream BlazePose 3D](../../examples/pose-estimation/multi-stream-blazepose3d/)
   (Python),
-  [RF-DETR Detection and Segmentation](https://github.com/sima-neat/apps/tree/main/examples/object-detection/rfdetr-detection-segmentation)
+  [RF-DETR Detection and Segmentation](../../examples/object-detection/rfdetr-detection-segmentation/)
 - A `Model` passed to `Graph::add` or `connect`:
-  [Face Recognizer](https://github.com/sima-neat/apps/tree/main/examples/face-recognition/face-recognizer),
-  [Single-Stream Thermal Face Detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/single-stream-thermal-face-detector)
+  [Face Recognizer](../../examples/face-recognition/face-recognizer/),
+  [Single-Stream Thermal Face Detector](../../examples/face-detection/single-stream-thermal-face-detector/)
 - `RouteOptions` passed to `build`:
-  [Depth Estimator](https://github.com/sima-neat/apps/tree/main/examples/depth-estimation/depth-estimator),
-  [PCB Defect Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/pcb-defect-detector),
-  [YOLO26 Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/yolo26-object-detector),
-  [SSD-MobileNet Object Detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/ssd-mobilenet-object-detector),
-  [PatchCore Anomaly Detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector),
-  [RF-DETR Detection and Segmentation](https://github.com/sima-neat/apps/tree/main/examples/object-detection/rfdetr-detection-segmentation),
-  [EfficientSAM3 Promptable Segmenter](https://github.com/sima-neat/apps/tree/main/examples/segmentation/efficientsam3-promptable-segmenter)
+  [Depth Estimator](../../examples/depth-estimation/depth-estimator/),
+  [PCB Defect Detector](../../examples/object-detection/pcb-defect-detector/),
+  [YOLO26 Object Detector](../../examples/object-detection/yolo26-object-detector/),
+  [SSD-MobileNet Object Detector](../../examples/object-detection/ssd-mobilenet-object-detector/),
+  [PatchCore Anomaly Detector](../../examples/anomaly-detection/patchcore-anomaly-detector/),
+  [RF-DETR Detection and Segmentation](../../examples/object-detection/rfdetr-detection-segmentation/),
+  [EfficientSAM3 Promptable Segmenter](../../examples/segmentation/efficientsam3-promptable-segmenter/)
   (C++),
-  [Neat GenAI Studio](https://github.com/sima-neat/apps/tree/main/examples/genai/neat-genai-studio) (Python)
+  [Neat GenAI Studio](../../examples/genai/neat-genai-studio/) (Python)
 - `groups::MLA`, `QuantTess` and `DetessDequant`:
-  [Face Detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/face-detector)
+  [Face Detector](../../examples/face-detection/face-detector/)
 
 ## Source
 

@@ -4,9 +4,6 @@
 box decoding. Use that route as it is. A route rebuilt by hand loses the adapters the archive
 requires. `include/model/Model.h` and Core's
 `docs/develop-apps/development-workflow/model.mdx` define every option named here.
-[Model](api/model/model.md), [PreprocessOptions](api/model/preprocessing.md),
-[BoxDecodeType](api/model/decoding.md), and [Model::RouteOptions](api/model/routes.md) explain
-each option and its default.
 
 ## Get a compiled model
 

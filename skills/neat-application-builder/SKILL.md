@@ -17,9 +17,7 @@ the public APIs. The project's own rules decide layout, configuration, and packa
    `/usr/include` on the DevKit. Core source and docs live under `/neat-resources/core-src` in
    images whose `/etc/sdk-release` reports `Neat Core = bundled`. Otherwise use the Core source
    at the installed version's tag. To find the header that owns an API, use the
-   [API surface map](references/api-surface-map.md). For what each option does, its default,
-   and how C++ and Python differ, read the API's page in the
-   [API reference](references/api/README.md). For Python, read the binding in Core's
+   [API surface map](references/api-surface-map.md). For Python, read the binding in Core's
    `python/src/module.cpp` or run `help(pyneat.<Name>)` on the target. Done when every class,
    function, and option field the planned code names has been found in its header or binding,
    and each one that could not be found is listed.
