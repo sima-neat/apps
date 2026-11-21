@@ -39,7 +39,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def model_options(config: Config) -> pyneat.ModelOptions:
+def model_options(config: Config, max_detections: int) -> pyneat.ModelOptions:
     options = pyneat.ModelOptions()
     options.verbose = pyneat.VerboseOptions.quiet()
     options.preprocess.kind = pyneat.InputKind.Image
@@ -49,7 +49,7 @@ def model_options(config: Config) -> pyneat.ModelOptions:
     options.decode_type = pyneat.BoxDecodeType.YoloV26
     options.score_threshold = config.number("inference.min_score")
     options.nms_iou_threshold = config.number("inference.nms_iou")
-    options.top_k = config.integer("inference.max_detections")
+    options.top_k = max_detections
     return options
 
 
@@ -77,7 +77,7 @@ def rtsp_options(
 ) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
     options.url = url
-    options.codec = RTSP_CODECS[config.string("input.codec")]
+    options.codec = config.choice("input.codec", RTSP_CODECS)
     options.tcp = config.boolean("input.rtsp.tcp")
     options.latency_ms = config.integer("input.rtsp.latency_ms")
     options.source_fps = config.integer("input.fps")
@@ -92,7 +92,7 @@ def rtsp_options(
 def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
     """Hardware decode to NV12 frames at the stream's size, ending at "detector_frame"."""
     decode = pyneat.SimaDecodeOptions()
-    decode.type = DECODE_TYPES[config.string("input.codec")]
+    decode.type = config.choice("input.codec", DECODE_TYPES)
     decode.decoder_name = "decoder"
     decode.next_element = "CVU"
     decode.dec_width = stream.width
@@ -139,7 +139,7 @@ def video_link() -> pyneat.GraphLinkOptions:
 
 def video_options(config: Config, index: int) -> pyneat.VideoSenderOptions:
     """Send the encoded stream to Insight unchanged, on video port base + index."""
-    options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[config.string("input.codec")])
+    options = pyneat.VideoSenderOptions.passthrough(config.choice("input.codec", RTSP_CODECS))
     options.host = config.string("output.insight.host")
     options.channel = index
     options.video_port_base = config.integer("output.insight.video_port_base")
@@ -207,19 +207,6 @@ def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, max_detections: 
     return result.boxes
 
 
-def frame_metadata(sample: pyneat.Sample, index: int) -> detection_egress.FrameMetadata:
-    return detection_egress.FrameMetadata(
-        stream_index=index,
-        stream_id=sample.stream_id,
-        frame_id=sample.frame_id,
-        pts_ns=sample.pts_ns,
-        dts_ns=sample.dts_ns,
-        duration_ns=sample.duration_ns,
-        input_seq=sample.input_seq,
-        orig_input_seq=sample.orig_input_seq,
-    )
-
-
 def send_detections(
     run: pyneat.Run,
     metadata_senders: list[pyneat.MetadataSender],
@@ -246,7 +233,7 @@ def send_detections(
             labels,
             stream.width,
             stream.height,
-            frame_metadata(sample, index),
+            detection_egress.frame_metadata(sample, index),
         )
         # A nonblocking send drops the message while the socket buffer is full; the drops are
         # counted in the sender's stats and reported when the run ends. Any other failure raises.
@@ -258,9 +245,11 @@ def main(argv: list[str] | None = None) -> int:
     config = Config.load(args.config)
     sources = config.string_list("input.source")
     streams = stream_info(config, sources)
-    labels = load_labels(Path(config.string("model.labels")).expanduser())
-    model_path = args.config.resolve().parent / Path(config.string("model.path")).expanduser()
-    model = pyneat.Model(str(model_path), model_options(config))
+    labels = load_labels(Path(config.string("model.labels")))
+    model_path = args.config.resolve().parent / config.string("model.path")
+    # Used by both the model and the box decode.
+    max_detections = config.integer("inference.max_detections")
+    model = pyneat.Model(str(model_path), model_options(config, max_detections))
     detector = detector_graph(model, config)
 
     graph = pyneat.Graph(options=graph_options(config))
@@ -291,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
             metadata_senders,
             streams,
             labels,
-            config.integer("inference.max_detections"),
+            max_detections,
             stop,
         )
     finally:

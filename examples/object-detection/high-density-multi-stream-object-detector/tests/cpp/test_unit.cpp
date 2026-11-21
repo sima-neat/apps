@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -76,6 +77,27 @@ bool test_serialize_builds_insight_payload() {
   return ok;
 }
 
+// The fields frame_metadata reads from a pulled simaai::neat::Sample.
+struct TestSample {
+  std::string stream_id = "decoder";
+  std::int64_t frame_id = 42;
+  std::int64_t pts_ns = 1'000'000'000;
+  std::int64_t dts_ns = 900'000'000;
+  std::int64_t duration_ns = 33'333'333;
+  std::int64_t input_seq = 7;
+  std::int64_t orig_input_seq = 6;
+};
+
+bool test_frame_metadata_copies_the_sample_identity() {
+  TestSample sample;
+  const auto frame = sima_examples::detection_egress::frame_metadata(sample, 3);
+  return expect_true(frame.stream_index == 3 && frame.stream_id == "decoder" &&
+                         frame.frame_id == 42 && frame.pts_ns == 1'000'000'000 &&
+                         frame.dts_ns == 900'000'000 && frame.duration_ns == 33'333'333 &&
+                         frame.input_seq == 7 && frame.orig_input_seq == 6 && !frame.rtp_timestamp,
+                     "frame_metadata copies the sample identity and sets no RTP timestamp");
+}
+
 // The checks the application leaves to its config: the values it reads are usable.
 bool test_shipped_profiles_load() {
   const fs::path common_dir =
@@ -104,6 +126,7 @@ bool test_shipped_profiles_load() {
 int main() {
   bool ok = true;
   ok &= test_serialize_builds_insight_payload();
+  ok &= test_frame_metadata_copies_the_sample_identity();
   ok &= test_shipped_profiles_load();
   return ok ? 0 : 1;
 }

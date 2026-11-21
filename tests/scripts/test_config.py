@@ -10,7 +10,7 @@ import pytest
 APPS_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(APPS_ROOT / "support" / "python"))
 
-from sima_examples.config import Config
+from sima_examples.config import Config, lookup
 
 
 def config_file(tmp_path: Path, text: str) -> Config:
@@ -53,3 +53,19 @@ def test_bool_is_not_an_integer(tmp_path):
     config = config_file(tmp_path, "input:\n  fps: true\n")
     with pytest.raises(ValueError, match="input.fps must be an integer"):
         config.integer("input.fps")
+
+
+def test_choice_returns_the_entry_the_value_names(tmp_path):
+    config = config_file(tmp_path, "input:\n  codec: h265\n")
+    assert config.choice("input.codec", {"h264": 1, "h265": 2}) == 2
+
+
+def test_unknown_value_names_the_key_the_value_and_the_choices(tmp_path):
+    config = config_file(tmp_path, "input:\n  codec: vp8\n")
+    expected = "input.codec: unknown value 'vp8' (expected h264, h265, mjpeg)"
+    with pytest.raises(ValueError) as error:
+        config.choice("input.codec", {"mjpeg": 3, "h264": 1, "h265": 2})
+    assert str(error.value) == expected
+    with pytest.raises(ValueError) as error:
+        lookup("input.codec", "vp8", {"h264": 1, "h265": 2, "mjpeg": 3})
+    assert str(error.value) == expected

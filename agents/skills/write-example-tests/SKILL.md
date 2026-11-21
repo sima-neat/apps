@@ -38,8 +38,8 @@ the example's own logic maps to a unit test, and every test was seen failing.
 
 ## Where other checks live
 
-- The shared config reader's missing, unknown, and mistyped keys are tested once, in
-  `tests/scripts/test_config.py`.
+- The shared config reader's missing and mistyped keys and unknown table values are tested
+  once, in `tests/scripts/test_config.py`.
 - Other shared library code is tested once, as `agents/rules.md` "Tests" says.
 - Argument parsing, `--help`, and exit codes for a missing file need no test of their own: an
   end-to-end test runs them.

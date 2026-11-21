@@ -92,3 +92,30 @@ def test_message_without_pts_has_no_rtp_timestamp():
     assert message["timestamp"] == -1
     assert message["frame_id"] == ""
     assert "rtp_timestamp" not in message
+
+
+@dataclass
+class Sample:
+    """The fields frame_metadata reads from a pulled pyneat.Sample."""
+
+    stream_id: str = "decoder"
+    frame_id: int = 42
+    pts_ns: int = 1_000_000_000
+    dts_ns: int = 900_000_000
+    duration_ns: int = 33_333_333
+    input_seq: int = 7
+    orig_input_seq: int = 6
+
+
+def test_frame_metadata_copies_the_sample_identity():
+    frame = detection_egress.frame_metadata(Sample(), 3)
+    assert frame == detection_egress.FrameMetadata(
+        stream_index=3,
+        stream_id="decoder",
+        frame_id=42,
+        pts_ns=1_000_000_000,
+        dts_ns=900_000_000,
+        duration_ns=33_333_333,
+        input_seq=7,
+        orig_input_seq=6,
+    )

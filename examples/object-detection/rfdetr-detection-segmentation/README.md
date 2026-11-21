@@ -200,8 +200,8 @@ because the socket buffer was full, a further line counts them.
   resolved from the config file to a missing file, or the decoder package
   (`*_decoder_mpk.tar.gz`) is not next to the backbone. Point `model.path` at the
   backbone and extract both files from the same download into one folder.
-- `KeyError` naming a codec in Python, or `map::at` in C++, means `input.codec`
-  names a codec this example does not decode. Use `h264`, `h265`, or `mjpeg`.
+- `input.codec: unknown value '<codec>' (expected h264, h265, mjpeg)` means
+  `input.codec` names a codec this example does not decode. Use one of those listed.
 - `<config> is missing <key>` or `<key> must be <type>` names a key the config
   lacks or sets to the wrong type. Compare it with the packaged config.
 - `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`

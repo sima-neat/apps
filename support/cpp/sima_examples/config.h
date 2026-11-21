@@ -4,11 +4,29 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace sima_examples {
+
+// table.at(value); a value the table lacks throws with key, the value, and the choices. Use it
+// for a value main derives from the config; Config::choice reads the key itself. Mirrors
+// sima_examples.config.lookup in support/python.
+template <typename T>
+const T& lookup(const std::string& key, const std::string& value,
+                const std::map<std::string, T>& table) {
+  const auto it = table.find(value);
+  if (it == table.end()) {
+    std::string expected;
+    for (const auto& [name, entry] : table) {
+      expected += (expected.empty() ? "" : ", ") + name;
+    }
+    throw std::runtime_error(key + ": unknown value '" + value + "' (expected " + expected + ")");
+  }
+  return it->second;
+}
 
 // The values of one config.yaml, read by dotted key such as "input.rtsp.tcp". Scalars and
 // lists of strings are read; string_list() rejects a list holding anything else.
@@ -32,6 +50,12 @@ public:
   [[nodiscard]] bool boolean(const std::string& key) const;
   // A single value reads as a list of one.
   [[nodiscard]] std::vector<std::string> string_list(const std::string& key) const;
+  // The table entry the string at key names, such as a codec name's Neat enum.
+  template <typename T>
+  [[nodiscard]] const T& choice(const std::string& key,
+                                const std::map<std::string, T>& table) const {
+    return lookup(key, string(key), table);
+  }
 
 private:
   std::string require_key(const std::string& key) const;

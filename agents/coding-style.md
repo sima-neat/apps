@@ -50,12 +50,19 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 - `main` loads the file once with `sima_examples.config.Config` in Python or
   `sima_examples::Config` in C++ and passes that object to the functions that build Neat
   options. Each function reads the keys it sets, where it sets them, such as
-  `options.latency_ms = config.integer("input.rtsp.latency_ms")`, so every setting appears once
-  in the code. A value derived from several keys, such as the probed stream size, is a local
-  in `main`.
-- The application reads its config and runs. Range checks, supported-value checks, and
-  unknown-key checks of the shipped configs live in the unit tests, as `agents/rules.md`
-  "Tests" describes.
+  `options.latency_ms = config.integer("input.rtsp.latency_ms")`, so `main` stays short. Two
+  functions may read the same key, such as `output.insight.host` for the video and metadata
+  senders. A value derived from several keys, such as the probed stream size, is read once in
+  `main` and passed in, and so is a value two parts must agree on, such as
+  `inference.max_detections` for the model and the box decode.
+- A value that names a table entry, such as `input.codec`, is read with
+  `config.choice(key, table)`, or `lookup(key, value, table)` when `main` derives the value. An
+  unknown value fails with the key, the value, and the choices:
+  `input.codec: unknown value 'vp8' (expected h264, h265, mjpeg)`.
+- Paths are used as written, with no `expanduser`, so both languages read them the same way.
+- The application reads only the keys it uses: a missing or mistyped key fails with its name,
+  and an extra key in a user's own config is ignored. Range and supported-value checks of the
+  shipped configs live in the unit tests, as `agents/rules.md` "Tests" describes.
 - `config.yaml` sets one configuration: one input type with only the keys it reads. When the
   example supports several input types, `input.type` names the one set, and comments under it
   list the keys each other type takes:

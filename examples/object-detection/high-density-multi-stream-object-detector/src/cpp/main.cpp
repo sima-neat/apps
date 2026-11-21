@@ -68,7 +68,7 @@ fs::path parse_args(int argc, char** argv) {
   return config_path;
 }
 
-neat::Model::Options model_options(const sima_examples::Config& config) {
+neat::Model::Options model_options(const sima_examples::Config& config, int max_detections) {
   neat::Model::Options options;
   options.verbose = neat::VerboseOptions::quiet();
   options.preprocess.kind = neat::InputKind::Image;
@@ -78,7 +78,7 @@ neat::Model::Options model_options(const sima_examples::Config& config) {
   options.decode_type = neat::BoxDecodeType::YoloV26;
   options.score_threshold = config.number("inference.min_score");
   options.nms_iou_threshold = config.number("inference.nms_iou");
-  options.top_k = config.integer("inference.max_detections");
+  options.top_k = max_detections;
   return options;
 }
 
@@ -103,7 +103,7 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
                                              const sima_examples::RtspStreamInfo& stream) {
   groups::RtspEncodedInputOptions options;
   options.url = url;
-  options.codec = kRtspCodecs.at(config.string("input.codec"));
+  options.codec = config.choice("input.codec", kRtspCodecs);
   options.tcp = config.boolean("input.rtsp.tcp");
   options.latency_ms = config.integer("input.rtsp.latency_ms");
   options.source_fps = config.integer("input.fps");
@@ -120,7 +120,7 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
 neat::Graph decoder_graph(const sima_examples::Config& config,
                           const sima_examples::RtspStreamInfo& stream) {
   neat::SimaDecodeOptions decode;
-  decode.type = kDecodeTypes.at(config.string("input.codec"));
+  decode.type = config.choice("input.codec", kDecodeTypes);
   decode.decoder_name = "decoder";
   decode.next_element = "CVU";
   decode.dec_width = stream.width;
@@ -160,8 +160,7 @@ neat::GraphLinkOptions video_link() {
 
 // Send the encoded stream to Insight unchanged, on video port base + index.
 groups::VideoSenderOptions video_options(const sima_examples::Config& config, int index) {
-  auto options =
-      groups::VideoSenderOptions::Passthrough(kRtspCodecs.at(config.string("input.codec")));
+  auto options = groups::VideoSenderOptions::Passthrough(config.choice("input.codec", kRtspCodecs));
   options.host = config.string("output.insight.host");
   options.channel = index;
   options.video_port_base = config.integer("output.insight.video_port_base");
@@ -238,20 +237,6 @@ std::vector<neat::Box> decode_boxes(const neat::Sample& sample,
       .boxes;
 }
 
-sima_examples::detection_egress::FrameMetadata frame_metadata(const neat::Sample& sample,
-                                                              int index) {
-  sima_examples::detection_egress::FrameMetadata metadata;
-  metadata.stream_index = index;
-  metadata.stream_id = sample.stream_id;
-  metadata.frame_id = sample.frame_id;
-  metadata.pts_ns = sample.pts_ns;
-  metadata.dts_ns = sample.dts_ns;
-  metadata.duration_ns = sample.duration_ns;
-  metadata.input_seq = sample.input_seq;
-  metadata.orig_input_seq = sample.orig_input_seq;
-  return metadata;
-}
-
 // Send every detections sample to its stream's Insight channel until a stop signal.
 void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata_senders,
                      const std::vector<sima_examples::RtspStreamInfo>& streams,
@@ -273,7 +258,7 @@ void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata
     const auto& stream = streams.at(static_cast<std::size_t>(index));
     const std::string payload = sima_examples::detection_egress::serialize(
         decode_boxes(sample, stream, max_detections), labels, stream.width, stream.height,
-        frame_metadata(sample, index));
+        sima_examples::detection_egress::frame_metadata(sample, index));
     // A nonblocking send drops the message while the socket buffer is full; the drops are
     // counted in the sender's stats and reported when the run ends. Any other failure throws.
     std::string send_error;
@@ -290,7 +275,9 @@ int run_app(const fs::path& config_path) {
   const auto streams = stream_info(config, sources);
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
-  neat::Model model(model_path.string(), model_options(config));
+  // Used by both the model and the box decode.
+  const int max_detections = config.integer("inference.max_detections");
+  neat::Model model(model_path.string(), model_options(config, max_detections));
   const neat::Graph detector = detector_graph(model, config);
 
   neat::Graph graph(graph_options(config));
@@ -316,8 +303,7 @@ int run_app(const fs::path& config_path) {
   const std::atomic<bool>& stop = sima_examples::stop_on_signals();
   // The Run's destructor closes it when send_detections throws.
   neat::Run run = graph.build(run_options(config));
-  send_detections(run, metadata_senders, streams, labels,
-                  config.integer("inference.max_detections"), stop);
+  send_detections(run, metadata_senders, streams, labels, max_detections, stop);
   run.close();
 
   for (std::size_t index = 0; index < metadata_senders.size(); ++index) {
