@@ -24,9 +24,9 @@ then `agents/coding-style.md` and `agents/rules.md`.
    step is done when the application holds no config struct, no config checks, and no
    `--validate-config-only`, and the unit tests load every shipped config.
 4. Write `main` as `agents/coding-style.md` "Flow" and "Graph topology" describe. The step is
-   done when every option was checked against the installed Core header, located as
-   `skills/neat-application-builder/SKILL.md` step 1 says, and no assignment restates a
-   default.
+   done when every option was checked against its page in `docs/neat-api-cheat-sheet/` and the
+   Core header, as `agents/rules.md` "Skills and cheat sheet" says, every page the header
+   contradicts is fixed, and no assignment restates a default.
 5. Place every other piece of code as `agents/rules.md` "Where code goes" decides. Use a public
    Neat API where one does the job, such as `decode_bbox_tensor` for box payloads. The step is
    done when a search of the other examples, converted and pending, finds no copy of a helper
@@ -39,8 +39,10 @@ then `agents/coding-style.md` and `agents/rules.md`.
    `CONTRIBUTING.md` "README Contract" sets, and draw or update the graph topology in
    `Concept`. Change only the lines the change affects. The step is done when the graph shows
    every part and link `main` connects.
-9. Compare the result with the customer skills as `agents/rules.md` "Customer skills"
-   describes, and record the skill text to add or `Skill updates: none` with the reason.
+9. List what the work taught, and place each lesson as `agents/rules.md` "Skills and cheat
+   sheet" describes. The step is done when each lesson is generalized and written into its
+   file, each one Lift covers is also in `skills/`, or the pull request records
+   `Skill and cheat sheet updates: none` with the reason.
 10. Build in the Neat SDK, run the unit and end-to-end tests in both languages on a Modalix
     DevKit, install the branch package with `sima-cli neat install apps@<branch>`, and follow
     the installed README. The step is done when the pull request records each result and marks

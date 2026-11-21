@@ -1,6 +1,6 @@
 ---
 name: apps-review-pr
-description: Review a sima-neat/apps pull request for merge readiness. Use for a full review, for a review of one example's change, and for judging whether a change should update the customer skills.
+description: Review a sima-neat/apps pull request for merge readiness. Use for a full review, for a review of one example's change, and for judging whether a change should update the customer skills or the cheat sheet.
 ---
 
 # Review an Apps Pull Request
@@ -22,8 +22,10 @@ each finding cites the owning file and section.
    fits the requirement, so judge it with `skills/neat-application-builder/SKILL.md`. The step
    is done when every claimed behavior maps to code you read, or is reported missing.
 4. Check every item under Shape and under Evidence, and report each one that fails.
-5. Compare the change with the customer skills, as `agents/rules.md` "Customer skills"
-   defines, and name the skill file and the text to add or change.
+5. Compare the change with the customer skills and the cheat sheet, as `agents/rules.md`
+   "Skills and cheat sheet" defines. Check each Core API the change uses or changes against
+   its page in `docs/neat-api-cheat-sheet/`, each added lesson against "Generalize", and each
+   lesson "Lift" covers for its copy in `skills/`. Name the file and the text to add or change.
 6. Report the two verdicts `AGENTS.md` requires, then the findings.
 
 ## Shape
