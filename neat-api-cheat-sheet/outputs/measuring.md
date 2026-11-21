@@ -53,9 +53,7 @@ Do not use them for these cases:
   `MeasureReport` to `save_run_json()` (C++) or `run.save_json()` (Python), and
   call `Telemetry::save()` for the board data.
 
-Apps does not use these two APIs today. The benchmarking examples measure
-without them. `model-benchmark` calls `Model.benchmark()`. `mipi-camera-capture`
-times its own loop with `time.monotonic()`.
+Apps does not use these two APIs today.
 
 ## Minimal example
 
@@ -286,13 +284,7 @@ throws on a write failure. Printing a `Telemetry` gives the same YAML.
 ## Used in
 
 Not used in Apps. No shipped example uses `MeasureOptions`, `MeasureScope`,
-`start_measurement()` or `TelemetryMonitor`. The closest real usage measures
-without them:
-
-- [model-benchmark](../../examples/benchmarking/model-benchmark/) calls
-  `Model.benchmark()` and reads `report.telemetry`.
-- [mipi-camera-capture](../../examples/benchmarking/mipi-camera-capture/) times
-  its own capture loop with `time.monotonic()`.
+`start_measurement()` or `TelemetryMonitor`.
 
 ## Source
 

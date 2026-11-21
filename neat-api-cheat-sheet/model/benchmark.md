@@ -33,13 +33,12 @@ nodes) or the model runner instead (`Model::Runner::start_measurement`, see the
 
 ## Minimal example
 
-No shipped example calls `benchmark` from C++. C++ uses the same call,
+No shipped example calls `benchmark`. Model benchmarking belongs to the
+[Model Browser](https://developer.sima.ai/models/). C++ uses the same call,
 `Model::benchmark(BenchmarkOptions)`, which returns a `BenchmarkReport` with
 the same fields.
 
-Python, from
-[`model-benchmark/src/python/main.py`](../../examples/benchmarking/model-benchmark/src/python/main.py)
-(lines 156, 162–165, 172–174, de-indented):
+Python:
 
 ```python
 model = pyneat.Model(str(model_path))
@@ -51,8 +50,6 @@ print(f"latency_ms={report.latency_ms}")
 print(f"latency_p99_ms={report.latency_p99_ms}")
 print(f"fps={report.fps}")
 ```
-
-Complete flow: [Model Benchmark](../../examples/benchmarking/model-benchmark/)
 
 ## Options
 
@@ -66,7 +63,7 @@ Complete flow: [Model Benchmark](../../examples/benchmarking/model-benchmark/)
 | Source height | `original_height` | `original_height` | Not set (`None`) | Height, in pixels, of the source image. Set it together with `original_width`. | Same cases as `original_width`. |
 | Resize policy | `resize_mode` | `resize_mode` | Not set (`None`): the route's own resize policy, or, when the route does not resize, the decoder's default: `Stretch` for `Ssd`, `Detr`, `DetrFocal` and the Segment Anything decoders, `Letterbox` for the others | How the source image maps onto the model input in the metadata BoxDecode receives. Values are `ResizeMode::Stretch`, `Letterbox` and `Crop` (Python `pyneat.ResizeMode.*`). | Only for BoxDecode routes, when your application letterboxes or crops but the route would assume another policy. It does not change what the benchmark measures on other routes. |
 | Plugin latency (deprecated) | `include_plugin_latency` | `include_plugin_latency` | `false` / `False` | Prints per-plugin latency for both passes. The report has no field for it. | Do not use it in new code. It is deprecated and will be removed. |
-| Minimum pass length | `min_duration_ms` | `min_duration_ms` | `10000` (10 s) | The least time each pass, latency and throughput, runs, in milliseconds. Must be 0 or greater. `0` stops each pass after `num_samples` inputs. | Keep the default, or raise it to 30000 as the `model-benchmark` example does, when you need power and memory: Sentinel samples every 2 s, so a short window has no power sample. Set `0` for a quick smoke test on a development board when you only need latency and FPS. |
+| Minimum pass length | `min_duration_ms` | `min_duration_ms` | `10000` (10 s) | The least time each pass, latency and throughput, runs, in milliseconds. Must be 0 or greater. `0` stops each pass after `num_samples` inputs. | Keep the default, or raise it, for example to 30000, when you need power and memory: Sentinel samples every 2 s, so a short window has no power sample. Set `0` for a quick smoke test on a development board when you only need latency and FPS. |
 | MLA layer timings | `include_mla_layer_stats` | `include_mla_layer_stats` | `false` / `False` | After the benchmark, times each compiled MLA layer with the `mla-rt` tool and fills `mla_layer_stats`. | When a model is slower than expected and you want to see which layers take the time, for example before asking for a different compilation. Needs no other MLA workload on the board. |
 | MLA stage timings | `include_mla_stage_stats` | `include_mla_stage_stats` | `false` / `False` | After the benchmark, times each compiled MLA stage run on its own (mean of 200 runs) and fills `mla_stage_stats`. | When you want the pure accelerator time of the model, without host overhead, to compare with `latency_ms`. Same requirements as layer timings. |
 | Your own inputs | `inputs` | `inputs` | Empty (`[]`): synthetic inputs | Tensors to push for every sample, one per model input, in `input_specs()` order, as `run()` takes them. | When the model's cost depends on the data, such as a detector whose decode time grows with the number of objects, or a segmentation decoder. Pass a real frame, for example an image read with OpenCV. |
@@ -135,10 +132,6 @@ any other ending. It creates missing directories and replaces an existing file.
   pass and 12080 in the throughput pass. A whole call takes at least
   `2 × min_duration_ms` plus warm-up (100 inputs per pass) and model setup. Set
   `min_duration_ms = 0` when you need exactly `num_samples` inputs.
-- **The `model-benchmark` example uses a 30 s window.** Its `config.yaml` and
-  `main.py` default `min_duration_ms` to 30000, not Core's 10000. A plain
-  `model.benchmark()` therefore runs a shorter window than the example, and
-  its power average comes from fewer Sentinel samples.
 - **`energy_joules` is per `num_samples`, not per run.** It answers "energy for
   `num_samples` inputs at the measured throughput". Raising `min_duration_ms`
   does not change what it covers; changing `num_samples` does.
@@ -163,7 +156,7 @@ any other ending. It creates missing directories and replaces an existing file.
 
 ## Used in
 
-- [Model Benchmark](../../examples/benchmarking/model-benchmark/) (Python)
+Not used in Apps.
 
 ## Source
 

@@ -97,17 +97,17 @@ also called EV74, is the board's vision processor that runs preprocessing.
 
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
-| Camera name | `camera_name` | `camera_name` | Not set (`std::nullopt`, `None`) | libcamera name of the camera, for example `"imx477 5-001a"` from `cam -l`. Not set means libcamera's default camera | The board has more than one camera. `mipi-camera-capture` reads it from its config |
-| Width | `width` | `width` | `1920` | Frame width in pixels | The camera mode you need. `mipi-multi-model` and `mipi-camera-capture` set it |
+| Camera name | `camera_name` | `camera_name` | Not set (`std::nullopt`, `None`) | libcamera name of the camera, for example `"imx477 5-001a"` from `cam -l`. Not set means libcamera's default camera | The board has more than one camera |
+| Width | `width` | `width` | `1920` | Frame width in pixels | The camera mode you need. `mipi-multi-model` sets it |
 | Height | `height` | `height` | `1080` | Frame height in pixels | Same as width |
-| Frame rate numerator | `framerate_num` | `framerate_num` | `30` | Frame rate is `framerate_num / framerate_den` | The camera mode you need. `mipi-multi-model` and `mipi-camera-capture` set it |
-| Frame rate denominator | `framerate_den` | `framerate_den` | `1` | Denominator of the frame rate. `0` becomes `1` | A fractional frame rate. `mipi-camera-capture` reads it from its config |
+| Frame rate numerator | `framerate_num` | `framerate_num` | `30` | Frame rate is `framerate_num / framerate_den` | The camera mode you need. `mipi-multi-model` sets it |
+| Frame rate denominator | `framerate_den` | `framerate_den` | `1` | Denominator of the frame rate. `0` becomes `1` | A fractional frame rate |
 | Format | `format` | `format` | `"NV12"` | Pixel format the node announces. Empty becomes `NV12`. The output description covers `RGB`, `BGR`, `GRAY8`, `NV12`, `NV16` and `I420` | The next node needs another format. `mipi-multi-model` sets `NV12` |
 | Buffer name | `buffer_name` | `buffer_name` | `"camera"` | Name that the CVU and MLA stages use to find this camera's frames. Empty becomes `"camera"` | A model route reads the camera by name: `mipi-multi-model` sets the same name in `ModelRouteOptions.buffer_name` |
 | Insert queue | `insert_queue` | `insert_queue` | `true` | Adds a small queue after the camera so the camera is not held back without limit | Not changed in any shipped example; keep the default |
 | Leaky queue | `leaky_queue` | `leaky_queue` | `true` | The queue drops frames when it is full instead of holding the camera back | Not changed in any shipped example; keep the default |
-| Queue depth | `queue_depth` | `queue_depth` | `2` | Buffer limit of the queue. `0` drops Neat's limit, so the queue keeps its GStreamer default | `mipi-camera-capture` reads it from its config |
-| Allow CPU fallback | `allow_cpu_fallback` | `allow_cpu_fallback` | `false` | `false` is strict zero-copy: a frame that would need a copy fails. `true` copies such a frame on the board's CPU instead | A copy is acceptable when zero-copy fails. `mipi-camera-capture` sets it from its `strict_zero_copy` config |
+| Queue depth | `queue_depth` | `queue_depth` | `2` | Buffer limit of the queue. `0` drops Neat's limit, so the queue keeps its GStreamer default | Not changed in any shipped example; keep the default |
+| Allow CPU fallback | `allow_cpu_fallback` | `allow_cpu_fallback` | `false` | `false` is strict zero-copy: a frame that would need a copy fails. `true` copies such a frame on the board's CPU instead | A copy is acceptable when zero-copy fails |
 
 `UsbCameraInputOptions`
 
@@ -218,8 +218,8 @@ elements run in sync mode, but Core only removes the queues that
   `CameraInput capture_buffer_count exceeds Neat's 128-buffer provider limit`.
   A nonzero count on a camera stack without that setting fails with
   `CameraInput capture_buffer_count requires a libcamerasrc with the buffer-count property`.
-  The `mipi-camera-capture` config notes that the camera stack in Platform
-  3.0 has no such setting, so only `0` works there. Fix: use `0`.
+  The camera stack in Platform 3.0 has no such setting, so only `0` works
+  there. Fix: use `0`.
 - **Strict zero-copy rejects a frame.** With `allow_cpu_fallback = false`,
   `CameraInput` fails on any frame that it would have to copy. Fix: set
   `allow_cpu_fallback = true` for that camera. Read in the source, not
@@ -249,7 +249,6 @@ elements run in sync mode, but Core only removes the queues that
 - [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/) (`UsbCameraInput` with `usb_camera_info()`, `HttpMjpegDecodedInput` with `output_caps`)
 - [single-stream-instance-segmenter](../../examples/segmentation/single-stream-instance-segmenter/) (`UsbCameraInput`, `HttpMjpegDecodedInput`)
 - [face-recognizer](../../examples/face-recognition/face-recognizer/) (`UsbCameraInput`)
-- [mipi-camera-capture](../../examples/benchmarking/mipi-camera-capture/) (`CameraInput` with `capture_buffer_count`, Python only)
 - [mipi-multi-model](../../examples/benchmarking/mipi-multi-model/) (`CameraInput` with `buffer_name` shared with the model route, Python only)
 
 ## Source
