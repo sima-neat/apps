@@ -50,10 +50,11 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 - `main` loads the file once with `sima_examples.config.Config` in Python or
   `sima_examples::Config` in C++ and passes that object to the functions that build Neat
   options. Each function reads the keys it sets, where it sets them, such as
-  `options.latency_ms = config.integer("input.rtsp.latency_ms")`, so every setting appears once
-  in the code. A value derived from several keys, such as the probed stream size, and a value
-  several functions use, such as `inference.max_detections` for the model and the box decode,
-  is read once in `main` and passed in.
+  `options.latency_ms = config.integer("input.rtsp.latency_ms")`, so `main` stays short. Two
+  functions may read the same key, such as `output.insight.host` for the video and metadata
+  senders. A value derived from several keys, such as the probed stream size, is read once in
+  `main` and passed in, and so is a value two parts must agree on, such as
+  `inference.max_detections` for the model and the box decode.
 - A value that names a table entry, such as `input.codec`, is read with
   `config.choice(key, table)`, or `lookup(key, value, table)` when `main` derives the value. An
   unknown value fails with the key, the value, and the choices:
