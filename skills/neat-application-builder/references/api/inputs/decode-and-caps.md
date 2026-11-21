@@ -65,10 +65,10 @@ decoder.add(pyneat.nodes.caps_raw("NV12", stream.frame_w, stream.frame_h,
                                   stream.source_fps, pyneat.CapsMemory.Any))
 ```
 
-Complete flow: [multi-stream-object-detector](../../examples/object-detection/multi-stream-object-detector/)
+Complete flow: [multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/multi-stream-object-detector)
 
 `VideoRate` followed by `CapsRaw`, added when the configured frame rate differs from the source:
-[yolo26-tiny-drone-tracker](../../examples/tracking/yolo26-tiny-drone-tracker/)
+[yolo26-tiny-drone-tracker](https://github.com/sima-neat/apps/tree/main/examples/tracking/yolo26-tiny-drone-tracker)
 
 ## Options
 
@@ -170,12 +170,12 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
 
 ## Used in
 
-- [multi-stream-object-detector](../../examples/object-detection/multi-stream-object-detector/) (`SimaDecode` after `RtspEncodedInput`, `CapsRaw` NV12)
-- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) (`next_element`, `input_buffers`, `decoder_tuning`, `memory_opt`)
-- [rfdetr-detection-segmentation](../../examples/object-detection/rfdetr-detection-segmentation/) (`num_buffers` for MJPEG)
-- [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/) (`SimaDecode` MJPEG after `UsbCameraInput`)
-- [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/) (`num_buffers`)
-- [yolo26-tiny-drone-tracker](../../examples/tracking/yolo26-tiny-drone-tracker/) (`VideoRate`, `CapsRaw`)
+- [multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/multi-stream-object-detector) (`SimaDecode` after `RtspEncodedInput`, `CapsRaw` NV12)
+- [high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector) (`next_element`, `input_buffers`, `decoder_tuning`, `memory_opt`)
+- [rfdetr-detection-segmentation](https://github.com/sima-neat/apps/tree/main/examples/object-detection/rfdetr-detection-segmentation) (`num_buffers` for MJPEG)
+- [single-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/single-stream-object-detector) (`SimaDecode` MJPEG after `UsbCameraInput`)
+- [multi-stream-multi-model](https://github.com/sima-neat/apps/tree/main/examples/multi-model/multi-stream-multi-model) (`num_buffers`)
+- [yolo26-tiny-drone-tracker](https://github.com/sima-neat/apps/tree/main/examples/tracking/yolo26-tiny-drone-tracker) (`VideoRate`, `CapsRaw`)
 
 ## Source
 

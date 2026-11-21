@@ -289,9 +289,9 @@ Not used in Apps. No shipped example uses `MeasureOptions`, `MeasureScope`,
 `start_measurement()` or `TelemetryMonitor`. The closest real usage measures
 without them:
 
-- [model-benchmark](../../examples/benchmarking/model-benchmark/) calls
+- [model-benchmark](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/model-benchmark) calls
   `Model.benchmark()` and reads `report.telemetry`.
-- [mipi-camera-capture](../../examples/benchmarking/mipi-camera-capture/) times
+- [mipi-camera-capture](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/mipi-camera-capture) times
   its own capture loop with `time.monotonic()`.
 
 ## Source

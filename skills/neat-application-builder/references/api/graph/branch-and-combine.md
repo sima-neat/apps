@@ -11,7 +11,7 @@ fragment that you connect like any other, see [links](links.md).
 pair them by frame ID or by timestamp into one bundle, forward them one at a
 time, or reject more than one producer. A sample is one frame, tensor, or set
 of tensors with its frame ID and timestamp. A bundle is a sample whose fields
-are the matched samples, see the Run page of this cheat sheet.
+are the matched samples, see the Run page of this reference.
 
 ## When to use it
 
@@ -63,7 +63,7 @@ graph.connect(frame_graph, joined)
 graph.connect(detections_graph, joined)
 ```
 
-Complete flow: [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/)
+Complete flow: [single-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/single-stream-object-detector)
 
 ## Options
 
@@ -122,12 +122,12 @@ A hand-built fan-in on a plain `nodes::Output` takes the same values through
 
 ## Used in
 
-- [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/) (`Branch`, `Combine` with `ByFrame`)
-- [single-stream-instance-segmenter](../../examples/segmentation/single-stream-instance-segmenter/) (`Branch`, `Combine` with `ByFrame`)
-- [face-recognizer](../../examples/face-recognition/face-recognizer/) (`Branch`, `Combine` with `ByFrame`)
-- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/) (`Branch`)
-- [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/) (`Branch`)
-- [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/) (`Branch`)
+- [single-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/single-stream-object-detector) (`Branch`, `Combine` with `ByFrame`)
+- [single-stream-instance-segmenter](https://github.com/sima-neat/apps/tree/main/examples/segmentation/single-stream-instance-segmenter) (`Branch`, `Combine` with `ByFrame`)
+- [face-recognizer](https://github.com/sima-neat/apps/tree/main/examples/face-recognition/face-recognizer) (`Branch`, `Combine` with `ByFrame`)
+- [single-stream-thermal-face-detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/single-stream-thermal-face-detector) (`Branch`)
+- [multi-stream-multi-model](https://github.com/sima-neat/apps/tree/main/examples/multi-model/multi-stream-multi-model) (`Branch`)
+- [patchcore-anomaly-detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector) (`Branch`)
 
 `RoundRobin` and `ByPts` are not used in Apps.
 

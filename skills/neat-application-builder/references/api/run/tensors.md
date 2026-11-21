@@ -61,7 +61,7 @@ run.push([tensor])
 arr = np.frombuffer(out_tensor.copy_dense_bytes_tight(), dtype=np.float32)
 ```
 
-Complete flow: [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/)
+Complete flow: [patchcore-anomaly-detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector)
 
 ## Options
 
@@ -218,11 +218,11 @@ not. Cast before pushing.
 
 ## Used in
 
-- [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/) — `map_read()` guarded by `is_contiguous()` and `dense_bytes_tight()`, loan released before drawing
-- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) — `map_read()` with a copy fallback, `ZeroCopy` output
-- [superpoint-feature-extractor](../../examples/feature-extraction/superpoint-feature-extractor/) — `Tensor::from_cv_mat` with `TensorMemory::CPU`; Python `from_numpy`
-- [fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/) — Python `copy_payload_bytes()` into numpy, `TensorMemory.EV74`
-- [image-classification-explorer](../../examples/classification/image-classification-explorer/) — Python `copy_dense_bytes_tight()` with an explicit dtype
+- [patchcore-anomaly-detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/patchcore-anomaly-detector) — `map_read()` guarded by `is_contiguous()` and `dense_bytes_tight()`, loan released before drawing
+- [high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector) — `map_read()` with a copy fallback, `ZeroCopy` output
+- [superpoint-feature-extractor](https://github.com/sima-neat/apps/tree/main/examples/feature-extraction/superpoint-feature-extractor) — `Tensor::from_cv_mat` with `TensorMemory::CPU`; Python `from_numpy`
+- [fastflow-anomaly-detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/fastflow-anomaly-detector) — Python `copy_payload_bytes()` into numpy, `TensorMemory.EV74`
+- [image-classification-explorer](https://github.com/sima-neat/apps/tree/main/examples/classification/image-classification-explorer) — Python `copy_dense_bytes_tight()` with an explicit dtype
 
 ## Source
 

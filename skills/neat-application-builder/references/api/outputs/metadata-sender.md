@@ -69,7 +69,7 @@ metadata_sender.send_metadata(
 )
 ```
 
-Complete flow: [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/)
+Complete flow: [single-stream-thermal-face-detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/single-stream-thermal-face-detector)
 
 ## Options
 
@@ -149,8 +149,8 @@ other threads send
 
 `MetadataSender` is used by most streaming examples, for example:
 
-- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/): `pose-estimation`
-- [multi-stream-object-detector](../../examples/object-detection/multi-stream-object-detector/): `object-detection`, one sender per stream
+- [single-stream-thermal-face-detector](https://github.com/sima-neat/apps/tree/main/examples/face-detection/single-stream-thermal-face-detector): `pose-estimation`
+- [multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/multi-stream-object-detector): `object-detection`, one sender per stream
 
 ## Source
 

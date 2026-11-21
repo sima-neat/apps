@@ -60,7 +60,7 @@ camera.add(pyneat.nodes.usb_camera_input(opt, usb_camera))
 ```
 
 Complete flow, including `HttpMjpegDecodedInput`:
-[single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/)
+[single-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/single-stream-object-detector)
 
 `CameraInput` is used only in Python examples. A MIPI camera that feeds a
 model:
@@ -77,7 +77,7 @@ camera_graph = pyneat.Graph(f"mipi_{profile.name}_camera")
 camera_graph.add(pyneat.nodes.camera_input(camera))
 ```
 
-Complete flow: [mipi-multi-model](../../examples/benchmarking/mipi-multi-model/)
+Complete flow: [mipi-multi-model](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/mipi-multi-model)
 
 ## Options
 
@@ -246,11 +246,11 @@ elements run in sync mode, but Core only removes the queues that
 
 ## Used in
 
-- [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/) (`UsbCameraInput` with `usb_camera_info()`, `HttpMjpegDecodedInput` with `output_caps`)
-- [single-stream-instance-segmenter](../../examples/segmentation/single-stream-instance-segmenter/) (`UsbCameraInput`, `HttpMjpegDecodedInput`)
-- [face-recognizer](../../examples/face-recognition/face-recognizer/) (`UsbCameraInput`)
-- [mipi-camera-capture](../../examples/benchmarking/mipi-camera-capture/) (`CameraInput` with `capture_buffer_count`, Python only)
-- [mipi-multi-model](../../examples/benchmarking/mipi-multi-model/) (`CameraInput` with `buffer_name` shared with the model route, Python only)
+- [single-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/single-stream-object-detector) (`UsbCameraInput` with `usb_camera_info()`, `HttpMjpegDecodedInput` with `output_caps`)
+- [single-stream-instance-segmenter](https://github.com/sima-neat/apps/tree/main/examples/segmentation/single-stream-instance-segmenter) (`UsbCameraInput`, `HttpMjpegDecodedInput`)
+- [face-recognizer](https://github.com/sima-neat/apps/tree/main/examples/face-recognition/face-recognizer) (`UsbCameraInput`)
+- [mipi-camera-capture](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/mipi-camera-capture) (`CameraInput` with `capture_buffer_count`, Python only)
+- [mipi-multi-model](https://github.com/sima-neat/apps/tree/main/examples/benchmarking/mipi-multi-model) (`CameraInput` with `buffer_name` shared with the model route, Python only)
 
 ## Source
 

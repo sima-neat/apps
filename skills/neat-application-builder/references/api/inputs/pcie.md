@@ -44,7 +44,7 @@ Python
 
 No shipped example uses `PCIeSrc` from Python. See the language differences.
 
-Complete flow: [pcie-high-density-multi-stream-object-detector](../../examples/object-detection/pcie-high-density-multi-stream-object-detector/)
+Complete flow: [pcie-high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/pcie-high-density-multi-stream-object-detector)
 
 ## Options
 
@@ -80,7 +80,7 @@ Complete flow: [pcie-high-density-multi-stream-object-detector](../../examples/o
 
 ## Used in
 
-- [pcie-high-density-multi-stream-object-detector](../../examples/object-detection/pcie-high-density-multi-stream-object-detector/) (`PCIeSrc` with one decoder graph per `src_N` output, C++ only)
+- [pcie-high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/pcie-high-density-multi-stream-object-detector) (`PCIeSrc` with one decoder graph per `src_N` output, C++ only)
 
 ## Source
 

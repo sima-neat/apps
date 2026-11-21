@@ -3,7 +3,8 @@
 How to start a `Graph` at its input, combine it with models and outputs, and drive the `Run`.
 The installed headers under `nodes/`, `nodes/groups/`, and `pipeline/` define every node and
 option and show each default. Set only the options whose default does not fit. Core's
-`docs/develop-apps/development-workflow/graph.mdx` and `pipeline.mdx` explain them.
+`docs/develop-apps/development-workflow/graph.mdx` and `pipeline.mdx` explain them. The
+[API reference](api/README.md) has a page per node, link, queue, and run option.
 
 ## Pick the input
 
@@ -96,12 +97,8 @@ Keep plain links and `OutputOptions::EveryFrame(n)`, which holds up to `n` resul
 that must process every frame.
 
 Keep a plain link on encoded H.264 or H.265 that goes into a decoder whose frames the
-application processes. A realtime link drops encoded frames there, and every frame after a
-dropped one decodes corrupted until the next keyframe.
-
-`GraphLinkOptions::queue_depth` has no effect: a realtime link keeps one pending sample per
-stream. Do not raise it to add buffering. Use `OutputOptions` on the `Output`, or a
-`nodes::Queue` with `max_buffers`. See `GraphLinkOptions` in `include/pipeline/GraphOptions.h`.
+application processes. [GraphLinkOptions](api/graph/links.md) explains why, and why
+`queue_depth` adds no buffering.
 
 ## Combine inputs with models
 

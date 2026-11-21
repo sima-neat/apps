@@ -4,7 +4,9 @@ Each item names what to change and what it affects. The installed headers define
 and its default, so read the header before setting one. Core's
 `docs/develop-apps/development-workflow/graph.mdx` and `pipeline.mdx` explain them. The
 `neat-application-builder` skill's graph topologies reference shows how the graphs named here
-are built and gives the high-density example's starting values.
+are built and gives the high-density example's starting values. Its API reference
+(`references/api/`) explains each option named here and its default: the `graph/` pages for
+links and queues, `run/run.md` for presets, and `outputs/measuring.md` for measurement.
 
 ## Latency or throughput
 

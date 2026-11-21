@@ -63,7 +63,7 @@ if sample is None:
     return
 ```
 
-Complete flow: [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/)
+Complete flow: [high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector)
 
 ## Options
 
@@ -139,7 +139,7 @@ tells a timeout from end of stream for one output. `run.running()` does not
 fill that gap: it reports the pipeline state, which can still be playing while
 an output is drained. The shipped Python examples use `running()` plus
 `last_error()`; see `pull_result_has_sample` in
-[fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/src/python/main.py).
+[fastflow-anomaly-detector](https://github.com/sima-neat/apps/blob/main/examples/anomaly-detection/fastflow-anomaly-detector/src/python/main.py).
 A C++ application should use the `PullStatus` form rather than either.
 
 **Python rejects a bare `Tensor` or `Sample` in `push()`.** The binding calls
@@ -199,11 +199,11 @@ or `DropIncoming`, and the frame was not accepted.
 
 ## Used in
 
-- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) — the four-way `PullStatus` loop over many named outputs
-- [multi-stream-pose-estimator](../../examples/pose-estimation/multi-stream-pose-estimator/) — Python `pull(name, 0)` drain loop plus `pull(name, 50)`
-- [superpoint-feature-extractor](../../examples/feature-extraction/superpoint-feature-extractor/) — `push(TensorList{tensor})` from a `cv::Mat`
-- [fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/) — the Python `pull_result_has_sample` workaround
-- [rfdetr-detection-segmentation](../../examples/object-detection/rfdetr-detection-segmentation/) — `close_input()` at shutdown, both languages
+- [high-density-multi-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/high-density-multi-stream-object-detector) — the four-way `PullStatus` loop over many named outputs
+- [multi-stream-pose-estimator](https://github.com/sima-neat/apps/tree/main/examples/pose-estimation/multi-stream-pose-estimator) — Python `pull(name, 0)` drain loop plus `pull(name, 50)`
+- [superpoint-feature-extractor](https://github.com/sima-neat/apps/tree/main/examples/feature-extraction/superpoint-feature-extractor) — `push(TensorList{tensor})` from a `cv::Mat`
+- [fastflow-anomaly-detector](https://github.com/sima-neat/apps/tree/main/examples/anomaly-detection/fastflow-anomaly-detector) — the Python `pull_result_has_sample` workaround
+- [rfdetr-detection-segmentation](https://github.com/sima-neat/apps/tree/main/examples/object-detection/rfdetr-detection-segmentation) — `close_input()` at shutdown, both languages
 
 ## Source
 

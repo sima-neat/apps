@@ -2,7 +2,8 @@
 
 The GenAI APIs run LLM, VLM, and ASR models from a deployed LLiMa model directory, not from a
 classic `*_mpk.tar.gz` archive. `include/neat/genai.h`, `include/genai/`, and Core's
-`docs/develop-apps/development-workflow/genai-model/` define them.
+`docs/develop-apps/development-workflow/genai-model/` define them, and [GenAI](api/outputs/genai.md)
+explains their options.
 
 ## Choose the handle
 

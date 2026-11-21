@@ -23,7 +23,7 @@ Neat has other queues, each set in its own place. Use the matching option
 instead of adding a `Queue`:
 
 - The `Run` input queue is set with `RunOptions`, and its defaults depend on
-  the run preset. See the Run page of this cheat sheet.
+  the run preset. See the Run page of this reference.
 - The depth of the queues Neat inserts between stages is set with
   `advanced_execution.internal_queue_depth`, see [Graph](graph.md#options).
 - The queue in front of `pull()` is set with `OutputOptions`, see
@@ -57,7 +57,7 @@ graph.add(pyneat.nodes.queue(newest_frames))
 graph.add(backbone.graph())
 ```
 
-Complete flow: [rfdetr-detection-segmentation](../../examples/object-detection/rfdetr-detection-segmentation/)
+Complete flow: [rfdetr-detection-segmentation](https://github.com/sima-neat/apps/tree/main/examples/object-detection/rfdetr-detection-segmentation)
 
 ## Options
 
@@ -76,7 +76,7 @@ options uses the defaults.
 | Block | `OverflowPolicy::Block` | `pyneat.OverflowPolicy.Block` | Waits for space and keeps every item | Files and batches where no item may be lost |
 | Keep latest | `OverflowPolicy::KeepLatest` | `pyneat.OverflowPolicy.KeepLatest` | Drops the oldest queued item to make room for the new one | Live cameras and streams, where the newest frame matters most |
 | Drop incoming | `OverflowPolicy::DropIncoming` | `pyneat.OverflowPolicy.DropIncoming` | Drops the new item and keeps what is already queued | Items already accepted must be finished, and new ones may be skipped while the stage is busy |
-| Auto | `OverflowPolicy::Auto` | `pyneat.OverflowPolicy.Auto` | Lets the run preset decide: `KeepLatest` with the Realtime preset, `Block` otherwise. It is the default of `RunOptions::overflow_policy`, see the Run page of this cheat sheet. A `Queue` set to `Auto` blocks | Leave it on `RunOptions`. On a `Queue`, pick an explicit value |
+| Auto | `OverflowPolicy::Auto` | `pyneat.OverflowPolicy.Auto` | Lets the run preset decide: `KeepLatest` with the Realtime preset, `Block` otherwise. It is the default of `RunOptions::overflow_policy`, see the Run page of this reference. A `Queue` set to `Auto` blocks | Leave it on `RunOptions`. On a `Queue`, pick an explicit value |
 
 ## Language differences
 
@@ -100,11 +100,11 @@ None. Python has `pyneat.nodes.queue()` with and without options, both
 
 ## Used in
 
-- [rfdetr-detection-segmentation](../../examples/object-detection/rfdetr-detection-segmentation/) (`Queue` with `KeepLatest` in front of the backbone)
+- [rfdetr-detection-segmentation](https://github.com/sima-neat/apps/tree/main/examples/object-detection/rfdetr-detection-segmentation) (`Queue` with `KeepLatest` in front of the backbone)
 
 `OverflowPolicy` is also set through `RunOptions::overflow_policy` in most live
 examples, for example
-[single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/).
+[single-stream-object-detector](https://github.com/sima-neat/apps/tree/main/examples/object-detection/single-stream-object-detector).
 
 ## Source
 
