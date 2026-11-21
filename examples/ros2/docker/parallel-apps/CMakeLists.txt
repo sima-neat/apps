@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+project(neat_parallel_apps)
+find_package(ament_cmake REQUIRED)
+install(DIRECTORY launch src/common DESTINATION share/${PROJECT_NAME})
+ament_package()

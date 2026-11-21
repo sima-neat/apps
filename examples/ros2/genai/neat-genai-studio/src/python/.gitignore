@@ -1,0 +1,22 @@
+# Voices setup.sh downloads from the reviewed catalog (api/tts/voice_catalog.json)
+api/assets/
+ffmpeg-build
+api/server.log
+**/__pycache__/
+.venv/
+*.wav
+api/.milvus*
+api/milvus.db*
+api/milvus.meta.json
+.cache/*
+.venv-*/*
+*.tar.gz
+eui/build/*
+console.log
+app.log
+mla-rt
+sima_lmm
+gte-small-local
+.vscode/
+.codex/
+.claude/

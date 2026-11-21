@@ -1,0 +1,11 @@
+# ROS-only example: run the documented local host/Modalix tests explicitly.
+# Native SDK/runtime shards do not provision ROS. Dedicated ROS CI is pending.
+models: {}
+unit:
+  python: false
+  cpp: false
+e2e:
+  python:
+    enabled: false
+  cpp:
+    enabled: false

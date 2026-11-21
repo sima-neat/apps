@@ -1,0 +1,83 @@
+# Default profile: 20 x 720p at the input stream cadence.
+# Relative model paths use this file; label paths use the Apps root.
+model:
+  path: <model-path>
+  labels: src/common/coco_label.txt
+  decode_type: yolo26
+
+streams:
+  - <rtsp-url-1>
+  - <rtsp-url-2>
+  - <rtsp-url-3>
+  - <rtsp-url-4>
+  - <rtsp-url-5>
+  - <rtsp-url-6>
+  - <rtsp-url-7>
+  - <rtsp-url-8>
+  - <rtsp-url-9>
+  - <rtsp-url-10>
+  - <rtsp-url-11>
+  - <rtsp-url-12>
+  - <rtsp-url-13>
+  - <rtsp-url-14>
+  - <rtsp-url-15>
+  - <rtsp-url-16>
+  - <rtsp-url-17>
+  - <rtsp-url-18>
+  - <rtsp-url-19>
+  - <rtsp-url-20>
+
+input:
+  codec: h264                # h264/avc or h265/hevc.
+  tcp: true
+  latency_ms: 100
+  drop_on_latency: true
+  skip_rtsp_probe: false
+  width: 1280
+  height: 720
+  fps: 0                    # 0 uses the input stream cadence.
+  decoder_buffers: 8
+  decoder_input_buffers: 2
+  decoder_tuning: throughput-low-latency
+
+inference:
+  workers: 1
+  queue_depth: 16
+  internal_queue_depth: 1
+  max_inflight_per_stream: 1
+  max_inflight_total: 8
+  min_score: 0.30
+  nms_iou: 0.60
+  max_detections: 50
+
+output:
+  insight:
+    host: <insight-host-ip>
+    video_port_base: 9000
+    metadata_port_base: 9100
+    max_visible_streams: 20
+  video_enabled: true
+
+# ROS image-topic settings (source:=live or none).
+# source:=live_graph uses the native inference admission settings above instead.
+ros:
+  # Optional outputs; inference/results are unchanged when both are disabled.
+  visualization:
+    max_streams: 20       # Bound the number of distinct input header.frame_id values.
+    save:
+      enabled: false
+      directory: sandbox/ros2/object-detection/high-density-multi-stream-object-detector/visuals  # Each run creates a new subfolder.
+      every_n_frames: 1       # Save every N completed frames per camera.
+    insight:
+      enabled: false         # live_graph uses output.insight for host/ports; image mode uses below.
+      host: ""               # Reachable Insight host/IP; required when enabled.
+      video_port_base: 9000   # Use the UDP base exposed by your Insight service.
+      channel_base: 0
+      max_visible_streams: 4  # Limit hardware encoders; inference still handles all inputs.
+      fps: 30                # Maximum visualization sends/second per camera.
+      bitrate_kbps: 4000
+      channels: {}           # Optional {input_frame_id: Insight_channel}; selects visible streams.
+  input_policy: complete       # complete preserves admitted frames; latest favors freshness.
+  pending_frames: 20
+  inflight_frames: 8
+  source_window: 1            # Outstanding images per source in complete mode.
