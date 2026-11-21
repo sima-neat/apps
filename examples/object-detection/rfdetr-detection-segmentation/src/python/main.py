@@ -91,7 +91,7 @@ def transformer_options() -> pyneat.ModelOptions:
 def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
     options.url = config.string("input.source")
-    options.codec = RTSP_CODECS[config.string("input.codec")]
+    options.codec = config.choice("input.codec", RTSP_CODECS)
     options.tcp = config.boolean("input.rtsp.tcp")
     options.latency_ms = config.integer("input.rtsp.latency_ms")
     if options.tcp:
@@ -107,7 +107,7 @@ def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedIn
 def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
     """Hardware decode to NV12 frames at the stream's size."""
     decode = pyneat.SimaDecodeOptions()
-    decode.type = DECODE_TYPES[config.string("input.codec")]
+    decode.type = config.choice("input.codec", DECODE_TYPES)
     decode.dec_width = stream.width
     decode.dec_height = stream.height
     decode.dec_fps = stream.fps
@@ -118,7 +118,7 @@ def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
 
 def video_options(config: Config) -> pyneat.VideoSenderOptions:
     """Send the stream to Insight as received."""
-    options = pyneat.VideoSenderOptions.passthrough(RTSP_CODECS[config.string("input.codec")])
+    options = pyneat.VideoSenderOptions.passthrough(config.choice("input.codec", RTSP_CODECS))
     options.host = config.string("output.insight.host")
     options.video_port_base = config.integer("output.insight.video_port_base")
     return options
@@ -301,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     model_id = config.string("model.id")
     # A model comes as two packages: the backbone that model.path names, and the decoder,
     # which the code calls the transformer, next to it.
-    backbone_path = args.config.resolve().parent / Path(config.string("model.path")).expanduser()
+    backbone_path = args.config.resolve().parent / config.string("model.path")
     transformer_path = backbone_path.with_name(
         backbone_path.name.replace("_backbone_mpk", "_decoder_mpk")
     )
@@ -311,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     segmentation = model_id.startswith("seg-")
     mask_size = int(transformer.output_specs()[2].shape[1]) if segmentation else 0
     # The model's class IDs index the labels directly.
-    labels = load_labels(Path(config.string("model.labels")).expanduser())
+    labels = load_labels(Path(config.string("model.labels")))
 
     rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(config, stream))
     decoder = decoder_graph(config, stream)

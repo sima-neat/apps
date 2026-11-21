@@ -144,8 +144,8 @@ into the README. A focused snippet is appropriate only for an override or
 generated configuration that the package does not provide.
 
 Config files use the key names in `examples/config-keys.yaml` and put settings
-only one example has under `app.`. Every key is required, and the application
-rejects keys it does not read.
+only one example has under `app.`. Every key the application reads is required,
+and it ignores keys it does not read.
 
 Bundle instructions run from `prebuilt-apps/`. Define
 `APP_DIR=examples/<category>/<example>` once and reuse it so commands remain

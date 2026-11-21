@@ -44,6 +44,22 @@ struct FrameMetadata {
 
 inline const std::string kUnknownLabel = "unknown";
 
+// The identity of a pulled sample, such as a simaai::neat::Sample, on stream `stream_index`.
+// Mirrors detection_egress.frame_metadata in support/python. The result views the sample's
+// stream_id, so the sample must outlive it.
+template <typename SampleT> FrameMetadata frame_metadata(const SampleT& sample, int stream_index) {
+  FrameMetadata metadata;
+  metadata.stream_index = stream_index;
+  metadata.stream_id = sample.stream_id;
+  metadata.frame_id = sample.frame_id;
+  metadata.pts_ns = sample.pts_ns;
+  metadata.dts_ns = sample.dts_ns;
+  metadata.duration_ns = sample.duration_ns;
+  metadata.input_seq = sample.input_seq;
+  metadata.orig_input_seq = sample.orig_input_seq;
+  return metadata;
+}
+
 // Serialize the Insight object-detection envelope in one JSON DOM pass. BoxRange is intentionally
 // structural so host applications can use it without linking the NEAT target runtime.
 template <typename BoxRange>

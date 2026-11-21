@@ -28,9 +28,9 @@ def probe_rtsp_stream_info(
         return configured
     probed = _read_stream_info(url, tcp)
     info = RtspStreamInfo(
-        width=configured.width or probed.width,
-        height=configured.height or probed.height,
-        fps=configured.fps or probed.fps,
+        width=configured.width if configured.width > 0 else probed.width,
+        height=configured.height if configured.height > 0 else probed.height,
+        fps=configured.fps if configured.fps > 0 else probed.fps,
     )
     # An unreachable source fails here too, as in C++.
     if info.width <= 0 or info.height <= 0:

@@ -47,6 +47,10 @@ struct MetadataJsonListenerResult {
   std::vector<int> ports_with_valid_json;
   std::vector<MetadataJsonMessage> messages;
   std::string error;
+  // Why the last message was ignored: it held fewer objects than min_object_count. As in
+  // tests/utils/metadata_json_listener.py, wait_for_messages() keeps going past it and reports
+  // it only when it times out, and drain_pending() reports it as its error.
+  std::string ignored;
 };
 
 bool metadata_contracts_complete_for_frame(const std::vector<MetadataJsonMessage>& messages,
