@@ -1,8 +1,8 @@
 // E2E test for face-detector.
 // Runs the binary with a real RetinaFace model and a local image folder, and verifies it exits
 // successfully and produces annotated output images.
-#include "support/testing/test_process.h"
-#include "support/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
+#include "sima_examples/testing/test_config.h"
 
 #include <filesystem>
 #include <iostream>

@@ -1,6 +1,6 @@
 {
   "neat-core": {
-    "ref": "v0.6.2"
+    "ref": "develop"
   },
   "sdk": {
     "channel": "develop"

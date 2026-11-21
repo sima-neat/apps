@@ -1,12 +1,12 @@
 # Validation
 
-Choose checks that establish the requested behavior in the available
-environment. Source inspection, a successful build, and a Python import establish
-different facts from target runtime execution. State which evidence was obtained.
+Choose the checks that establish the changed behavior in the available environment. A source
+read, a build, an import, and a run on the target each establish a different fact, so state
+which ones you obtained.
 
-## C++ Build Check
+## C++ build
 
-For standalone C++ apps, use the installed package:
+A standalone C++ application links the installed package with CMake:
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -22,68 +22,35 @@ add_executable(neat_app main.cpp)
 target_link_libraries(neat_app PRIVATE SimaNeat::sima_neat)
 ```
 
-Build in the Neat Development Environment or target-appropriate environment. A
-laptop host compile is not proof of Modalix runtime behavior unless it uses the
-correct Neat Development Environment toolchain and runtime target. Build against
-the Core the target runs: the `libsima_neat.so.<abi>` that
-`readelf -d <app> | grep NEEDED` shows must match the target's installed
-library.
+Build in the Neat Development Environment with its toolchain, against the Core the target runs.
+The `libsima_neat.so.<abi>` that `readelf -d <app> | grep NEEDED` shows must match the
+target's installed library.
 
-## Python Import Check
+## Python import
 
-Use the installed Python binding:
+A Python application imports the installed binding. On a DevKit, activate its virtual
+environment first with `source ~/pyneat/bin/activate`. `pyneat.build_info()` reports the Core,
+platform, and ABI versions.
 
-```bash
-python3 - <<'PY'
-import pyneat
-print(pyneat.build_info())
-PY
-```
+## Prerequisites
 
-On a DevKit, PyNeat runs from its virtual environment:
-`source ~/pyneat/bin/activate`. `build_info()` reports the Core version,
-platform version, and ABI version.
+- Classic `Model` paths point at a compiled model archive, and GenAI paths at a deployed LLiMa
+  model directory.
+- The versions `neat` reported in step 1 of the skill come from one installation, and the
+  platform version matches the DevKit software. Reinstall Neat as a set rather than mixing
+  packages.
+- Image, video, audio, configuration, and output paths exist, or the application creates them.
 
-## Artifact Checks
+## Run on the target
 
-Before running, check the prerequisites used by the application:
+Run the application on the Modalix DevKit and inspect useful output against its contract:
+saved detections, metadata received in Insight, or a generated answer. A process that starts or
+a request that returns is not evidence of correct output.
 
-- Confirm classic `Model` inputs point at a compiled model archive.
-- Confirm GenAI inputs point at a deployed LLiMa model directory.
-- Confirm the installed Neat release set with `neat`: Core, PyNeat, Scheduler, Runner, and LLiMa come from one installation, and the platform version matches the DevKit software. Reinstall Neat as a set rather than mixing packages.
-- Confirm image, video, audio, config, and output paths exist or are created by the app.
-- Confirm the app uses public endpoint names that exist in the built graph.
-- For encoded media, confirm the selected source, decoder, and passthrough sender use the same codec.
-- For PCIe results, follow the installed PCIe skill and public return-layout contract. A received allocation can contain padding before or after the logical tensor; validate its negotiated region and extent before interpreting BBOX or other tensor bytes. Test nonzero offsets, malformed layouts, and truncated allocations, then verify useful output on every live stream.
-- For camera capture, confirm the zero-copy versus `allow_cpu_fallback` choice and validate any changed capture buffer count on the target.
+Choose failure cases from the changed behavior and the inputs the application exposes: missing
+model or input paths, timeouts and empty output, and user-supplied GenAI requests. When
+lifecycle behavior changes, exercise stop, cleanup, and restart. When a local window changes,
+check viewing and closing it on the target.
 
-## Runtime Checks
-
-When hardware Neat Library runtime behavior matters, run on Modalix or the
-connected DevKit.
-
-Run the supported workflow and inspect useful output against the application's
-contract, such as saved detections, streamed metadata, or a generated answer.
-A process starting or a request returning successfully is insufficient when the
-output itself has not been checked.
-
-Select failure cases from the behavior changed and the inputs the application
-exposes. Relevant cases include missing model or input paths, timeout or empty
-output handling, configurable endpoint names, and user-supplied GenAI requests.
-When lifecycle behavior changes, exercise stop, cleanup, and restart where
-supported. When local display changes, verify viewing and close/exit behavior on
-the target using the selected backend.
-
-For graph failures, read structured diagnostics first:
-
-1. `error_code`
-2. `repro_note`
-3. first terminal entry in `bus`
-4. `repro_gst_launch`
-
-## Evidence to return
-
-Record the build/run commands, expected output, observed output, and results of
-selected failure checks. If hardware, models, or services are unavailable,
-identify the missing prerequisite and the checks left unverified. Complete the
-independent checks the environment supports.
+For a graph failure, read the structured diagnostics in this order: `error_code`, `repro_note`,
+the first terminal entry in `bus`, then `repro_gst_launch` to replay the pipeline.

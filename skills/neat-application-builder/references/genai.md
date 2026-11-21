@@ -1,99 +1,58 @@
-# GenAI APIs
+# GenAI
 
-Use this reference for LLM, VLM, and ASR applications built with Neat GenAI APIs.
-These APIs consume deployed LLiMa model directories, not classic MPK `.tar.gz`
-model archives.
+The GenAI APIs run LLM, VLM, and ASR models from a deployed LLiMa model directory, not from a
+classic `*_mpk.tar.gz` archive. `include/neat/genai.h`, `include/genai/`, and Core's
+`docs/develop-apps/development-workflow/genai-model/` define them.
 
-## Choose The Handle
+## Choose the handle
 
-Start with `GenAIModel` unless the application has a narrower known task.
+| The application | Use |
+|---|---|
+| Calls a model in-process and may not know its task | `genai::GenAIModel` / `pyneat.genai.GenAIModel`, which detects LLM, VLM, or ASR |
+| Calls a text-only LLM or an image-capable VLM | `genai::VisionLanguageModel` / `pyneat.genai.VisionLanguageModel` |
+| Transcribes speech | `genai::ASRModel` / `pyneat.genai.ASRModel` |
+| Serves one or more models over HTTP to a browser, UI, or remote client | `genai::GenAIServer` / `pyneat.genai.GenAIServer` |
+| Runs GenAI as one stage inside a larger `Graph` | `genai::graphs::VisionLanguage(...)` or `genai::graphs::SpeechTranscriber(...)` |
 
-- `genai::GenAIModel` / `pyneat.genai.GenAIModel`: auto-detect LLM, VLM, or ASR model directories.
-- `genai::VisionLanguageModel` / `pyneat.genai.VisionLanguageModel`: text-only LLMs and image-capable VLMs.
-- `genai::ASRModel` / `pyneat.genai.ASRModel`: speech-to-text models.
-- `genai::GenAIServer` / `pyneat.genai.GenAIServer`: HTTP serving for one or more GenAI models.
+Direct in-process calls are the simplest path for embedded logic and tests. Choose
+`GenAIServer` only when the boundary is HTTP.
 
 ## GenAIModel
 
-Use `GenAIModel` for direct in-process application logic.
-
-Relevant public methods:
-
-- `task()`
-- `accepts_text()`
-- `accepts_image()`
-- `accepts_audio()`
-- `model_id()`
-- `run(request)`
-- `stream(request)`
-
-`run(...)` waits for a full `GenerationResult`. `stream(...)` yields
-`TokenSample` values and should be used when callers need incremental output or
-cancellation.
+- `task()`, `accepts_text()`, `accepts_image()`, `accepts_audio()`, and `model_id()` describe
+  the model. When the user supplies the model directory, check them before building a
+  task-specific request.
+- `run(request)` waits for a full `GenerationResult`. `stream(request)` yields `TokenSample`
+  values. Use it for incremental output or cancellation.
 
 ## GenerationRequest
 
-Keep requests explicit.
-
-- Use `prompt` for a simple single-turn request.
-- Use `messages` for chat history.
-- Do not use `prompt` and `messages` together.
-- Use `system_prompt` only with `prompt`.
-- Use `images` for VLM prompt images.
-- Use per-message images when using chat history.
-- Use `audio` or `audio_file` for ASR.
-- Do not mix direct images with cached images in the same request.
-- Use `enable_thinking` only when the selected model supports reasoning. Read
-  `GenerationResult.reasoning` or streamed `TokenSample.reasoning` separately
-  from answer text.
-- Use `tools` and `tool_choice` for supported tool-calling models. Read parsed
-  calls from `tool_calls` instead of maintaining a model-family-specific parser.
-- For ASR, use `language` when the source language is known or leave it as
-  `auto`, and choose the `asr_task` required by the application. Inspect the
-  returned language, `no_speech_prob`, and `avg_logprob` before deciding whether
-  to keep or retry a transcription.
-
-Capability-check the model before constructing task-specific requests when the
-model directory is user-provided.
+- Use `prompt` for a single-turn request, with `system_prompt` when needed. Use `messages` for
+  chat history, with images attached per message. A request carries one of the two.
+- Use `images` for VLM prompt images. A request carries direct images or cached images, not both.
+- Use `audio` or `audio_file` for ASR. Set `language` when the source language is known, or
+  leave it `auto`, and choose the `asr_task` the application needs. Check the returned
+  language, `no_speech_prob`, and `avg_logprob` before keeping or retrying a transcription.
+- Set `enable_thinking` only for a model that supports reasoning. Read
+  `GenerationResult.reasoning` or `TokenSample.reasoning` separately from the answer text.
+- For tool-calling models, set `tools` and `tool_choice` and read the parsed calls from
+  `tool_calls`.
 
 ## GenAIServer
 
-Use `GenAIServer` when the Neat application should expose HTTP endpoints.
+1. Create `GenAIServerOptions` when the default host or port does not fit.
+2. Construct `GenAIServer` and add one or more model directories with stable served names.
+3. Call `serve()` to block, or `start()` and `stop()` to manage its lifetime.
+4. Manage models with `model_names()` and `remove_model(...)`.
 
-Common steps:
+`stop()` also removes the registered models, so add them again before restarting the same
+server object.
 
-1. Create `GenAIServerOptions` when the default host or port is not correct.
-2. Construct `GenAIServer`.
-3. Add one or more model directories with stable served names.
-4. Use `serve()` for a blocking server or `start()` / `stop()` for managed lifetime.
-5. Use `model_names()` and `remove_model(...)` for model management when needed.
+`GenAIServer` has no authentication or TLS and allows CORS requests from any origin. Bind it
+only to a trusted interface, or put it behind a network layer that controls access and
+encrypts traffic.
 
-`stop()` also removes the registered models. Add them again before restarting the
-same server object.
+## GenAI in a graph
 
-`GenAIServer` does not provide authentication or TLS termination and allows CORS
-requests from any origin. Bind it only to a trusted interface or put it behind a
-network layer that provides access control and encryption.
-
-Do not use a server when the app can call the model directly inside one process.
-Direct APIs are the simpler starting point for embedded application logic and
-tests.
-
-## GenAI In Graphs
-
-Direct GenAI calls are the default. Use public GenAI graph fragments only when
-GenAI is one stage inside a larger Neat `Graph`.
-
-Relevant public fragments:
-
-- `genai::graphs::VisionLanguage(...)`
-- `genai::graphs::SpeechTranscriber(...)`
-
-When graph fragments are used, follow the same named endpoint rules as other
-Neat graphs.
-
-## Boundary
-
-This skill does not cover compiling, quantizing, benchmarking, or selecting
-GenAI models. Use the public LLiMa/model tooling documentation for model
-preparation. This skill begins after a deployed model directory exists.
+GenAI graph fragments follow the same named-endpoint rules as other graphs:
+[graph topologies](graph-topologies.md).

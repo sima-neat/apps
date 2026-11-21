@@ -14,7 +14,7 @@
 
 #include "app_config.h"
 
-#include "support/runtime/config_utils.h"
+#include "sima_examples/config.h"
 
 #include <fstream>
 #include <sstream>
@@ -184,7 +184,7 @@ void validate(const AppConfig& config) {
 
 AppConfig load_config(const std::filesystem::path& path) {
   require(std::filesystem::exists(path), "config file not found: " + path.string());
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
 
   AppConfig config;
   config.profile_name = raw.string_or("profile.name", "pcie-high-density");

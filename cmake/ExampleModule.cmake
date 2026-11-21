@@ -68,12 +68,17 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
   endif()
 
   find_package(nlohmann_json REQUIRED)
+  if (NOT TARGET PkgConfig::YAML_CPP)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
+  endif()
 
   add_library(sima_neat_apps_support_runtime STATIC
-    "${apps_root}/support/runtime/asset_utils.cpp"
-    "${apps_root}/support/runtime/config_utils.cpp"
-    "${apps_root}/support/runtime/example_utils.cpp"
-    "${apps_root}/support/object_detection/obj_detection_utils.cpp"
+    "${apps_root}/support/cpp/sima_examples/asset_utils.cpp"
+    "${apps_root}/support/cpp/sima_examples/config.cpp"
+    "${apps_root}/support/cpp/sima_examples/example_utils.cpp"
+    "${apps_root}/support/cpp/sima_examples/obj_detection_utils.cpp"
+    "${apps_root}/support/cpp/sima_examples/rtsp_probe.cpp"
   )
   add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 
@@ -82,11 +87,12 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
       SimaNeatApps::sima_neat
       opencv_videoio
       nlohmann_json::nlohmann_json
+      PkgConfig::YAML_CPP
   )
 
   target_include_directories(sima_neat_apps_support_runtime
     PUBLIC
-      "${apps_root}"
+      "${apps_root}/support/cpp"
   )
 endfunction()
 
@@ -104,14 +110,18 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
   endif()
+  if (NOT TARGET PkgConfig::YAML_CPP)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
+  endif()
 
   add_library(sima_neat_apps_support_testing STATIC
-    "${apps_root}/support/runtime/config_utils.cpp"
-    "${apps_root}/support/testing/metadata_json_listener.cpp"
-    "${apps_root}/support/testing/source_cases.cpp"
-    "${apps_root}/support/testing/test_checks.cpp"
-    "${apps_root}/support/testing/test_config.cpp"
-    "${apps_root}/support/testing/test_process.cpp"
+    "${apps_root}/support/cpp/sima_examples/config.cpp"
+    "${apps_root}/support/cpp/sima_examples/testing/metadata_json_listener.cpp"
+    "${apps_root}/support/cpp/sima_examples/testing/source_cases.cpp"
+    "${apps_root}/support/cpp/sima_examples/testing/test_checks.cpp"
+    "${apps_root}/support/cpp/sima_examples/testing/test_config.cpp"
+    "${apps_root}/support/cpp/sima_examples/testing/test_process.cpp"
   )
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)
 
@@ -119,11 +129,12 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
     PUBLIC
       nlohmann_json::nlohmann_json
       PkgConfig::OPENCV
+      PkgConfig::YAML_CPP
   )
 
   target_include_directories(sima_neat_apps_support_testing
     PUBLIC
-      "${apps_root}"
+      "${apps_root}/support/cpp"
   )
 endfunction()
 

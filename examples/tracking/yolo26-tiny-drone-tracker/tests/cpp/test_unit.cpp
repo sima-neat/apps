@@ -1,8 +1,8 @@
 #include "examples/tracking/yolo26-tiny-drone-tracker/src/cpp/utils/runtime_api.cpp"
 #include "examples/tracking/yolo26-tiny-drone-tracker/src/cpp/utils/tracker_api.cpp"
-#include "support/runtime/pull_status.h"
-#include "support/testing/test_checks.h"
-#include "support/testing/test_process.h"
+#include "sima_examples/pull_status.h"
+#include "sima_examples/testing/test_checks.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <filesystem>
 #include <iostream>

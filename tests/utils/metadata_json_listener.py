@@ -196,8 +196,8 @@ class MetadataJsonListener:
                 messages.append(message)
                 if message.object_count < self._min_object_count:
                     last_error = (
-                        f"data.{self._data_array_key} contains {message.object_count} objects; "
-                        f"expected at least {self._min_object_count}"
+                        f"data.{self._metadata_contracts[message.metadata_type]} contains "
+                        f"{message.object_count} objects; expected at least {self._min_object_count}"
                     )
                     continue
                 ports_with_valid_json.add(message.port)

@@ -17,9 +17,9 @@
 #include "neat.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
-#include "support/object_detection/obj_detection_utils.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
+#include "sima_examples/obj_detection_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -546,7 +546,7 @@ bool is_yaml_block_scalar_header(const std::string& value) {
   return std::regex_match(value, pattern);
 }
 
-// ScalarConfig skips YAML lists, so the stream entries are read here: a
+// Config skips YAML lists, so the stream entries are read here: a
 // "- key: value" line starts an entry and deeper "key: value" lines continue it.
 std::vector<StreamConfig> parse_streams(const fs::path& config_path) {
   std::ifstream input(config_path);
@@ -688,9 +688,9 @@ bool is_yaml_null(std::string value) {
   return value == "null";
 }
 
-// ScalarConfig removes scalar quotes and maps explicit `null` to a missing
+// Config removes scalar quotes and maps explicit `null` to a missing
 // optional value. Preserve Python's typed-field behavior by rejecting those
-// representations before ScalarConfig applies conversions or defaults.
+// representations before Config applies conversions or defaults.
 void reject_invalid_typed_fields(const std::unordered_map<std::string, std::string>& raw_scalars) {
   static const std::unordered_map<std::string, std::string> errors = {
       {"input.tcp", " must be true or false"},
@@ -737,7 +737,7 @@ int yaml_int_or(const std::unordered_map<std::string, std::string>& raw_scalars,
   return value == raw_scalars.end() ? default_value : parse_yaml_integer(value->second, key);
 }
 
-bool app_bool_or(const sima_examples::ScalarConfig& config,
+bool app_bool_or(const sima_examples::Config& config,
                  const std::unordered_map<std::string, std::string>& raw_scalars,
                  const std::string& key, bool default_value) {
   const auto raw = raw_scalars.find(key);
@@ -806,7 +806,7 @@ void validate_config(const AppConfig& cfg) {
 AppConfig load_app_config(const fs::path& config_path) {
   const auto raw_scalars = load_raw_scalars(config_path);
   reject_invalid_typed_fields(raw_scalars);
-  const auto raw = sima_examples::ScalarConfig::load(config_path);
+  const auto raw = sima_examples::Config::load(config_path);
   AppConfig cfg;
   cfg.detector_model_path = decoded_string_or(raw_scalars, "models.detector_path", "");
   cfg.pose_model_path = decoded_string_or(raw_scalars, "models.pose_path", "");

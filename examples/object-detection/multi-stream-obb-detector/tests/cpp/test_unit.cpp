@@ -6,8 +6,8 @@
 #include "../../src/cpp/main.cpp"
 #undef main
 
-#include "support/testing/test_checks.h"
-#include "support/testing/test_process.h"
+#include "sima_examples/testing/test_checks.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <cmath>
 #include <cstdlib>

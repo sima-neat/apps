@@ -16,6 +16,36 @@
 
 Runs one YOLO26 detector across 20, 30, or 60 RTSP streams and sends synchronized video and detection metadata to Insight.
 
+```text
+How does a frame move through high-density-multi-stream-object-detector?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                             ┆
+┆  ┌──────────────────────┐  encoded frames  ┌──────────────────┐ ┆
+┆  │ RtspEncodedInput × N │─────────────────►│ VideoSender × N  │──────┐
+┆  └──────────────────────┘  latest/stream   └──────────────────┘ ┆    │
+┆             │ encoded frames                                    ┆    │ video
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ SimaDecode × N       │                                       ┆    │
+┆  └──────────────────────┘                                       ┆    │
+┆             │ NV12, latest/stream                               ┆    │
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ YOLO26 Model         │                                       ┆    │
+┆  └──────────────────────┘                                       ┆    │
+┆             │ BBOX tensor                                       ┆    │
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ Output "detections"  │                                       ┆    │
+┆  └──────────────────────┘                                       ┆    │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯    │
+              ▼ pull                                                   ▼
+   ┌──────────────────────┐   boxes as JSON                     ┌──────────────┐
+   │ MetadataSender × N   │────────────────────────────────────►│ Insight      │
+   └──────────────────────┘                                     └──────────────┘
+```
+
 Unlike the general multi-stream detector, this application tunes the pipeline for high stream counts.
 
 Each RTSP source is depacketized once, then Core fuses two branches into the same source pipeline:
@@ -28,7 +58,9 @@ RTSP H.264/H.265
 
 The application expresses this fan-out with ordinary `Graph::connect()` and starts it with ordinary `Graph::build()`. Core fuses the eligible topology internally. `VideoSender` consumes the read-only encoded access unit before the decoder, so the application does not open a second RTSP session, copy a decoded EV buffer, run an encoder, or shuttle encoded frames through appsink/appsrc. The UDP sender uses `async=false` so its sink cannot hold the shared live pipeline in `PAUSED` while waiting for preroll from every stream. The encoded edge uses `RealtimeLatestByStream`; a congested Insight channel can drop stale encoded work without blocking that stream's decoder branch.
 
-Detection metadata includes the source `rtp_timestamp` and is sent with nonblocking UDP. A compatible Insight receiver holds complete encoded RTP frames for 400 ms and matches metadata to that source timestamp before WebRTC forwarding. Keep one active viewer while validating metadata, as described below.
+`inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 20- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
+
+Detection metadata is sent with nonblocking UDP. Its `timestamp`, the frame's presentation time in milliseconds, is what Insight matches to the video frame before WebRTC forwarding. Keep one active viewer while validating metadata, as described below.
 
 The three checked-in profiles use the same application and model:
 
@@ -96,21 +128,11 @@ echo "$(pwd)/models/yolo26n/w8a8/yolo26n_w8a8_mpk.tar.gz"
 ```
 
 Then set that value as `model.path` in the selected config. Change only that
-line; `labels` and `decode_type` must keep their packaged values:
-
-```yaml
-model:
-  path: <paste-the-printed-path>
-  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
-  decode_type: yolo26
-```
-
-`model.labels` is the exception: it resolves from the Apps root, so the packaged
-value needs no change.
+line. `model.labels` resolves from `prebuilt-apps/`, so its packaged value needs no change.
 
 ## Prepare Insight
 
-[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through YouTube support. In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through YouTube support. In the Insight Web UI, start the required streams and copy their RTSP URLs into `input.source`. One stream URL may repeat in every entry, so a single Insight stream can feed all 20, 30, or 60 channels. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running.
 
 Verify each source before starting the application. A Modalix DevKit does not
 ship `ffprobe`, so run this from the machine hosting the sources or from any
@@ -131,16 +153,10 @@ The result must report the codec selected by `input.codec`, `1280x720`, the sele
 Choose one config under `${APP_DIR}/src/common/` and edit:
 
 - `model.path`
-- every entry under `streams`
+- every entry under `input.source`
 - `output.insight.host`
-
-Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all checked-in density profiles and remains the validated high-density configuration.
-
-`inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 20- and 60-stream profiles use a total limit of eight; the 30-stream profile uses 30 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
-
-Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()` and `build()` select the eligible realtime fan-in lowering automatically. The `runtime` settings (`profile`, `warmup_frames`, and the `*_detection_timeout_ms` deadlines) are still validated so existing configs keep loading, but they have no effect and the application prints a warning when they are present. The application publishes metadata from the first valid detection result and runs continuously until interrupted; warmup, throughput measurement, and progress deadlines belong to the E2E receiver. Video/metadata synchronization is performed by Insight from each payload's source RTP timestamp; there is no application-side video-delay setting.
-
-The default 20-stream config uses `input.fps: 0` and enables probing, so the source determines its frame rate. Keep `input.width` and `input.height` matched to the source. The 30- and 60-stream profiles keep explicit FPS values and skip probing; their configured dimensions and frame rates must match the sources.
+- `input.codec`: `h264`, the validated default, or `h265`
+- `input.width`, `input.height`, and `input.fps`: leave each at 0 to read it from every source, so sources of another size need no config change. Every source must have the same frame size, because the streams share one model. The 30- and 60-stream configs set `input.fps` to their profile's rate. Set a size only for a source that does not report one.
 
 Insight channel and port mapping is deterministic:
 
@@ -167,12 +183,6 @@ CONFIG="$APP_DIR/src/common/config-30x720p20fps.yaml"
 CONFIG="$APP_DIR/src/common/config-60x720p10fps.yaml"
 ```
 
-Validate the selected config without starting RTSP or Insight:
-
-```bash
-"$APP" --config "$CONFIG" --validate-config-only
-```
-
 Run the C++ application:
 
 ```bash
@@ -196,40 +206,26 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
 - Video and metadata approach the source cadence for 20 streams, 20 FPS for 30 streams, or 10 FPS for 60 streams. See the profile table for the measured rate.
-- Nonblocking metadata-send failures are reported as rate-limited warnings without stalling inference.
+- Metadata messages the nonblocking sender drops are counted per stream and reported when the application stops.
 - `Ctrl-C` closes the graph and exits cleanly.
 
 If channels do not start, confirm that every publisher was already reachable and that the configured source caps match the selected profile. Restart the application after restarting the publishers.
 
 ## Troubleshooting
 
-Check the configuration before involving hardware. This validates and exits
-without opening a stream or touching Insight:
-
-```bash
-"$APP" --config "$CONFIG" --validate-config-only
-```
-
 - `ModelPack: invalid_archive: archive path does not exist` at run time means
   `model.path` resolved from the config file rather than from `prebuilt-apps/`.
-  Use the absolute path printed in Prepare the Model. Validation does not open
-  the archive, so this appears only once the run starts.
-- `output.insight.max_visible_streams cannot exceed stream count` means the
-  profile's visible-stream count is higher than the number of entries under
-  `streams`. Reduce it, or add the missing stream URLs.
-- `failed to probe RTSP frame rate` from the C++ binary does not tell you which
-  problem you have. The shipped profiles set `input.width` and `input.height` but
-  leave `input.fps` at `0`, so the configured dimensions are used as-is and only
-  the frame rate is probed. An unreachable source and a reachable source that
-  advertises no frame rate both end at this same message. Confirm the URL is
-  reachable from the board before assuming the latter, and set `input.fps` only
-  once you have.
-- The Python entrypoint does distinguish the two: an unreachable source raises
-  `failed to open RTSP source for probing: <url>` before any dimension or rate
-  check.
-- Either way, verify the URL from the board itself rather than from the machine
-  running Insight; the URL Insight displays is not always reachable from the
-  target.
+  Use the absolute path printed in Prepare the Model.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config
+  lacks or sets to the wrong type. Compare it with the packaged config.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`
+  appears when a value left at 0 cannot be read: the source is unreachable from the
+  board, or it does not report that value. Verify the URL from the board itself; the
+  URL Insight displays is not always reachable from the target. For a reachable source,
+  set the value the message names.
+- `every input.source stream needs the same frame size` names two sources whose
+  sizes differ. Use sources of one size, because the streams share one model.
+
 ## Source Files
 
 - C++ reference source: `src/cpp/main.cpp`
@@ -238,6 +234,7 @@ without opening a stream or touching Insight:
 - 30-stream profile: `src/common/config-30x720p20fps.yaml`
 - 60-stream profile: `src/common/config-60x720p10fps.yaml`
 - COCO labels: `src/common/coco_label.txt`
+- Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
