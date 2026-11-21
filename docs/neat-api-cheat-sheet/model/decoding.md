@@ -47,7 +47,7 @@ the function returns the options that the example passes to the `Model`
 constructor ([model.md](model.md)).
 
 C++, from
-[`pcb-defect-detector/src/cpp/main.cpp`](../../examples/object-detection/pcb-defect-detector/src/cpp/main.cpp)
+[`pcb-defect-detector/src/cpp/main.cpp`](../../../examples/object-detection/pcb-defect-detector/src/cpp/main.cpp)
 (lines 334–338, de-indented):
 
 ```cpp
@@ -59,7 +59,7 @@ opt.num_classes = static_cast<int>(labels.size());
 ```
 
 Python, from
-[`pcb-defect-detector/src/python/main.py`](../../examples/object-detection/pcb-defect-detector/src/python/main.py)
+[`pcb-defect-detector/src/python/main.py`](../../../examples/object-detection/pcb-defect-detector/src/python/main.py)
 (lines 371–375, de-indented):
 
 ```python
@@ -81,7 +81,7 @@ tensors: three `[1, H, W, 4]` box heads and three
 `score_threshold = 0.25`, the same image returned one 2404-byte UInt8 tensor
 tagged `BBOX`, which held two boxes.
 
-Complete flow: [PCB Defect Detector](../../examples/object-detection/pcb-defect-detector/)
+Complete flow: [PCB Defect Detector](../../../examples/object-detection/pcb-defect-detector/)
 
 ## Options
 
@@ -327,33 +327,33 @@ payload stores whole pixels, so the floats have no fractional part.
 ## Used in
 
 - `YoloV26`:
-  [YOLO26 Object Detector](../../examples/object-detection/yolo26-object-detector/),
-  [PCB Defect Detector](../../examples/object-detection/pcb-defect-detector/),
-  [Single-Stream Object Detector](../../examples/object-detection/single-stream-object-detector/),
-  [Multi-Stream Object Detector](../../examples/object-detection/multi-stream-object-detector/),
-  [High-Density Multi-Stream Object Detector](../../examples/object-detection/high-density-multi-stream-object-detector/),
-  [Multi-Stream Tracker](../../examples/tracking/multi-stream-tracker/),
-  [YOLO26 Tiny Drone Tracker](../../examples/tracking/yolo26-tiny-drone-tracker/),
-  [Detection to VLM Assistant](../../examples/genai/detection-to-vlm-assistant/),
-  [Multi-Stream BlazePose 3D](../../examples/pose-estimation/multi-stream-blazepose3d/)
+  [YOLO26 Object Detector](../../../examples/object-detection/yolo26-object-detector/),
+  [PCB Defect Detector](../../../examples/object-detection/pcb-defect-detector/),
+  [Single-Stream Object Detector](../../../examples/object-detection/single-stream-object-detector/),
+  [Multi-Stream Object Detector](../../../examples/object-detection/multi-stream-object-detector/),
+  [High-Density Multi-Stream Object Detector](../../../examples/object-detection/high-density-multi-stream-object-detector/),
+  [Multi-Stream Tracker](../../../examples/tracking/multi-stream-tracker/),
+  [YOLO26 Tiny Drone Tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/),
+  [Detection to VLM Assistant](../../../examples/genai/detection-to-vlm-assistant/),
+  [Multi-Stream BlazePose 3D](../../../examples/pose-estimation/multi-stream-blazepose3d/)
   (person detector)
 - `YoloV26`, `YoloV26Pose`, `YoloV26Seg` and `Ssd`, read with `decode_bbox`,
   `decode_pose` and `decode_segmentation`:
-  [MIPI Multi-Model](../../examples/benchmarking/mipi-multi-model/) (Python)
+  [MIPI Multi-Model](../../../examples/benchmarking/mipi-multi-model/) (Python)
 - `YoloV26Pose` and `YoloV8Pose` with `decode_pose`:
-  [Multi-Stream Pose Estimator](../../examples/pose-estimation/multi-stream-pose-estimator/),
-  [Multi-Stream Multi-Model](../../examples/multi-model/multi-stream-multi-model/)
+  [Multi-Stream Pose Estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/),
+  [Multi-Stream Multi-Model](../../../examples/multi-model/multi-stream-multi-model/)
 - `YoloV26Seg` with `decode_segmentation`:
-  [Single-Stream Instance Segmenter](../../examples/segmentation/single-stream-instance-segmenter/),
-  [Multi-Stream Multi-Model](../../examples/multi-model/multi-stream-multi-model/)
+  [Single-Stream Instance Segmenter](../../../examples/segmentation/single-stream-instance-segmenter/),
+  [Multi-Stream Multi-Model](../../../examples/multi-model/multi-stream-multi-model/)
 - `YoloV26Obb` and `YoloV8Obb` with `decode_obb`:
-  [Multi-Stream OBB Detector](../../examples/object-detection/multi-stream-obb-detector/)
-- `Ssd`: [SSD-MobileNet Object Detector](../../examples/object-detection/ssd-mobilenet-object-detector/)
-- `Detr`: [DETR Object Detector](../../examples/object-detection/detr-object-detector/)
+  [Multi-Stream OBB Detector](../../../examples/object-detection/multi-stream-obb-detector/)
+- `Ssd`: [SSD-MobileNet Object Detector](../../../examples/object-detection/ssd-mobilenet-object-detector/)
+- `Detr`: [DETR Object Detector](../../../examples/object-detection/detr-object-detector/)
 - `SuperPoint` with `decode_superpoint`:
-  [SuperPoint Feature Extractor](../../examples/feature-extraction/superpoint-feature-extractor/)
+  [SuperPoint Feature Extractor](../../../examples/feature-extraction/superpoint-feature-extractor/)
 - Raw heads decoded in the application:
-  [Face Recognizer](../../examples/face-recognition/face-recognizer/) (SCRFD)
+  [Face Recognizer](../../../examples/face-recognition/face-recognizer/) (SCRFD)
 
 ## Source
 

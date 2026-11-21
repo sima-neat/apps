@@ -63,7 +63,7 @@ graph.connect(frame_graph, joined)
 graph.connect(detections_graph, joined)
 ```
 
-Complete flow: [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/)
+Complete flow: [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/)
 
 ## Options
 
@@ -122,12 +122,12 @@ A hand-built fan-in on a plain `nodes::Output` takes the same values through
 
 ## Used in
 
-- [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/) (`Branch`, `Combine` with `ByFrame`)
-- [single-stream-instance-segmenter](../../examples/segmentation/single-stream-instance-segmenter/) (`Branch`, `Combine` with `ByFrame`)
-- [face-recognizer](../../examples/face-recognition/face-recognizer/) (`Branch`, `Combine` with `ByFrame`)
-- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/) (`Branch`)
-- [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/) (`Branch`)
-- [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/) (`Branch`)
+- [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/) (`Branch`, `Combine` with `ByFrame`)
+- [single-stream-instance-segmenter](../../../examples/segmentation/single-stream-instance-segmenter/) (`Branch`, `Combine` with `ByFrame`)
+- [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`Branch`, `Combine` with `ByFrame`)
+- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/) (`Branch`)
+- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`Branch`)
+- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (`Branch`)
 
 `RoundRobin` and `ByPts` are not used in Apps.
 

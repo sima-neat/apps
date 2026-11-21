@@ -24,8 +24,8 @@ each finding cites the owning file and section.
 4. Check every item under Shape and under Evidence, and report each one that fails.
 5. Compare the change with the customer skills and the cheat sheet, as `agents/rules.md`
    "Skills and cheat sheet" defines. Check each Core API the change uses or changes against
-   its cheat sheet page, each added lesson against "Generalize", and each lesson "Lift" covers
-   for its copy in `skills/`. Name the file and the text to add or change.
+   its page in `docs/neat-api-cheat-sheet/`, each added lesson against "Generalize", and each
+   lesson "Lift" covers for its copy in `skills/`. Name the file and the text to add or change.
 6. Report the two verdicts `AGENTS.md` requires, then the findings.
 
 ## Shape

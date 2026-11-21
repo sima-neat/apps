@@ -32,7 +32,7 @@ Keep the default policy on a link that carries encoded H.264 or H.265 video
 into a decoder whose frames the application processes. Each encoded frame
 depends on the frames before it, so a frame dropped on such a link corrupts the
 decoded picture until the next keyframe (a frame that decodes on its own). The
-[multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/)
+[multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/)
 example keeps that link lossless for this reason, and still uses a realtime
 link for the encoded video it passes to Insight, where a dropped frame affects
 only what the viewer shows.
@@ -69,7 +69,7 @@ graph.connect(branch, model_graph, live_link_options)
 graph.connect(model_graph, detections_graph)
 ```
 
-Complete flow: [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/)
+Complete flow: [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/)
 
 ## Options
 
@@ -118,12 +118,12 @@ None. Python has every field and both policy values.
 
 ## Used in
 
-- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/)
-- [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/)
-- [multi-stream-pose-estimator](../../examples/pose-estimation/multi-stream-pose-estimator/) (`stream_id`, `max_inflight_per_stream`, `max_inflight_total`)
-- [multi-stream-blazepose3d](../../examples/pose-estimation/multi-stream-blazepose3d/)
-- [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/) (`stream_id`)
-- [yolo26-tiny-drone-tracker](../../examples/tracking/yolo26-tiny-drone-tracker/)
+- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/)
+- [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/)
+- [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) (`stream_id`, `max_inflight_per_stream`, `max_inflight_total`)
+- [multi-stream-blazepose3d](../../../examples/pose-estimation/multi-stream-blazepose3d/)
+- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`stream_id`)
+- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/)
 
 ## Source
 

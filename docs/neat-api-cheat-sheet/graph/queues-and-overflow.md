@@ -57,7 +57,7 @@ graph.add(pyneat.nodes.queue(newest_frames))
 graph.add(backbone.graph())
 ```
 
-Complete flow: [rfdetr-detection-segmentation](../../examples/object-detection/rfdetr-detection-segmentation/)
+Complete flow: [rfdetr-detection-segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/)
 
 ## Options
 
@@ -100,11 +100,11 @@ None. Python has `pyneat.nodes.queue()` with and without options, both
 
 ## Used in
 
-- [rfdetr-detection-segmentation](../../examples/object-detection/rfdetr-detection-segmentation/) (`Queue` with `KeepLatest` in front of the backbone)
+- [rfdetr-detection-segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/) (`Queue` with `KeepLatest` in front of the backbone)
 
 `OverflowPolicy` is also set through `RunOptions::overflow_policy` in most live
 examples, for example
-[single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/).
+[single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/).
 
 ## Source
 

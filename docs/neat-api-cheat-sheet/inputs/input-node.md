@@ -74,12 +74,12 @@ run = graph.build([seed])
 run.push([tensor])
 ```
 
-Complete flow: [superpoint-feature-extractor](../../examples/feature-extraction/superpoint-feature-extractor/)
+Complete flow: [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/)
 
 To feed a model, take the options from the model instead of writing them by
 hand: `model.input_appsrc_options(true)` returns the format, size, memory
 policy and preprocessing metadata that the model expects. See
-[face-detector](../../examples/face-detection/face-detector/).
+[face-detector](../../../examples/face-detection/face-detector/).
 
 ## Options
 
@@ -183,15 +183,15 @@ does.
 
 ## Used in
 
-- [superpoint-feature-extractor](../../examples/feature-extraction/superpoint-feature-extractor/) (BGR frames to Insight)
-- [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/) (BGR or NV12 frames to Insight, named endpoints)
-- [fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/)
-- [face-detector](../../examples/face-detection/face-detector/) (`model.input_appsrc_options(true)`)
-- [face-recognizer](../../examples/face-recognition/face-recognizer/) (`model.input_appsrc_options(true)`)
-- [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/) (NV12 model input with `max_width`, encoded input)
-- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) (`max_bytes`, `pool_max_buffers`, `block`)
-- [mipi-multi-model](../../examples/benchmarking/mipi-multi-model/) (`memory_policy = Ev74`, Python only)
-- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/) (named endpoints)
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) (BGR frames to Insight)
+- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (BGR or NV12 frames to Insight, named endpoints)
+- [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/)
+- [face-detector](../../../examples/face-detection/face-detector/) (`model.input_appsrc_options(true)`)
+- [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`model.input_appsrc_options(true)`)
+- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (NV12 model input with `max_width`, encoded input)
+- [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) (`max_bytes`, `pool_max_buffers`, `block`)
+- [mipi-multi-model](../../../examples/benchmarking/mipi-multi-model/) (`memory_policy = Ev74`, Python only)
+- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/) (named endpoints)
 
 ## Source
 

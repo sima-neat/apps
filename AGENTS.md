@@ -13,8 +13,8 @@ and send the results to Insight. Every rule here serves that reader.
 | Write, trim, or review an example's tests | `agents/skills/write-example-tests/SKILL.md` |
 | Review a pull request | `agents/skills/review-pr/SKILL.md` |
 | Write or update a pull request description | `agents/skills/write-pr-description/SKILL.md` |
-| Use, set, or change a Core API in an example | Its page in `neat-api-cheat-sheet/`, checked as `agents/rules.md` "Skills and cheat sheet" says |
-| Change `skills/` or `neat-api-cheat-sheet/`, or judge whether a change should | `agents/rules.md`, section "Skills and cheat sheet" |
+| Use, set, or change a Core API in an example | Its page in `docs/neat-api-cheat-sheet/`, checked as `agents/rules.md` "Skills and cheat sheet" says |
+| Change `skills/` or `docs/neat-api-cheat-sheet/`, or judge whether a change should | `agents/rules.md`, section "Skills and cheat sheet" |
 | Judge how an example uses inputs, graphs, runs, and options | `skills/neat-application-builder/SKILL.md` |
 | Judge copies, queues, buffers, and throughput | `skills/neat-application-optimizer/SKILL.md` |
 

@@ -60,7 +60,7 @@ else:
     tensor = sample.tensor
 ```
 
-Complete flow: [fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/)
+Complete flow: [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/)
 
 ## Options
 
@@ -184,11 +184,11 @@ arithmetic.
 
 ## Used in
 
-- [fastflow-anomaly-detector](../../examples/anomaly-detection/fastflow-anomaly-detector/) — walks `fields` by `stream_label == "frame"`, then `tensors_from_sample`
-- [superpoint-feature-extractor](../../examples/feature-extraction/superpoint-feature-extractor/) — picks a bundle field, then flattens; notes the decoder loan
-- [single-stream-instance-segmenter](../../examples/segmentation/single-stream-instance-segmenter/) — resolves the `"segments"` field out of a Bundle in both languages
-- [multi-stream-pose-estimator](../../examples/pose-estimation/multi-stream-pose-estimator/) — uses the sample's stream identity to route results per camera
-- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) — derives a stream index from the pulled sample
+- [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — walks `fields` by `stream_label == "frame"`, then `tensors_from_sample`
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — picks a bundle field, then flattens; notes the decoder loan
+- [single-stream-instance-segmenter](../../../examples/segmentation/single-stream-instance-segmenter/) — resolves the `"segments"` field out of a Bundle in both languages
+- [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) — uses the sample's stream identity to route results per camera
+- [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — derives a stream index from the pulled sample
 
 ## Source
 

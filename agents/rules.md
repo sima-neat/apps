@@ -114,10 +114,10 @@ Place each piece of code by the first question it answers yes to:
 `skills/neat-application-builder` and `skills/neat-application-optimizer` teach customers'
 agents the public Neat APIs for any project: inputs, graph topologies, runs, options, and
 tuning. sima-cli ships only `skills/`, so `skills/` links Core paths and public URLs, never
-`agents/`, `neat-api-cheat-sheet/`, or other repository files.
+`agents/`, `docs/neat-api-cheat-sheet/`, or other repository files.
 
-`neat-api-cheat-sheet/` holds one page per Core API, with its options, defaults, and C++ and
-Python differences, for contributors' agents. This repository's conventions stay in `agents/`
+`docs/neat-api-cheat-sheet/` holds one page per Core API, with its options, defaults, and C++
+and Python differences, for contributors' agents. This repository's conventions stay in `agents/`
 and `CONTRIBUTING.md`.
 
 Every pull request feeds what its work taught back into these files:
@@ -131,7 +131,7 @@ Every pull request feeds what its work taught back into these files:
 
   | The finding is about | It goes in |
   |---|---|
-  | An API option, default, error, or behavior | Its page in `neat-api-cheat-sheet/`, following `neat-api-cheat-sheet/TEMPLATE.md` |
+  | An API option, default, error, or behavior | Its page in `docs/neat-api-cheat-sheet/`, following `docs/neat-api-cheat-sheet/TEMPLATE.md` |
   | A node, link, or topology pattern, and when to choose it | `skills/neat-application-builder/references/` |
   | A tuning choice, with its measurement | `skills/neat-application-optimizer/references/tuning.md` |
   | How this repository's examples are written, tested, or reviewed | `agents/` |

@@ -64,11 +64,11 @@ opt.fallback_h264_height = height
 graph.add(pyneat.groups.rtsp_decoded_input(opt))
 ```
 
-Complete flow: [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/)
+Complete flow: [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/)
 
 For `RtspEncodedInput` followed by `SimaDecode`, and the encoded stream also
 sent to Insight, see
-[multi-stream-object-detector](../../examples/object-detection/multi-stream-object-detector/).
+[multi-stream-object-detector](../../../examples/object-detection/multi-stream-object-detector/).
 
 ## Options
 
@@ -204,14 +204,14 @@ parser. The tables above describe what Core does.
 
 ## Used in
 
-- [single-stream-object-detector](../../examples/object-detection/single-stream-object-detector/) (`RtspDecodedInput`, H.264, H.265 or MJPEG, `output_caps`)
-- [multi-stream-object-detector](../../examples/object-detection/multi-stream-object-detector/) (`RtspEncodedInput` with `SimaDecode`, encoded stream to Insight)
-- [rfdetr-detection-segmentation](../../examples/object-detection/rfdetr-detection-segmentation/) (`RtspEncodedInput`, `buffer_mode = "none"` with TCP)
-- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/) (`RtspEncodedInput`, `drop_on_latency`, decoder tuning)
-- [multi-stream-multi-model](../../examples/multi-model/multi-stream-multi-model/) (`RtspEncodedInput`)
-- [face-recognizer](../../examples/face-recognition/face-recognizer/) (`RtspEncodedInput`)
-- [patchcore-anomaly-detector](../../examples/anomaly-detection/patchcore-anomaly-detector/) (`RtspDecodedInput`)
-- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/) (`RtspDecodedInput`, `output_caps`)
+- [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/) (`RtspDecodedInput`, H.264, H.265 or MJPEG, `output_caps`)
+- [multi-stream-object-detector](../../../examples/object-detection/multi-stream-object-detector/) (`RtspEncodedInput` with `SimaDecode`, encoded stream to Insight)
+- [rfdetr-detection-segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/) (`RtspEncodedInput`, `buffer_mode = "none"` with TCP)
+- [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) (`RtspEncodedInput`, `drop_on_latency`, decoder tuning)
+- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`RtspEncodedInput`)
+- [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`RtspEncodedInput`)
+- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (`RtspDecodedInput`)
+- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/) (`RtspDecodedInput`, `output_caps`)
 
 ## Source
 

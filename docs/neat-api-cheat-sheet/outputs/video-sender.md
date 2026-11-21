@@ -72,9 +72,9 @@ video_graph.connect(
 )
 ```
 
-Complete flow: [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/).
+Complete flow: [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/).
 For `Passthrough` from RTSP cameras, see
-[multi-stream-object-detector](../../examples/object-detection/multi-stream-object-detector/).
+[multi-stream-object-detector](../../../examples/object-detection/multi-stream-object-detector/).
 
 ## Options
 
@@ -169,9 +169,9 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 
 `VideoSender` is used by most streaming examples, for example:
 
-- [single-stream-thermal-face-detector](../../examples/face-detection/single-stream-thermal-face-detector/): `FromRaw`
-- [multi-stream-object-detector](../../examples/object-detection/multi-stream-object-detector/): `Passthrough`, one channel per stream
-- [high-density-multi-stream-object-detector](../../examples/object-detection/high-density-multi-stream-object-detector/): `Passthrough` fused into the decoder pipeline
+- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/): `FromRaw`
+- [multi-stream-object-detector](../../../examples/object-detection/multi-stream-object-detector/): `Passthrough`, one channel per stream
+- [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/): `Passthrough` fused into the decoder pipeline
 
 `nodes::UdpOutput` is not used directly in Apps.
 

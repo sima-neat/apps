@@ -24,7 +24,7 @@ then `agents/coding-style.md` and `agents/rules.md`.
    step is done when the application holds no config struct, no config checks, and no
    `--validate-config-only`, and the unit tests load every shipped config.
 4. Write `main` as `agents/coding-style.md` "Flow" and "Graph topology" describe. The step is
-   done when every option was checked against its page in `neat-api-cheat-sheet/` and the
+   done when every option was checked against its page in `docs/neat-api-cheat-sheet/` and the
    Core header, as `agents/rules.md` "Skills and cheat sheet" says, every page the header
    contradicts is fixed, and no assignment restates a default.
 5. Place every other piece of code as `agents/rules.md` "Where code goes" decides. Use a public
