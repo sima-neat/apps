@@ -45,7 +45,13 @@ def test_missing_key_names_the_key(tmp_path):
 
 def test_wrong_type_names_the_key(tmp_path):
     config = config_file(tmp_path, "input:\n  fps: thirty\n")
-    with pytest.raises(ValueError, match="input.fps must be an integer"):
+    with pytest.raises(ValueError, match="^input.fps must be an integer, got 'thirty'$"):
+        config.integer("input.fps")
+
+
+def test_wrong_type_quotes_a_number_as_cpp_does(tmp_path):
+    config = config_file(tmp_path, "input:\n  fps: 1.5\n")
+    with pytest.raises(ValueError, match="^input.fps must be an integer, got '1.5'$"):
         config.integer("input.fps")
 
 
