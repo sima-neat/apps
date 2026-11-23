@@ -150,6 +150,7 @@ Per-class totals: {<class>: <n>, ...}
 - `[ERR] <image>: not a readable image`: the file has an image extension but does not decode. The run continues and exits 1.
 - `[ERR] <image>: <width>x<height> is larger than app.input_max_width x app.input_max_height`: raise both keys to at least the image's size.
 - `[ERR] input.source: no .jpg, .jpeg, .png, or .bmp images in <folder>`: point `input.source` at a folder that holds images.
+- `[ERR] <output path>: could not be written`: check that `output.dir` is writable. The run continues and exits 1.
 - If no defects are reported, lower `inference.min_score`; if boxes overlap heavily, lower `inference.nms_iou`.
 - Class names in `src/common/pcb_label.txt` follow the model's class order. Loading fails when the file lists a different number of classes than the model.
 

@@ -128,7 +128,7 @@ int annotate_images(neat::Model::Runner& runner, const std::vector<fs::path>& im
     pcb::draw_boxes(image, boxes, labels);
     const fs::path output_path =
         output_dir / (image_path.stem().string() + kOutputTag + image_path.extension().string());
-    if (!cv::imwrite(output_path.string(), image)) {
+    if (!pcb::save_image(output_path, image)) {
       std::cerr << "[ERR] " << output_path.string() << ": could not be written\n";
       ++failed;
       continue;

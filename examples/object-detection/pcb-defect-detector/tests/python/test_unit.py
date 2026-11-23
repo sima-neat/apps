@@ -78,6 +78,15 @@ def test_image_problem_names_what_the_model_cannot_take():
     assert images.image_problem(np.zeros((481, 640, 3), np.uint8), (640, 480)) != ""
 
 
+def test_save_image_reports_a_failed_write_instead_of_raising(tmp_path: Path):
+    image = np.zeros((8, 8, 3), np.uint8)
+    assert images.save_image(tmp_path / "board_pcb.png", image)
+    # OpenCV raises for an encoder failure, such as an extension it has no writer for; one image
+    # that cannot be saved must not stop the batch.
+    assert not images.save_image(tmp_path / "board_pcb.unknown", image)
+    assert not images.save_image(tmp_path / "missing" / "board_pcb.png", image)
+
+
 def test_pixel_rounds_half_up_and_stays_in_the_image():
     assert overlay.pixel(2.5, 10) == 3
     assert overlay.pixel(2.49, 10) == 2

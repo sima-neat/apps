@@ -128,6 +128,26 @@ bool test_image_problem_names_what_the_model_cannot_take() {
   return ok;
 }
 
+bool test_save_image_reports_a_failed_write_instead_of_throwing() {
+  const fs::path folder = fs::temp_directory_path() / "pcb-save-image-test";
+  fs::remove_all(folder);
+  fs::create_directories(folder);
+  const cv::Mat image = cv::Mat::zeros(8, 8, CV_8UC3);
+  bool ok = expect_true(pcb::save_image(folder / "board_pcb.png", image), "a PNG is saved");
+  // OpenCV throws for an encoder failure, such as an extension it has no writer for; one image
+  // that cannot be saved must not stop the batch.
+  bool unknown_saved = true;
+  try {
+    unknown_saved = pcb::save_image(folder / "board_pcb.unknown", image);
+  } catch (const std::exception&) {
+  }
+  ok &= expect_true(!unknown_saved, "an encoder failure is reported as not saved");
+  ok &= expect_true(!pcb::save_image(folder / "missing" / "board_pcb.png", image),
+                    "a missing folder is reported as not saved");
+  fs::remove_all(folder);
+  return ok;
+}
+
 bool test_pixel_rounds_half_up_and_stays_in_the_image() {
   return expect_true(pcb::pixel(2.5f, 10) == 3 && pcb::pixel(2.49f, 10) == 2 &&
                          pcb::pixel(-3.0f, 10) == 0 && pcb::pixel(12.0f, 10) == 9,
@@ -162,6 +182,7 @@ int main() {
   ok &= test_find_images_keeps_image_files_in_name_order();
   ok &= test_find_images_names_the_key_when_the_folder_has_none();
   ok &= test_image_problem_names_what_the_model_cannot_take();
+  ok &= test_save_image_reports_a_failed_write_instead_of_throwing();
   ok &= test_pixel_rounds_half_up_and_stays_in_the_image();
   ok &= test_draw_boxes_draws_each_box_in_its_class_color();
   ok &= test_draw_boxes_skips_a_box_with_no_area();

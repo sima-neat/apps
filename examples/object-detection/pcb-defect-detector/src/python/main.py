@@ -115,7 +115,7 @@ def annotate_images(
         boxes = detect_defects(runner, image, max_detections)
         overlay.draw_boxes(image, boxes, labels)
         output_path = output_dir / f"{image_path.stem}{OUTPUT_TAG}{image_path.suffix}"
-        if not cv2.imwrite(str(output_path), image):
+        if not images.save_image(output_path, image):
             print(f"[ERR] {output_path}: could not be written", file=sys.stderr)
             failed += 1
             continue

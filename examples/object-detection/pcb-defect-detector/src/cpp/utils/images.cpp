@@ -3,6 +3,8 @@
 
 #include "images.h"
 
+#include <opencv2/imgcodecs.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <stdexcept>
@@ -42,6 +44,14 @@ std::string image_problem(const cv::Mat& image, ImageSize max_size) {
            std::to_string(max_size.first) + "x" + std::to_string(max_size.second) + ")";
   }
   return "";
+}
+
+bool save_image(const fs::path& path, const cv::Mat& image) {
+  try {
+    return cv::imwrite(path.string(), image);
+  } catch (const cv::Exception&) {
+    return false;
+  }
 }
 
 } // namespace pcb
