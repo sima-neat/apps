@@ -1,603 +1,187 @@
-/**
- * @example pcb-defect-detector.cpp
- * PCB defect detection: run every image in a folder through a custom YOLO26n pack.
- *
- * Images of any resolution go straight to the model: Core letterboxes them to the
- * packaged input size on device, and decode_bbox_tensor returns boxes already in
- * source-image coordinates, so the application performs no geometry of its own.
- * One annotated image is written per input image.
- *
- * Usage: pcb-defect-detector [--config <path>] [--score <value>] [--nms <value>]
- *                            [--validate-config-only]
- */
+// Copyright 2026 SiMa Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Finds defects on printed circuit boards in a folder of images with a custom YOLO26n model.
+// Each image goes to the model at its own size. Core letterboxes it on the device and returns the
+// boxes in the image's pixels, which are drawn on a copy saved to output.dir.
+
 #include "neat.h"
 #include "sima_examples/config.h"
+#include "sima_examples/labels.h"
+#include "utils/images.h"
+#include "utils/overlay.h"
 
+#include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cctype>
 #include <chrono>
-#include <cmath>
-#include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <map>
-#include <optional>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 #include <vector>
 
 namespace fs = std::filesystem;
+namespace neat = simaai::neat;
 
 namespace {
 
-constexpr float kDefaultScoreThreshold = 0.25f;
-constexpr float kDefaultNmsIou = 0.45f;
-constexpr int kDefaultMaxDetections = 300;
-constexpr int kDefaultNumRuns = 1;
-constexpr int kDefaultQueueDepth = 8;
-// Appended to the stem of every annotated image.
+// Added to each annotated image's name: board.jpg is saved as board_pcb.jpg.
 constexpr const char* kOutputTag = "_pcb";
-// Ingress capacity of the graph; boards up to this size share one graph.
-constexpr int kDefaultInputMaxWidth = 3840;
-constexpr int kDefaultInputMaxHeight = 2160;
 
-struct Config {
-  std::string model_path;
-  std::string labels_path;
-  int input_max_width = kDefaultInputMaxWidth;
-  int input_max_height = kDefaultInputMaxHeight;
-  std::string input_dir;
-  std::string output_dir;
-  float score_threshold = kDefaultScoreThreshold;
-  float nms_iou = kDefaultNmsIou;
-  int max_detections = kDefaultMaxDetections;
-  int num_runs = kDefaultNumRuns;
-  int queue_depth = kDefaultQueueDepth;
-  bool profile = false;
-  bool overlay = true;
-};
-
-struct CliOptions {
-  fs::path config_path;
-  std::optional<float> score;
-  std::optional<float> nms;
-  bool validate_only = false;
-};
-
-void print_usage(const char* program) {
-  std::cout << "Usage: " << program
-            << " [--config <path>] [--score <value>] [--nms <value>] [--validate-config-only]\n"
-            << "  --config <path>          Path to YAML configuration\n"
-            << "  --score <value>          Override decode.score_threshold\n"
-            << "  --nms <value>            Override decode.nms_iou\n"
-            << "  --validate-config-only   Validate the configuration and exit\n";
-}
-
-float parse_float_option(const std::string& flag, const std::string& value) {
-  std::size_t consumed = 0;
-  float parsed = 0.0F;
-  try {
-    parsed = std::stof(value, &consumed);
-  } catch (const std::exception&) {
-    throw std::runtime_error(flag + " requires a number, got: " + value);
-  }
-  if (consumed != value.size() || !std::isfinite(parsed)) {
-    throw std::runtime_error(flag + " requires a number, got: " + value);
-  }
-  return parsed;
-}
-
-CliOptions parse_cli(int argc, char** argv) {
-  CliOptions cli;
-  cli.config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+fs::path parse_args(int argc, char** argv) {
+  const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
+  fs::path config_path = fs::exists(adjacent_config)
+                             ? adjacent_config
+                             : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--config") {
-      if (i + 1 >= argc) {
-        throw std::runtime_error("--config requires a path");
-      }
-      cli.config_path = argv[++i];
-    } else if (arg == "--score") {
-      if (i + 1 >= argc) {
-        throw std::runtime_error("--score requires a value");
-      }
-      cli.score = parse_float_option(arg, argv[++i]);
-    } else if (arg == "--nms") {
-      if (i + 1 >= argc) {
-        throw std::runtime_error("--nms requires a value");
-      }
-      cli.nms = parse_float_option(arg, argv[++i]);
-    } else if (arg == "--validate-config-only") {
-      cli.validate_only = true;
-    } else if (arg == "--help" || arg == "-h") {
-      print_usage(argv[0]);
-      std::exit(0);
+    if (arg == "--config" && i + 1 < argc) {
+      config_path = argv[++i];
     } else {
-      throw std::runtime_error("unknown argument: " + arg);
+      throw std::runtime_error("usage: " + std::string(argv[0]) + " [--config <path>]");
     }
   }
-  return cli;
+  return config_path;
 }
 
-Config load_config(const CliOptions& cli) {
-  const auto raw = sima_examples::Config::load(cli.config_path);
-
-  Config cfg;
-  cfg.model_path = raw.string_or("model.path", "");
-  cfg.labels_path = raw.string_or(
-      "model.labels", "examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt");
-  cfg.input_max_width = raw.int_or("model.input_max_width", kDefaultInputMaxWidth);
-  cfg.input_max_height = raw.int_or("model.input_max_height", kDefaultInputMaxHeight);
-  cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/pcb");
-  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/pcb-defect-detector");
-  cfg.score_threshold =
-      static_cast<float>(raw.double_or("decode.score_threshold", kDefaultScoreThreshold));
-  cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", kDefaultNmsIou));
-  cfg.max_detections = raw.int_or("decode.max_detections", kDefaultMaxDetections);
-  cfg.num_runs = raw.int_or("runtime.num_runs", kDefaultNumRuns);
-  cfg.queue_depth = raw.int_or("runtime.queue_depth", kDefaultQueueDepth);
-  cfg.profile = raw.bool_or("runtime.profile", false);
-  cfg.overlay = raw.bool_or("output.overlay", true);
-
-  if (cli.score.has_value()) {
-    cfg.score_threshold = *cli.score;
-  }
-  if (cli.nms.has_value()) {
-    cfg.nms_iou = *cli.nms;
-  }
-
-  if (cfg.model_path.empty()) {
-    throw std::runtime_error("model.path must be set to a compiled model package");
-  }
-  if (cfg.labels_path.empty()) {
-    throw std::runtime_error("model.labels must point to a labels file");
-  }
-  if (cfg.input_max_width < 1) {
-    throw std::runtime_error("model.input_max_width must be >= 1");
-  }
-  if (cfg.input_max_height < 1) {
-    throw std::runtime_error("model.input_max_height must be >= 1");
-  }
-  if (!std::isfinite(cfg.score_threshold) || cfg.score_threshold < 0.0f ||
-      cfg.score_threshold > 1.0f) {
-    throw std::runtime_error("decode.score_threshold must be in [0.0, 1.0]");
-  }
-  if (!std::isfinite(cfg.nms_iou) || cfg.nms_iou < 0.0f || cfg.nms_iou > 1.0f) {
-    throw std::runtime_error("decode.nms_iou must be in [0.0, 1.0]");
-  }
-  if (cfg.max_detections < 1) {
-    throw std::runtime_error("decode.max_detections must be >= 1");
-  }
-  if (cfg.num_runs < 1) {
-    throw std::runtime_error("runtime.num_runs must be >= 1");
-  }
-  if (cfg.queue_depth < 1) {
-    throw std::runtime_error("runtime.queue_depth must be >= 1");
-  }
-  return cfg;
+// YOLO26 on BGR images of any size up to max_size.
+neat::Model::Options model_options(const sima_examples::Config& config,
+                                   const std::vector<std::string>& labels, pcb::ImageSize max_size,
+                                   int max_detections) {
+  neat::Model::Options options;
+  options.preprocess.kind = neat::InputKind::Image;
+  options.preprocess.enable = neat::AutoFlag::On;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
+  options.preprocess.input_max_width = max_size.first;
+  options.preprocess.input_max_height = max_size.second;
+  options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
+  options.decode_type = neat::BoxDecodeType::YoloV26;
+  options.score_threshold = static_cast<float>(config.number("inference.min_score"));
+  options.nms_iou_threshold = static_cast<float>(config.number("inference.nms_iou"));
+  options.top_k = max_detections;
+  // Loading fails when the label file's class count differs from the model's.
+  options.num_classes = static_cast<int>(labels.size());
+  return options;
 }
 
-std::vector<std::string> load_labels(const fs::path& labels_path) {
-  std::ifstream input(labels_path);
-  if (!input.good()) {
-    throw std::runtime_error("labels file does not exist: " + labels_path.string());
-  }
-
-  std::vector<std::string> labels;
-  std::string line;
-  while (std::getline(input, line)) {
-    const std::string trimmed = sima_examples::trim_copy(line);
-    if (!trimmed.empty()) {
-      labels.push_back(trimmed);
-    }
-  }
-  if (labels.empty()) {
-    throw std::runtime_error("labels file is empty: " + labels_path.string());
-  }
-  return labels;
+neat::RunOptions run_options() {
+  neat::RunOptions options;
+  // Realtime is the only preset that applies a new input size on the first frame; the others
+  // hold a frame until a second one of the same size arrives, which one image at a time never
+  // sends. Its KeepLatest overflow policy drops nothing here, because runner.run waits for each
+  // result before the next image.
+  options.preset = neat::RunPreset::Realtime;
+  return options;
 }
 
-bool is_image(const fs::path& path) {
-  std::string ext = path.extension().string();
-  for (char& c : ext) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
-}
-
-std::vector<fs::path> discover_images(const fs::path& input_dir) {
-  std::vector<fs::path> images;
-  for (const auto& entry : fs::directory_iterator(input_dir)) {
-    if (entry.is_regular_file() && is_image(entry.path())) {
-      images.push_back(entry.path());
-    }
-  }
-  std::sort(images.begin(), images.end());
-  return images;
-}
-
-std::string class_name(const std::vector<std::string>& labels, int class_id) {
-  if (class_id >= 0 && static_cast<size_t>(class_id) < labels.size()) {
-    return labels[static_cast<size_t>(class_id)];
-  }
-  return "class_" + std::to_string(class_id);
-}
-
-// BGR colors, index-aligned with pcb_label.txt.
-cv::Scalar class_color(int class_id) {
-  static const std::array<cv::Scalar, 6> kColors = {
-      cv::Scalar(56, 56, 255), cv::Scalar(29, 178, 255), cv::Scalar(10, 249, 72),
-      cv::Scalar(255, 194, 0), cv::Scalar(255, 0, 200),  cv::Scalar(49, 210, 207)};
-  // Fold by absolute value, matching the Python twin. Widened first so that
-  // negating INT_MIN is not signed overflow.
-  const long long folded = class_id < 0 ? -static_cast<long long>(class_id) : class_id;
-  const size_t index = static_cast<size_t>(folded) % kColors.size();
-  return kColors[index];
-}
-
-// Annotated-output path for one input image.
-fs::path output_path_for(const fs::path& image_path, const fs::path& output_dir) {
-  return output_dir /
-         (image_path.stem().string() + kOutputTag + image_path.extension().string());
-}
-
-void draw_boxes(cv::Mat& frame, const std::vector<simaai::neat::Box>& boxes,
-                const std::vector<std::string>& labels) {
-  for (const auto& box : boxes) {
-    const int x1 = std::max(0, std::min(frame.cols - 1, static_cast<int>(std::round(box.x1))));
-    const int y1 = std::max(0, std::min(frame.rows - 1, static_cast<int>(std::round(box.y1))));
-    const int x2 = std::max(0, std::min(frame.cols - 1, static_cast<int>(std::round(box.x2))));
-    const int y2 = std::max(0, std::min(frame.rows - 1, static_cast<int>(std::round(box.y2))));
-    if (x2 <= x1 || y2 <= y1) {
-      continue;
-    }
-
-    const cv::Scalar color = class_color(box.class_id);
-    const std::string text = class_name(labels, box.class_id) + " " + cv::format("%.2f", box.score);
-    cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), color, 2);
-
-    int baseline = 0;
-    const cv::Size text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
-    const int label_top = std::max(0, y1 - text_size.height - 4);
-    cv::rectangle(frame, cv::Point(x1, label_top), cv::Point(x1 + text_size.width + 2, y1), color,
-                  cv::FILLED);
-    cv::putText(frame, text, cv::Point(x1 + 1, std::max(10, y1 - 3)), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
-  }
-}
-
-// Decode the model's BBOX payload into source-image coordinates.
-//
-// Throws if the response is not a usable detection result; returns an empty
-// vector when a valid response found nothing.
-std::vector<simaai::neat::Box> decode_detections(const simaai::neat::TensorList& outputs,
-                                                 int image_width, int image_height,
-                                                 float score_threshold) {
-  if (outputs.size() != 1) {
-    throw std::runtime_error("expected one BBOX tensor from model-managed BoxDecode, got " +
-                             std::to_string(outputs.size()));
-  }
-
-  // An untagged tensor would otherwise parse permissively into zero boxes and
-  // read as a clean board, so require the BBOX tag explicitly.
-  const std::string detection_format = simaai::neat::read_detection_format(outputs.front());
-  if (!simaai::neat::detection_format_is_bbox(detection_format)) {
-    throw std::runtime_error(
-        "model returned no BBOX detection tensor (format: '" +
-        (detection_format.empty() ? std::string("<none>") : detection_format) +
-        "'); the model package must expose YOLO26 BoxDecode output");
-  }
-
-  // strict=true rejects a truncated or over-long payload instead of decoding it
-  // as zero boxes. The decoder sizes the payload for top_k boxes, so the result
-  // never exceeds max_detections.
-  simaai::neat::BoxDecodeResult decoded;
-  try {
-    decoded = simaai::neat::decode_bbox_tensor(outputs.front(), image_width, image_height,
-                                               /*expected_topk=*/0, /*strict=*/true);
-  } catch (const std::exception& error) {
-    throw std::runtime_error(std::string("malformed BBOX payload: ") + error.what());
-  }
-
-  // Same post-decode filtering as the Python twin, so both report an identical
-  // defect count for the same image.
-  std::vector<simaai::neat::Box> boxes;
-  boxes.reserve(decoded.boxes.size());
-  for (const auto& box : decoded.boxes) {
-    if (box.score < score_threshold) {
-      continue;
-    }
-    if (box.x2 <= box.x1 || box.y2 <= box.y1) {
-      continue;
-    }
-    boxes.push_back(box);
-  }
-  return boxes;
-}
-
-simaai::neat::Model::Options model_options(const Config& cfg,
-                                           const std::vector<std::string>& labels) {
-  simaai::neat::Model::Options opt;
-  opt.preprocess.kind = simaai::neat::InputKind::Image;
-  opt.preprocess.enable = simaai::neat::AutoFlag::On;
-  opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
-  opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
-  // Resize stays at the model package default: letterbox, grey padding.
-  opt.preprocess.input_max_width = cfg.input_max_width;
-  opt.preprocess.input_max_height = cfg.input_max_height;
-  opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
-  opt.score_threshold = cfg.score_threshold;
-  opt.nms_iou_threshold = cfg.nms_iou;
-  opt.top_k = cfg.max_detections;
-  opt.num_classes = static_cast<int>(labels.size());
-  return opt;
-}
-
-simaai::neat::RunOptions run_options(const Config& cfg) {
-  simaai::neat::RunOptions opt;
-  opt.queue_depth = cfg.queue_depth;
-  // Realtime is the only preset that applies a new input size on the first
-  // frame; the others hold a frame until a second one of the same size
-  // arrives, which a one-image-at-a-time batch never sends. Its KeepLatest
-  // overflow policy never drops here, because run() pushes blocking.
-  opt.preset = simaai::neat::RunPreset::Realtime;
-  return opt;
+// The defect boxes in one image, in its pixels.
+std::vector<neat::Box> detect_defects(neat::Model::Runner& runner, const cv::Mat& image,
+                                      int max_detections) {
+  const neat::TensorList outputs = runner.run(std::vector<cv::Mat>{image});
+  return neat::decode_bbox_tensor(outputs.at(0), image.cols, image.rows, max_detections,
+                                  /*strict=*/true)
+      .boxes;
 }
 
 std::string format_counts(const std::map<std::string, int>& counts) {
-  std::string out = "{";
-  bool first = true;
+  std::string text = "{";
   for (const auto& [name, count] : counts) {
-    if (!first) {
-      out += ", ";
-    }
-    first = false;
-    out += name + ": " + std::to_string(count);
+    text += (text.size() > 1 ? ", " : "") + name + ": " + std::to_string(count);
   }
-  return out + "}";
+  return text + "}";
+}
+
+// Saves an annotated copy of each image and prints its defects; returns the failed count.
+int annotate_images(neat::Model::Runner& runner, const std::vector<fs::path>& images,
+                    const std::vector<std::string>& labels, const fs::path& output_dir,
+                    pcb::ImageSize max_size, int max_detections) {
+  std::map<std::string, int> per_class;
+  int boards_with_defects = 0;
+  int total_defects = 0;
+  int failed = 0;
+  const auto start = std::chrono::steady_clock::now();
+  for (size_t index = 0; index < images.size(); ++index) {
+    const fs::path& image_path = images[index];
+    cv::Mat image = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+    if (const std::string problem = pcb::image_problem(image, max_size); !problem.empty()) {
+      std::cerr << "[ERR] " << image_path.filename().string() << ": " << problem << "\n";
+      ++failed;
+      continue;
+    }
+    const std::vector<neat::Box> boxes = detect_defects(runner, image, max_detections);
+    pcb::draw_boxes(image, boxes, labels);
+    const fs::path output_path =
+        output_dir / (image_path.stem().string() + kOutputTag + image_path.extension().string());
+    if (!cv::imwrite(output_path.string(), image)) {
+      std::cerr << "[ERR] " << output_path.string() << ": could not be written\n";
+      ++failed;
+      continue;
+    }
+    std::map<std::string, int> counts;
+    for (const auto& box : boxes) {
+      ++counts[labels.at(static_cast<size_t>(box.class_id))];
+      ++per_class[labels.at(static_cast<size_t>(box.class_id))];
+    }
+    total_defects += static_cast<int>(boxes.size());
+    boards_with_defects += boxes.empty() ? 0 : 1;
+    std::cout << "[" << index + 1 << "/" << images.size() << "] " << image_path.filename().string()
+              << " -> " << output_path.filename().string() << " (" << boxes.size() << " defects) "
+              << format_counts(counts) << std::endl;
+  }
+  const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
+  std::cout << "Done: " << images.size() - static_cast<size_t>(failed) << "/" << images.size()
+            << " images in " << cv::format("%.2f", elapsed.count())
+            << " s | images_with_defects=" << boards_with_defects
+            << " total_defects=" << total_defects << " failed=" << failed << "\n";
+  std::cout << "Per-class totals: " << format_counts(per_class) << std::endl;
+  return failed;
+}
+
+int run_app(const fs::path& config_path) {
+  const auto config = sima_examples::Config::load(config_path);
+  const auto labels = sima_examples::load_labels(config.string("model.labels"));
+  const auto images = pcb::find_images(config.string("input.source"));
+  const fs::path output_dir = config.string("output.dir");
+  fs::create_directories(output_dir);
+  // Used by both the model and the box decode.
+  const int max_detections = config.integer("inference.max_detections");
+  // Used by the model, the build seed, and the size check of each image.
+  const pcb::ImageSize max_size{config.integer("app.input_max_width"),
+                                config.integer("app.input_max_height")};
+  const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
+  neat::Model model(model_path.string(), model_options(config, labels, max_size, max_detections));
+  // The seed fixes the route's input caps, so it is an image of the largest accepted size.
+  const cv::Mat seed = cv::Mat::zeros(max_size.second, max_size.first, CV_8UC3);
+  // The runner's Run closes when the runner is destroyed, so also when annotate_images throws.
+  neat::Model::Runner runner =
+      model.build(std::vector<cv::Mat>{seed}, neat::Model::RouteOptions{}, run_options());
+  std::cout << "source=" << config.string("input.source") << " images=" << images.size()
+            << " output=" << output_dir.string() << std::endl;
+  const int failed = annotate_images(runner, images, labels, output_dir, max_size, max_detections);
+  runner.close();
+  return failed == 0 ? 0 : 1;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-  std::cout.setf(std::ios::unitbuf);
-
-  CliOptions cli;
   try {
-    cli = parse_cli(argc, argv);
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n";
-    return 2;
-  }
-
-  std::error_code config_error;
-  if (!fs::is_regular_file(cli.config_path, config_error)) {
-    std::cerr << "Error: config file not found: " << cli.config_path.string() << "\n";
-    return 2;
-  }
-
-  Config cfg;
-  std::vector<std::string> labels;
-  try {
-    cfg = load_config(cli);
-    labels = load_labels(cfg.labels_path);
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n";
-    return 2;
-  }
-
-  if (cli.validate_only) {
-    std::cout << "[validate] model=" << cfg.model_path << " classes=" << labels.size()
-              << " score_threshold=" << cv::format("%.2f", cfg.score_threshold)
-              << " nms_iou=" << cv::format("%.2f", cfg.nms_iou)
-              << " max_detections=" << cfg.max_detections << " num_runs=" << cfg.num_runs
-              << " queue_depth=" << cfg.queue_depth << "\n";
-    std::cout << "[validate] configuration OK\n";
-    return 0;
-  }
-
-  const fs::path input_dir = cfg.input_dir;
-  const fs::path output_dir = cfg.output_dir;
-  std::error_code input_error;
-  if (!fs::is_directory(input_dir, input_error)) {
-    std::cerr << "Input directory does not exist: " << input_dir.string() << "\n";
-    return 2;
-  }
-
-  // Sharing one directory corrupts the run: an annotated image written for one
-  // board is re-read as a source for a later one, and a rerun discovers the
-  // previous outputs as new inputs.
-  std::error_code same_error;
-  if (fs::weakly_canonical(input_dir, same_error) ==
-      fs::weakly_canonical(output_dir, same_error)) {
-    std::cerr << "Error: io.output_dir must differ from io.input_dir; annotated images written "
-                 "beside their sources are re-read as inputs.\n";
-    return 2;
-  }
-
-  std::vector<fs::path> images;
-  try {
-    images = discover_images(input_dir);
-  } catch (const std::exception& e) {
-    std::cerr << "Error: cannot read " << input_dir.string() << ": " << e.what() << "\n";
-    return 2;
-  }
-  if (images.empty()) {
-    std::cerr << "No images found in " << input_dir.string() << "\n";
-    return 3;
-  }
-
-  std::error_code create_error;
-  fs::create_directories(output_dir, create_error);
-  if (create_error) {
-    std::cerr << "Error: cannot create " << output_dir.string() << ": " << create_error.message()
-              << "\n";
-    return 2;
-  }
-
-  std::cout << "Model: " << cfg.model_path << "\n";
-  std::cout << "Found " << images.size() << " images in " << input_dir.string() << "\n";
-  std::vector<fs::path> all_images;
-  all_images.reserve(images.size() * static_cast<size_t>(cfg.num_runs));
-  for (int run = 0; run < cfg.num_runs; ++run) {
-    all_images.insert(all_images.end(), images.begin(), images.end());
-  }
-  if (cfg.num_runs > 1) {
-    std::cout << "Looping " << cfg.num_runs << "x over " << images.size() << " images ("
-              << all_images.size() << " total)\n";
-  }
-
-  // Declared outside the try so the catch below can still report what was
-  // completed and what had already failed when a systemic error aborts the run.
-  std::vector<std::string> failed_images;
-  std::map<std::string, int> per_class;
-  int processed = 0;
-  int images_with_defects = 0;
-  int total_defects = 0;
-  // The image in flight when a systemic failure aborts the batch, so the summary
-  // names it rather than reporting failed=0.
-  std::string aborted_on;
-
-  try {
-    simaai::neat::Model model(cfg.model_path, model_options(cfg, labels));
-
-    // The build seed fixes the graph's input caps, so it is a frame at the
-    // configured capacity rather than any particular board.
-    const cv::Mat graph_seed(cfg.input_max_height, cfg.input_max_width, CV_8UC3,
-                             cv::Scalar(114, 114, 114));
-
-    simaai::neat::Model::Runner runner = model.build(
-        std::vector<cv::Mat>{graph_seed}, simaai::neat::Model::RouteOptions{}, run_options(cfg));
-
-    const auto pipeline_start = std::chrono::steady_clock::now();
-
-    for (const auto& image_path : all_images) {
-      aborted_on = image_path.filename().string();
-      const auto image_start = std::chrono::steady_clock::now();
-
-      cv::Mat bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
-      if (bgr.empty()) {
-        // An input we were asked to inspect and could not: record it so the
-        // summary and the exit code stay honest.
-        std::cerr << "Failed to read: " << image_path.filename().string() << "\n";
-        failed_images.push_back(image_path.filename().string());
-        continue;
-      }
-      if (bgr.cols > cfg.input_max_width || bgr.rows > cfg.input_max_height) {
-        std::cerr << "Image " << bgr.cols << "x" << bgr.rows
-                  << " exceeds model.input_max_width/height (" << cfg.input_max_width << "x"
-                  << cfg.input_max_height << "): " << image_path.filename().string() << "\n";
-        failed_images.push_back(image_path.filename().string());
-        continue;
-      }
-
-      const auto infer_start = std::chrono::steady_clock::now();
-      const simaai::neat::TensorList out = runner.run(std::vector<cv::Mat>{bgr});
-      const auto infer_end = std::chrono::steady_clock::now();
-
-      // Throws rather than reporting a clean board when the model produced no
-      // usable detection output; a valid empty result yields an empty vector.
-      const std::vector<simaai::neat::Box> boxes =
-          decode_detections(out, bgr.cols, bgr.rows, cfg.score_threshold);
-
-      std::map<std::string, int> counts;
-      for (const auto& box : boxes) {
-        ++counts[class_name(labels, box.class_id)];
-      }
-
-      const fs::path out_path = output_path_for(image_path, output_dir);
-      if (cfg.overlay) {
-        draw_boxes(bgr, boxes, labels);
-        bool written = false;
-        try {
-          written = cv::imwrite(out_path.string(), bgr);
-        } catch (const cv::Exception&) {  // encoder failure, not a batch-wide problem
-          written = false;
-        }
-        if (!written) {
-          std::cerr << "Failed to write: " << out_path.string() << "\n";
-          failed_images.push_back(image_path.filename().string());
-          continue;
-        }
-      }
-      const auto image_end = std::chrono::steady_clock::now();
-
-      // Merged only once the image is fully done, so "Per-class totals" can never
-      // describe an image that processed and total_defects exclude.
-      for (const auto& [name, count] : counts) {
-        per_class[name] += count;
-      }
-
-      ++processed;
-      total_defects += static_cast<int>(boxes.size());
-      if (!boxes.empty()) {
-        ++images_with_defects;
-      }
-
-      std::cout << "[" << processed << "/" << all_images.size() << "] "
-                << image_path.filename().string();
-      if (cfg.overlay) {
-        std::cout << " -> " << out_path.filename().string();
-      }
-      std::cout << " (" << boxes.size() << " defects) " << format_counts(counts) << "\n";
-
-      if (cfg.profile) {
-        using ms = std::chrono::duration<double, std::milli>;
-        std::cout << "[PROFILE] " << image_path.filename().string()
-                  << ": inference=" << cv::format("%.1f", ms(infer_end - infer_start).count())
-                  << "ms overlay+save=" << cv::format("%.1f", ms(image_end - infer_end).count())
-                  << "ms total=" << cv::format("%.1f", ms(image_end - image_start).count())
-                  << "ms\n";
-      }
-      aborted_on.clear();
-    }
-
-    runner.close();
-
-    const auto elapsed =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - pipeline_start).count();
-    std::cout << "Done: " << processed << "/" << all_images.size() << " images in "
-              << cv::format("%.2f", elapsed) << "s | images_with_defects=" << images_with_defects
-              << " total_defects=" << total_defects << " failed=" << failed_images.size() << "\n";
-    if (!per_class.empty()) {
-      std::cout << "Per-class totals: " << format_counts(per_class) << "\n";
-    }
-
-    // A batch that skipped inputs is not a success.
-    if (!failed_images.empty()) {
-      std::cerr << "Error: " << failed_images.size() << " of " << all_images.size()
-                << " image(s) could not be processed or saved:";
-      for (std::size_t i = 0; i < failed_images.size() && i < 5; ++i) {
-        std::cerr << (i ? ", " : " ") << failed_images[i];
-      }
-      std::cerr << (failed_images.size() > 5 ? ", ...\n" : "\n");
-      return 4;
-    }
-    return 0;
-  } catch (const std::exception& e) {
-    // A systemic failure repeats on every image, so stop the batch but still
-    // report what completed and what failed.
-    std::cerr << "Error: " << e.what() << "\n";
-    if (!aborted_on.empty()) {
-      failed_images.push_back(aborted_on);
-    }
-    std::cerr << "Aborted after " << processed << "/" << all_images.size()
-              << " images | images_with_defects=" << images_with_defects
-              << " total_defects=" << total_defects
-              << " failed=" << failed_images.size() << "\n";
-    if (!failed_images.empty()) {
-      std::cerr << "Previously failed:";
-      for (std::size_t i = 0; i < failed_images.size() && i < 5; ++i) {
-        std::cerr << (i ? ", " : " ") << failed_images[i];
-      }
-      std::cerr << (failed_images.size() > 5 ? ", ...\n" : "\n");
-    }
-    return 4;
+    return run_app(parse_args(argc, argv));
+  } catch (const std::exception& error) {
+    std::cerr << "[ERR] " << error.what() << "\n";
+    return 1;
   }
 }

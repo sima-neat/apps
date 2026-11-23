@@ -1,22 +1,22 @@
-model:                       # PCB defect detector model selection.
-  path: <model-path>         # Example: models/<model-pack>.tar.gz
+# PCB defect detection over a folder of images with a custom YOLO26n model.
+model:
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/yolo26n_plc_mpk.tar.gz
+  # Defect classes in the model's class order, one per line; a relative path starts at the
+  # working directory.
   labels: examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt
-  input_max_width: 3840      # Largest input width one graph accepts (ingress capacity).
-  input_max_height: 2160     # Largest input height one graph accepts.
 
-io:                          # Input and output paths.
-  input_dir: assets/datasets/pcb                # Folder containing input PCB images.
-  output_dir: sandbox/pcb-defect-detector       # Folder for annotated images.
+input:
+  source: assets/datasets/pcb   # Folder of .jpg, .jpeg, .png, or .bmp images.
 
-decode:                      # YOLO26 on-device box decode settings.
-  score_threshold: 0.25      # Minimum defect confidence.
-  nms_iou: 0.45              # Overlap threshold for NMS.
-  max_detections: 300        # Max detections to keep per image.
+inference:
+  min_score: 0.25               # Lowest score a defect needs.
+  nms_iou: 0.45                 # Overlap at which NMS drops the weaker box.
+  max_detections: 300           # Defects kept per image.
 
-runtime:                     # Runtime settings.
-  num_runs: 1                # Number of repeated runs.
-  queue_depth: 8             # Runtime queue depth.
-  profile: false             # Print per-image profiling summaries.
+output:
+  dir: sandbox/pcb-defect-detector  # Folder for the annotated images; not input.source.
 
-output:                      # Output rendering settings.
-  overlay: true              # Draw boxes and labels on output images.
+app:
+  input_max_width: 3840         # Largest image the model accepts; a larger image fails.
+  input_max_height: 2160        # Raise both for larger scans.

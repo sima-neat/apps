@@ -48,32 +48,35 @@ constructor ([model.md](model.md)).
 
 C++, from
 [`pcb-defect-detector/src/cpp/main.cpp`](../../../examples/object-detection/pcb-defect-detector/src/cpp/main.cpp)
-(lines 334–338, de-indented):
+(lines 71–76, de-indented):
 
 ```cpp
-opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
-opt.score_threshold = cfg.score_threshold;
-opt.nms_iou_threshold = cfg.nms_iou;
-opt.top_k = cfg.max_detections;
-opt.num_classes = static_cast<int>(labels.size());
+options.decode_type = neat::BoxDecodeType::YoloV26;
+options.score_threshold = static_cast<float>(config.number("inference.min_score"));
+options.nms_iou_threshold = static_cast<float>(config.number("inference.nms_iou"));
+options.top_k = max_detections;
+// Loading fails when the label file's class count differs from the model's.
+options.num_classes = static_cast<int>(labels.size());
 ```
 
 Python, from
 [`pcb-defect-detector/src/python/main.py`](../../../examples/object-detection/pcb-defect-detector/src/python/main.py)
-(lines 371–375, de-indented):
+(lines 53–58, de-indented):
 
 ```python
-opt.decode_type = pyneat.BoxDecodeType.YoloV26
-opt.score_threshold = cfg.score_threshold
-opt.nms_iou_threshold = cfg.nms_iou
-opt.top_k = cfg.max_detections
-opt.num_classes = len(labels)
+options.decode_type = pyneat.BoxDecodeType.YoloV26
+options.score_threshold = config.number("inference.min_score")
+options.nms_iou_threshold = config.number("inference.nms_iou")
+options.top_k = max_detections
+# Loading fails when the label file's class count differs from the model's.
+options.num_classes = len(labels)
 ```
 
-The example reads each result in its `decode_detections` function: it checks
-the tag of the one output tensor, then calls `decode_bbox_tensor` (Python
-`pyneat.detections.decode_bbox_tensor`) with the frame's width and height and
-`strict` on, which gives a list of `Box` records in the frame's pixels.
+The example reads each result in its `detect_defects` function: it calls
+`decode_bbox_tensor` (Python `pyneat.detections.decode_bbox_tensor`) on the one
+output tensor with the image's width and height, `max_detections` as
+`expected_topk`, and `strict` on, which gives a list of `Box` records in the
+image's pixels.
 
 On a DevKit, the YOLO26n package with no `decode_type` returned six float32
 tensors: three `[1, H, W, 4]` box heads and three
@@ -222,8 +225,7 @@ clamp boxes to that rectangle.
 - `read_detection_format(tensor)` (Python
   `pyneat.detections.read_detection_format`) returns the tag, and
   `detection_format_is_bbox(format)` (Python
-  `pyneat.detections.format_is_bbox`) checks it, as the PCB Defect Detector
-  does before it decodes.
+  `pyneat.detections.format_is_bbox`) checks it.
 
 ### `Box` and `BoxDecodeResult`
 

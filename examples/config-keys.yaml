@@ -22,7 +22,7 @@ input.type:
   meaning: Input kind the config sets, such as rtsp, http, or usb, for an example that takes several. Only the keys of that kind are read, and the config's comments list the keys of the others.
 input.source:
   type: string_list
-  meaning: Input streams, one RTSP URL per stream. The same URL may repeat. With input.type http or usb, an http:// or https:// MJPEG URL or a USB camera ID.
+  meaning: Input streams, one RTSP URL per stream. The same URL may repeat. With input.type http or usb, an http:// or https:// MJPEG URL or a USB camera ID. For an example that reads image files, the folder that holds them; a relative path starts at the working directory.
 input.codec:
   type: string
   meaning: Encoded video format of every input stream, such as h264, h265, or mjpeg. The example's config lists the formats it decodes.
@@ -73,3 +73,6 @@ output.insight.video_port_base:
 output.insight.metadata_port_base:
   type: integer
   meaning: UDP port of stream 0's metadata. Stream i uses this port + i.
+output.dir:
+  type: string
+  meaning: Folder the example writes its output files to. A relative path starts at the working directory.

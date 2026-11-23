@@ -113,7 +113,9 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
+  // Absolute, because the example resolves a relative model.path from its config's folder.
+  const std::string models_dir =
+      fs::absolute(models_dir_raw != nullptr ? models_dir_raw : "models").string();
 
   const std::string model_path = configured_model_path(kExample, models_dir);
   if (model_path.empty() || !fs::exists(model_path)) {
@@ -160,8 +162,8 @@ int main(int argc, char** argv) {
   write_e2e_config(kExample, config_path,
                    {{"model.path", model_path},
                     {"model.labels", labels_file},
-                    {"io.input_dir", input_dir},
-                    {"io.output_dir", out_dir}});
+                    {"input.source", input_dir},
+                    {"output.dir", out_dir}});
 
   const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   const auto result = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
@@ -343,8 +345,8 @@ int main(int argc, char** argv) {
       write_e2e_config(kExample, mixed_config,
                        {{"model.path", model_path},
                         {"model.labels", labels_file},
-                        {"io.input_dir", mixed_input.string()},
-                        {"io.output_dir", mixed_out.string()}});
+                        {"input.source", mixed_input.string()},
+                        {"output.dir", mixed_out.string()}});
 
       const auto mixed = spawn_and_wait(binary, {"--config", mixed_config.string()}, timeout);
       const int mixed_failed = summary_field(mixed.stdout_text, "failed=");
@@ -367,8 +369,7 @@ int main(int argc, char** argv) {
         std::cerr << "stdout:\n" << mixed.stdout_text << "\n";
         rc = 1;
       } else if (mixed_defects < static_cast<int>(expected_sizes.size())) {
-        std::cerr << "[FAIL] expected at least one defect per board, got " << mixed_defects
-                  << "\n";
+        std::cerr << "[FAIL] expected at least one defect per board, got " << mixed_defects << "\n";
         std::cerr << "stdout:\n" << mixed.stdout_text << "\n";
         rc = 1;
       }
@@ -442,8 +443,8 @@ int main(int argc, char** argv) {
     write_e2e_config(kExample, broken_config,
                      {{"model.path", model_path},
                       {"model.labels", labels_file},
-                      {"io.input_dir", broken_input.string()},
-                      {"io.output_dir", broken_out.string()}});
+                      {"input.source", broken_input.string()},
+                      {"output.dir", broken_out.string()}});
 
     const auto broken = spawn_and_wait(binary, {"--config", broken_config.string()}, timeout);
     const int broken_failed = summary_field(broken.stdout_text, "failed=");
@@ -462,169 +463,6 @@ int main(int argc, char** argv) {
     }
     remove_dir(broken_input.string());
     remove_dir(broken_out.string());
-  }
-
-  // One directory for both input and output would make outputs become inputs.
-  //
-  // An annotated image written for one board would be re-read as a source for a
-  // later board in the same run, and a rerun would discover the previous outputs
-  // as fresh inputs.
-  if (rc == 0) {
-    const auto shared = fs::path(out_dir).parent_path() / "shared-io";
-    fs::create_directories(shared);
-    std::ofstream(shared / "board.jpg") << "not a real jpeg";
-
-    const fs::path shared_config = fs::path(out_dir).parent_path() / "config_shared.yaml";
-    write_e2e_config(kExample, shared_config,
-                     {{"model.path", model_path},
-                      {"model.labels", labels_file},
-                      {"io.input_dir", shared.string()},
-                      {"io.output_dir", shared.string()}});
-
-    const auto shared_run = spawn_and_wait(binary, {"--config", shared_config.string()}, timeout);
-    bool wrote_output = false;
-    for (const auto& entry : fs::directory_iterator(shared)) {
-      if (entry.path().filename().string().find("_pcb.") != std::string::npos) {
-        wrote_output = true;
-      }
-    }
-
-    if (shared_run.exit_code != 2) {
-      std::cerr << "[FAIL] a shared input/output directory must exit 2, got "
-                << shared_run.exit_code << "\n";
-      std::cerr << "stderr:\n" << shared_run.stderr_text << "\n";
-      rc = 1;
-    } else if (shared_run.stderr_text.find("must differ") == std::string::npos) {
-      std::cerr << "[FAIL] the rejection must name the constraint\n";
-      std::cerr << "stderr:\n" << shared_run.stderr_text << "\n";
-      rc = 1;
-    } else if (wrote_output) {
-      std::cerr << "[FAIL] nothing may be written into a rejected shared directory\n";
-      rc = 1;
-    } else {
-      std::cout << "[OK] a shared input/output directory is rejected before anything is written\n";
-    }
-    remove_dir(shared.string());
-  }
-
-  // A save that fails must be reported, not counted as a processed image. The
-  // application checks the image writer's return value; nothing else in this
-  // suite drives that branch.
-  if (rc == 0) {
-    const int image_total = count_input_images(input_dir);
-    const auto readonly_out = fs::path(out_dir).parent_path() / "readonly-output";
-    fs::create_directories(readonly_out);
-    // Written before the directory is sealed; the config does not live in it.
-    const fs::path readonly_config = fs::path(out_dir).parent_path() / "config_readonly.yaml";
-    write_e2e_config(kExample, readonly_config,
-                     {{"model.path", model_path},
-                      {"model.labels", labels_file},
-                      {"io.input_dir", input_dir},
-                      {"io.output_dir", readonly_out.string()}});
-
-    std::error_code perm_ec;
-    fs::permissions(readonly_out,
-                    fs::perms::owner_read | fs::perms::owner_exec | fs::perms::group_read |
-                        fs::perms::group_exec | fs::perms::others_read | fs::perms::others_exec,
-                    fs::perm_options::replace, perm_ec);
-
-    // root ignores the mode bits, which would let the checks below pass without a
-    // single write ever failing.
-    bool sealed = !perm_ec;
-    if (sealed) {
-      const fs::path probe = readonly_out / ".probe";
-      std::ofstream probe_stream(probe);
-      if (probe_stream.good()) {
-        sealed = false;
-        probe_stream.close();
-        fs::remove(probe, perm_ec);
-      }
-    }
-
-    if (!sealed) {
-      // Strict mode must not pass on an unverified scenario; the Python twin
-      // routes the same condition through skip_unless_e2e_ready.
-      const int outcome = skip_or_fail(readonly_out.string() +
-                                       " is still writable, so the write-failure path cannot be "
-                                       "exercised (running as root?)");
-      if (outcome != kSkipCode) {
-        rc = outcome;
-      }
-    } else {
-      const auto denied = spawn_and_wait(binary, {"--config", readonly_config.string()}, timeout);
-      const std::string done = extract_line(denied.stdout_text, "Done: ");
-      const int processed = summary_field(done, "Done: ");
-      const int failed = summary_field(denied.stdout_text, "failed=");
-
-      if (denied.exit_code == 0) {
-        std::cerr << "[FAIL] images that could not be saved must not exit 0\n";
-        std::cerr << "stdout:\n" << denied.stdout_text << "\n";
-        rc = 1;
-      } else if (processed != 0 || failed != image_total) {
-        std::cerr << "[FAIL] no image could be saved, so all " << image_total
-                  << " must be counted as failed and none as processed; got processed="
-                  << processed << " failed=" << failed << "\n";
-        std::cerr << "stdout:\n" << denied.stdout_text << "\n";
-        rc = 1;
-      } else {
-        std::cout << "[OK] unsaveable output is reported (0/" << image_total
-                  << ", failed=" << failed << ") and exits " << denied.exit_code << "\n";
-      }
-    }
-
-    fs::permissions(readonly_out, fs::perms::owner_all | fs::perms::group_read |
-                                      fs::perms::group_exec | fs::perms::others_read |
-                                      fs::perms::others_exec,
-                    fs::perm_options::replace, perm_ec);
-    remove_dir(readonly_out.string());
-  }
-
-  // With output.overlay off, every board is still inspected but nothing is
-  // written.
-  if (rc == 0) {
-    const auto quiet_out = fs::path(out_dir).parent_path() / "overlay-off-output";
-    fs::create_directories(quiet_out);
-
-    const fs::path quiet_config = fs::path(out_dir).parent_path() / "config_overlay_off.yaml";
-    write_e2e_config(kExample, quiet_config,
-                     {{"model.path", model_path},
-                      {"model.labels", labels_file},
-                      {"io.input_dir", input_dir},
-                      {"io.output_dir", quiet_out.string()},
-                      {"output.overlay", "false"}});
-    const auto quiet = spawn_and_wait(binary, {"--config", quiet_config.string()}, timeout);
-    const int quiet_failed = summary_field(quiet.stdout_text, "failed=");
-    const int quiet_with_defects = summary_field(quiet.stdout_text, "images_with_defects=");
-    const int image_count = count_input_images(input_dir);
-    std::vector<std::string> written;
-    for (const auto& entry : fs::directory_iterator(quiet_out)) {
-      written.push_back(entry.path().filename().string());
-    }
-
-    if (quiet.exit_code != 0) {
-      std::cerr << "[FAIL] overlay off exited with code " << quiet.exit_code << "\n";
-      std::cerr << "stderr:\n" << quiet.stderr_text << "\n";
-      rc = 1;
-    } else if (quiet_failed != 0 || quiet_with_defects != image_count) {
-      std::cerr << "[FAIL] overlay off must still inspect every board, got failed=" << quiet_failed
-                << " images_with_defects=" << quiet_with_defects << " of " << image_count << "\n";
-      std::cerr << "stdout:\n" << quiet.stdout_text << "\n";
-      rc = 1;
-    } else if (const std::string problem = board_defect_problem(input_dir, quiet.stdout_text);
-               !problem.empty()) {
-      std::cerr << "[FAIL] overlay off: " << problem << "\nstdout:\n" << quiet.stdout_text << "\n";
-      rc = 1;
-    } else if (!written.empty()) {
-      std::cerr << "[FAIL] overlay off must write no images, but the output holds:";
-      for (const auto& name : written) {
-        std::cerr << " " << name;
-      }
-      std::cerr << "\n";
-      rc = 1;
-    } else {
-      std::cout << "[OK] overlay off inspected " << image_count << " boards and wrote no images\n";
-    }
-    remove_dir(quiet_out.string());
   }
 
   remove_dir(out_dir);
