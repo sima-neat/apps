@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
+from tests.utils.rtp_video import drain_video, pairs, rtp_timestamps
 from tests.utils.pytest_fixtures import usb_camera_cases
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
@@ -80,24 +81,6 @@ def _keep_only_input_type_keys(config_path: Path, source: dict) -> None:
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
 
-def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
-    """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
-    sock.settimeout(0.2)
-    while True:
-        try:
-            headers.append(sock.recv(65536)[:12])
-        except TimeoutError:
-            if stop.is_set():
-                return
-
-
-def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
-    """Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a
-    video frame's RTP timestamp."""
-    ticks = (timestamp_ms * 90) & 0xFFFFFFFF
-    return any(abs(ticks - rtp) <= 90 for rtp in rtp_timestamps)
-
-
 @pytest.mark.e2e
 @pytest.mark.parametrize("source", SOURCE_CASES)
 def test_publishes_insight_video_and_metadata(
@@ -139,7 +122,7 @@ def test_publishes_insight_video_and_metadata(
         video.bind(("127.0.0.1", video_port))
         headers: list[bytes] = []
         stop = threading.Event()
-        drain = threading.Thread(target=_drain_video, args=(video, stop, headers))
+        drain = threading.Thread(target=drain_video, args=(video, stop, headers))
         drain.start()
         try:
             result = subprocess.run(
@@ -179,6 +162,6 @@ def test_publishes_insight_video_and_metadata(
     assert headers and len(headers[0]) == 12 and headers[0][0] >> 6 == 2
     assert headers[0][1] & 0x7F == payload_type
     # Insight draws each message's boxes on the video frame its timestamp names.
-    rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers}
-    unpaired = [m.timestamp_ms for m in messages if not _pairs(m.timestamp_ms, rtp_timestamps)]
+    timestamps = rtp_timestamps(headers)
+    unpaired = [m.timestamp_ms for m in messages if not pairs(m.timestamp_ms, timestamps)]
     assert not unpaired, f"metadata timestamps with no video frame: {unpaired[:5]}"

@@ -1,4 +1,5 @@
 #include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/rtp_video.h"
 #include "sima_examples/testing/source_cases.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
@@ -8,7 +9,6 @@
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -74,31 +74,6 @@ bool valid_detections(const std::vector<MetadataJsonMessage>& messages,
     }
   }
   return true;
-}
-
-// Each video packet's RTP header, kept until `stop` is set and the socket is empty.
-std::vector<std::array<unsigned char, 12>> drain_video(int socket, const std::atomic<bool>& stop) {
-  const timeval timeout{0, 200000};
-  ::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-  std::vector<std::array<unsigned char, 12>> headers;
-  std::array<unsigned char, 65536> packet{};
-  while (true) {
-    if (::recv(socket, packet.data(), packet.size(), 0) >= 12) {
-      headers.emplace_back();
-      std::copy_n(packet.begin(), 12, headers.back().begin());
-    } else if (stop) {
-      return headers;
-    }
-  }
-}
-
-// Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a video
-// frame's RTP timestamp.
-bool pairs(int64_t timestamp_ms, const std::set<uint32_t>& rtp_timestamps) {
-  const auto ticks = static_cast<uint32_t>(timestamp_ms * 90);
-  return std::any_of(rtp_timestamps.begin(), rtp_timestamps.end(), [ticks](uint32_t rtp) {
-    return (ticks > rtp ? ticks - rtp : rtp - ticks) <= 90;
-  });
 }
 
 int run_source_case(const std::string& binary, const std::string& model_path,
@@ -167,7 +142,7 @@ int run_source_case(const std::string& binary, const std::string& model_path,
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   std::atomic<bool> stop{false};
-  std::vector<std::array<unsigned char, 12>> headers;
+  std::vector<RtpHeader> headers;
   std::thread drain([&] { headers = drain_video(video_socket, stop); });
   const ProcessResult result =
       spawn_and_wait(binary, {"--config", config_path.string()}, timeout_ms);
@@ -216,14 +191,10 @@ int run_source_case(const std::string& binary, const std::string& model_path,
     return 1;
   }
   // Insight draws each message's boxes on the video frame its timestamp names.
-  std::set<uint32_t> rtp_timestamps;
-  for (const auto& header : headers) {
-    rtp_timestamps.insert(static_cast<uint32_t>(header[4]) << 24 | header[5] << 16 |
-                          header[6] << 8 | header[7]);
-  }
+  const std::set<uint32_t> timestamps = rtp_timestamps(headers);
   for (const auto* batch : {&metadata.messages, &following.messages, &rest.messages}) {
     for (const auto& message : *batch) {
-      if (!pairs(message.timestamp_ms, rtp_timestamps)) {
+      if (!pairs(message.timestamp_ms, timestamps)) {
         std::cerr << "[FAIL] " << label << " sent metadata timestamp " << message.timestamp_ms
                   << " that no video frame carries\n";
         return 1;
