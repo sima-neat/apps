@@ -11,7 +11,11 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
 
 
 def find_images(folder: Path) -> list[Path]:
-    images = sorted(path for path in folder.iterdir() if path.suffix.lower() in IMAGE_EXTENSIONS)
+    images = sorted(
+        path
+        for path in folder.iterdir()
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
     if not images:
         raise ValueError(f"input.source: no .jpg, .jpeg, .png, or .bmp images in {folder}")
     return images

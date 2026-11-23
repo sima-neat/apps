@@ -86,6 +86,8 @@ bool test_find_images_keeps_image_files_in_name_order() {
   for (const char* name : {"b.PNG", "a.jpg", "c.jpeg", "d.bmp", "notes.txt", "e.gif"}) {
     std::ofstream(folder / name).put('\0');
   }
+  // A folder is not an image, whatever its name ends with.
+  fs::create_directories(folder / "archive.jpg");
   std::vector<std::string> names;
   for (const auto& path : pcb::find_images(folder)) {
     names.push_back(path.filename().string());

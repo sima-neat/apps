@@ -14,6 +14,9 @@ namespace pcb {
 std::vector<fs::path> find_images(const fs::path& folder) {
   std::vector<fs::path> images;
   for (const auto& entry : fs::directory_iterator(folder)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
     std::string extension = entry.path().extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });

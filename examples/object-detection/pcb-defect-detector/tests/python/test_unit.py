@@ -58,6 +58,8 @@ def test_test_scope_downloads_the_configured_model():
 def test_find_images_keeps_image_files_in_name_order(tmp_path: Path):
     for name in ("b.PNG", "a.jpg", "c.jpeg", "d.bmp", "notes.txt", "e.gif"):
         (tmp_path / name).write_bytes(b"")
+    # A folder is not an image, whatever its name ends with.
+    (tmp_path / "archive.jpg").mkdir()
     assert [path.name for path in images.find_images(tmp_path)] == [
         "a.jpg", "b.PNG", "c.jpeg", "d.bmp"]
 
