@@ -54,8 +54,8 @@ bool valid_segments(const MetadataJsonListenerResult& result) {
   return true;
 }
 
-int run_case(const std::string& binary, const fs::path& model, const fs::path& text_encoder,
-             const StreamSourceCase& source_case, const std::string& rtsp_url) {
+int run_case(const std::string& binary, const fs::path& model, const StreamSourceCase& source_case,
+             const std::string& rtsp_url) {
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
@@ -68,14 +68,13 @@ int run_case(const std::string& binary, const fs::path& model, const fs::path& t
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
   write_e2e_config(kExampleName, config_path,
                    {{"model.path", fs::absolute(model).string()},
-                    {"model.text_encoder", fs::absolute(text_encoder).string()},
-                    {"prompt.text", "person"},
-                    {"source.rtsp_url", rtsp_url},
-                    {"source.codec", source_case.codec},
+                    {"input.source", rtsp_url},
+                    {"input.codec", source_case.codec},
                     {"inference.frames", std::to_string(kFrames)},
                     {"output.insight.host", "127.0.0.1"},
-                    {"output.insight.video_port", std::to_string(video_port)},
-                    {"output.insight.metadata_port", std::to_string(metadata_port)}});
+                    {"output.insight.video_port_base", std::to_string(video_port)},
+                    {"output.insight.metadata_port_base", std::to_string(metadata_port)},
+                    {"app.prompt", "person"}});
 
   MetadataJsonListenerOptions options;
   options.host = "127.0.0.1";
@@ -155,6 +154,7 @@ int main(int argc, char** argv) {
   const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
   const fs::path model = models_dir / "efficientsam3_mpk.tar.gz";
+  // The application finds the text encoder next to the model.
   const fs::path text_encoder = models_dir / "efficientsam3_text_encoder_mpk.tar.gz";
   if (!fs::exists(model) || !fs::exists(text_encoder)) {
     return skip_or_fail("missing EfficientSAM3 artifacts under SIMANEAT_APPS_TEST_MODELS_DIR");
@@ -167,6 +167,6 @@ int main(int argc, char** argv) {
   return run_single_stream_source_cases(
       "EfficientSAM3", source_cases,
       [&](const StreamSourceCase& source_case, const std::string& rtsp_url) {
-        return run_case(binary, model, text_encoder, source_case, rtsp_url);
+        return run_case(binary, model, source_case, rtsp_url);
       });
 }

@@ -29,7 +29,6 @@ PENDING_EXAMPLES = {
     "depth-estimator",
     "detection-to-vlm-assistant",
     "detr-object-detector",
-    "efficientsam3-promptable-segmenter",
     "face-detector",
     "face-recognizer",
     "fastflow-anomaly-detector",

@@ -1,35 +1,31 @@
 // Copyright 2026 SiMa Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * @example efficientsam3-promptable-segmenter.cpp
- * Single-stream RTSP promptable segmentation with EfficientSAM3 and Insight output.
- */
-#include "clip_tokenizer.h"
+// Segments what a text prompt names in one RTSP stream with EfficientSAM3 and shows it in
+// Insight. The text encoder turns the prompt into text features once, at startup. The decoded
+// frames go to Insight's video and to the host, which hands the newest one, with the text
+// features, to the segmentation model. Insight receives every frame's instance outlines.
+
 #include "neat.h"
 #include "sima_examples/config.h"
 #include "sima_examples/example_utils.h"
+#include "sima_examples/pull_status.h"
 #include "sima_examples/rtsp_probe.h"
+#include "sima_examples/stop_signals.h"
+#include "utils/clip_tokenizer.h"
+#include "utils/efficientsam3.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
-#include <nlohmann/json.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
-#include <opencv2/videoio.hpp>
-
 #include <algorithm>
-#include <array>
-#include <cctype>
-#include <cmath>
-#include <csignal>
+#include <atomic>
 #include <cstdint>
-#include <cstdlib>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <iostream>
-#include <numeric>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -38,92 +34,43 @@
 
 namespace fs = std::filesystem;
 namespace neat = simaai::neat;
+namespace groups = simaai::neat::nodes::groups;
 
 namespace {
 
-constexpr int kPullTimeoutMs = 20000;
-constexpr int kModelSize = 1008;
-constexpr int kTextTokens = 16;
-constexpr int kTextDim = 256;
-constexpr int kVocabSize = 49408;
-// Three frames on the model keep the MLA busy while the host prepares and reads frames (13 FPS; 11
-// FPS with two).
-constexpr int kPipelineDepth = 3;
-// MetadataSender rejects a message above 65507 bytes; half of it leaves room for the envelope.
-constexpr std::size_t kMetadataByteBudget = 32'768;
-// The model sometimes returns one object twice, e.g. a whole person and their upper body. An
-// instance whose box overlaps a higher-scoring one by more than this intersection-over-union is
-// dropped as a duplicate.
-constexpr double kDuplicateIou = 0.6;
-
-volatile std::sig_atomic_t g_stop_requested = 0;
-
-void request_stop(int) {
-  g_stop_requested = 1;
-}
-
-struct Config {
-  std::string model_path;
-  std::string text_encoder;
-  std::string prompt;
-  std::string rtsp_url;
-  std::string codec = "h264";
-  bool tcp = true;
-  int latency_ms = 100;
-  int frames = 0;
-  double min_score = 0.3;
-  int max_detections = 20;
-  double mask_threshold = 0.5;
-  bool profile = false;
-  int profile_interval = 100;
-  std::string insight_host;
-  int video_port = 9000;
-  int metadata_port = 9100;
-  std::string save_dir;
-  int save_every = 0;
+// The text encoder package sits next to the segmentation model that model.path names.
+constexpr const char* kTextEncoderPackage = "efficientsam3_text_encoder_mpk.tar.gz";
+const std::map<std::string, groups::RtspCodec> kRtspCodecs = {
+    {"h264", groups::RtspCodec::H264},
+    {"h265", groups::RtspCodec::H265},
 };
+constexpr int kPullTimeoutMs = 100;
+// The text encoder reads 16 tokens, each one-hot over the CLIP vocabulary, and returns 256
+// features per token.
+constexpr int kTextTokens = 16;
+constexpr int kVocabSize = 49408;
+constexpr int kTextDim = 256;
+// Three frames on the model keep the MLA busy while the host prepares and reads frames (13 FPS;
+// 11 FPS with two).
+constexpr int kPipelineDepth = 3;
 
-std::string lowercase(std::string text) {
-  std::transform(text.begin(), text.end(), text.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return text;
+fs::path parse_args(int argc, char** argv) {
+  const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
+  fs::path config_path = fs::exists(adjacent_config)
+                             ? adjacent_config
+                             : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--config" && i + 1 < argc) {
+      config_path = argv[++i];
+    } else {
+      throw std::runtime_error("usage: " + std::string(argv[0]) + " [--config <path>]");
+    }
+  }
+  return config_path;
 }
 
-Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::Config::load(path);
-  Config cfg;
-  cfg.model_path = raw.string_or("model.path", "");
-  cfg.text_encoder = raw.string_or("model.text_encoder", "");
-  cfg.prompt = raw.string_or("prompt.text", "");
-  cfg.rtsp_url = raw.string_or("source.rtsp_url", "");
-  const std::string codec = lowercase(raw.string_or("source.codec", "h264"));
-  cfg.codec = codec == "avc" ? "h264" : codec == "hevc" ? "h265" : codec;
-  cfg.tcp = raw.bool_or("source.tcp", true);
-  cfg.latency_ms = raw.int_or("source.latency_ms", 100);
-  cfg.frames = raw.int_or("inference.frames", 0);
-  cfg.min_score = raw.double_or("inference.min_score", 0.3);
-  cfg.max_detections = raw.int_or("inference.max_detections", 20);
-  cfg.mask_threshold = raw.double_or("inference.mask_threshold", 0.5);
-  cfg.profile = raw.bool_or("runtime.profile", false);
-  cfg.profile_interval = raw.int_or("runtime.profile_interval", 100);
-  cfg.insight_host = raw.string_or("output.insight.host", "");
-  cfg.video_port = raw.int_or("output.insight.video_port", 9000);
-  cfg.metadata_port = raw.int_or("output.insight.metadata_port", 9100);
-  cfg.save_dir = raw.string_or("output.save_dir", "");
-  cfg.save_every = raw.int_or("output.save_every", 0);
-  sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
-                         "inference.min_score must be in [0, 1]");
-  sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
-  sima_examples::require(cfg.mask_threshold >= 0.0 && cfg.mask_threshold <= 1.0,
-                         "inference.mask_threshold must be in [0, 1]");
-  sima_examples::require(cfg.profile_interval > 0, "runtime.profile_interval must be > 0");
-  sima_examples::require(cfg.codec == "h264" || cfg.codec == "h265",
-                         "source.codec must be h264 or h265");
-  return cfg;
-}
-
-// -------------------------------------------------------------------------------- pipeline
-
+// A model input in EV74 memory, copied from the values.
 neat::Tensor ev74_tensor(const std::vector<float>& values, std::vector<int64_t> shape) {
   neat::Tensor tensor =
       neat::Tensor::from_vector(values, std::move(shape), neat::TensorMemory::EV74);
@@ -131,29 +78,16 @@ neat::Tensor ev74_tensor(const std::vector<float>& values, std::vector<int64_t> 
   return tensor;
 }
 
-// Tokenizes the prompt, rejecting one that the text encoder would not see whole.
-std::vector<int64_t> prompt_tokens(const std::string& prompt) {
-  const ClipTokenizer tokenizer(
-      sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).parent_path() /
-      "bpe_simple_vocab_16e6.txt.gz");
-  const std::size_t count = tokenizer.tokens(prompt).size();
-  sima_examples::require(count > 0, "prompt.text must name what to segment");
-  sima_examples::require(count <= static_cast<std::size_t>(kTextTokens - 2),
-                         "prompt.text is " + std::to_string(count) +
-                             " tokens; the text encoder reads at most " +
-                             std::to_string(kTextTokens - 2) + ", so shorten it");
-  return tokenizer.encode(prompt, kTextTokens);
-}
-
-std::vector<float> encode_prompt(const Config& cfg, const std::vector<int64_t>& tokens) {
+// The segmentation model's text input: the encoder's features of each token, then a row that
+// marks the prompt's tokens.
+std::vector<float> text_features(neat::Model& text_encoder, const std::vector<int64_t>& tokens) {
   // The MLA cannot look up token ids, so the text encoder takes them one-hot.
   std::vector<float> one_hot(static_cast<std::size_t>(kTextTokens) * kVocabSize, 0.0F);
   for (int i = 0; i < kTextTokens; ++i) {
     one_hot[static_cast<std::size_t>(i) * kVocabSize + tokens[i]] = 1.0F;
   }
   const neat::Tensor input = ev74_tensor(one_hot, {1, kTextTokens, kVocabSize});
-  neat::Model model(cfg.text_encoder);
-  neat::Model::Runner encoder = model.build(neat::TensorList{input});
+  neat::Model::Runner encoder = text_encoder.build(neat::TensorList{input});
   encoder.push(neat::TensorList{input});
   const std::vector<float> features = sima_examples::tensor_to_floats(encoder.pull().tensors.at(0));
   encoder.close();
@@ -165,84 +99,79 @@ std::vector<float> encode_prompt(const Config& cfg, const std::vector<int64_t>& 
   return text;
 }
 
-// The codec of an OpenCV FOURCC value, or "" when it is not one this application decodes.
-std::string fourcc_codec(double fourcc) {
-  std::string tag;
-  for (int i = 0; i < 4; ++i) {
-    tag += static_cast<char>((static_cast<int>(fourcc) >> (8 * i)) & 0xFF);
-  }
-  tag = lowercase(tag);
-  if (tag == "h264" || tag == "avc1") {
-    return "h264";
-  }
-  if (tag == "hevc" || tag == "hev1" || tag == "hvc1" || tag == "h265") {
-    return "h265";
-  }
-  return "";
+neat::RunOptions segmenter_run_options() {
+  neat::RunOptions options;
+  options.queue_depth = kPipelineDepth;
+  return options;
 }
 
-sima_examples::RtspStreamInfo probe_stream(const Config& cfg) {
-  sima_examples::RtspProbeOptions options;
-  options.latency_ms = cfg.latency_ms;
-  options.rtsp_tcp = cfg.tcp;
-  sima_examples::RtspStreamInfo stream;
-  sima_examples::require(sima_examples::probe_rtsp_stream_info(cfg.rtsp_url, options, stream) &&
-                             stream.width > 0 && stream.height > 0 && stream.fps > 0,
-                         "could not read the frame size and rate of " + cfg.rtsp_url);
-  // The decoder accepts only the configured codec; another codec would fail only after the models
-  // load.
-  if (cfg.tcp) {
-    setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp", 1);
-  }
-  cv::VideoCapture capture(cfg.rtsp_url, cv::CAP_FFMPEG);
-  const std::string stream_codec = fourcc_codec(capture.get(cv::CAP_PROP_FOURCC));
-  capture.release();
-  sima_examples::require(stream_codec.empty() || stream_codec == cfg.codec,
-                         cfg.rtsp_url + " is " + stream_codec + ", but source.codec is " +
-                             cfg.codec);
-  return stream;
-}
-
-struct Source {
-  neat::Graph graph; // the run refers to the graph, so it lives here until the run closes
-  neat::Run run;
-};
-
-Source build_source(const Config& cfg, int width, int height, int fps) {
-  neat::nodes::groups::RtspDecodedInputOptions source;
-  source.url = cfg.rtsp_url;
-  source.tcp = cfg.tcp;
-  source.latency_ms = cfg.latency_ms;
-  if (cfg.codec == "h264") {
-    source.fallback_h264_width = width;
-    source.fallback_h264_height = height;
-    source.fallback_h264_fps = fps;
+// Receive the stream and decode it to NV12 frames of the stream's size.
+groups::RtspDecodedInputOptions rtsp_options(const sima_examples::Config& config,
+                                             const sima_examples::RtspStreamInfo& stream) {
+  groups::RtspDecodedInputOptions options;
+  options.url = config.string("input.source");
+  options.codec = config.choice("input.codec", kRtspCodecs);
+  options.tcp = config.boolean("input.rtsp.tcp");
+  options.latency_ms = config.integer("input.rtsp.latency_ms");
+  if (options.codec == groups::RtspCodec::H264) {
+    options.fallback_h264_width = stream.width;
+    options.fallback_h264_height = stream.height;
+    options.fallback_h264_fps = stream.fps;
   } else {
-    source.codec = neat::nodes::groups::RtspCodec::H265;
-    source.auto_caps_from_stream = true;
-    source.dec_width = width;
-    source.dec_height = height;
-    source.source_fps = fps;
+    options.dec_width = stream.width;
+    options.dec_height = stream.height;
+    options.source_fps = stream.fps;
   }
-
-  auto video = neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = fps});
-  video.host = cfg.insight_host;
-  video.video_port_base = cfg.video_port;
-
-  neat::OutputOptions frames = neat::OutputOptions::EveryFrame(8);
-  frames.drop = true;
-
-  Source built;
-  const neat::Graph decoded = neat::nodes::groups::RtspDecodedInput(source);
-  built.graph.connect(decoded, neat::nodes::groups::VideoSender(video));
-  built.graph.connect(decoded, neat::nodes::Output("frame", frames));
-  neat::RunOptions run_options;
-  run_options.preset = neat::RunPreset::Realtime;
-  run_options.queue_depth = 3;
-  built.run = built.graph.build(run_options);
-  return built;
+  return options;
 }
 
+// The decoded frames, encoded as H.264 for Insight.
+groups::VideoSenderOptions video_options(const sima_examples::Config& config,
+                                         const sima_examples::RtspStreamInfo& stream) {
+  neat::SimaEncodeOptions encode;
+  encode.fps = stream.fps;
+  auto options = groups::VideoSenderOptions::FromRaw(encode);
+  options.host = config.string("output.insight.host");
+  options.video_port_base = config.integer("output.insight.video_port_base");
+  return options;
+}
+
+// Hold up to 8 decoded frames for the host, dropping the oldest when the host falls behind.
+neat::OutputOptions frames_options() {
+  neat::OutputOptions options = neat::OutputOptions::EveryFrame(8);
+  options.drop = true;
+  return options;
+}
+
+neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config) {
+  neat::MetadataSenderOptions options;
+  options.host = config.string("output.insight.host");
+  options.metadata_port_base = config.integer("output.insight.metadata_port_base");
+  return options;
+}
+
+neat::RunOptions run_options() {
+  neat::RunOptions options;
+  options.preset = neat::RunPreset::Realtime;
+  // One more queued frame than the Realtime preset's 2.
+  options.queue_depth = 3;
+  return options;
+}
+
+efficientsam3::SegmentOptions segment_options(const sima_examples::Config& config,
+                                              const sima_examples::RtspStreamInfo& stream,
+                                              const std::string& prompt) {
+  efficientsam3::SegmentOptions options;
+  options.width = stream.width;
+  options.height = stream.height;
+  options.label = prompt;
+  options.min_score = config.number("inference.min_score");
+  options.max_detections = config.integer("inference.max_detections");
+  options.mask_threshold = config.number("app.mask_threshold");
+  return options;
+}
+
+// The frame's NV12 bytes as height * 3 / 2 rows of width bytes.
 cv::Mat nv12(const neat::Tensor& tensor) {
   cv::Mat frame(tensor.height() * 3 / 2, tensor.width(), CV_8UC1);
   // contiguous() drops the row padding the decoder adds to some frames.
@@ -251,365 +180,166 @@ cv::Mat nv12(const neat::Tensor& tensor) {
   return frame;
 }
 
-void preprocess(const cv::Mat& frame, cv::Mat& out) {
-  const int height = frame.rows * 2 / 3;
-  const int width = frame.cols;
-  const bool shrink = width > kModelSize || height > kModelSize;
-  const int interpolation = shrink ? cv::INTER_AREA : cv::INTER_LINEAR;
-  cv::Mat y, uv, rgb;
-  cv::resize(frame.rowRange(0, height), y, {kModelSize, kModelSize}, 0, 0, interpolation);
-  const cv::Mat uv_plane(height / 2, width / 2, CV_8UC2, const_cast<uchar*>(frame.ptr(height)));
-  cv::resize(uv_plane, uv, {kModelSize / 2, kModelSize / 2}, 0, 0, interpolation);
-  cv::cvtColorTwoPlane(y, uv, rgb, cv::COLOR_YUV2RGB_NV12);
-  rgb.convertTo(out, CV_32FC3, 1.0 / 127.5, -1.0);
-}
-
-// ----------------------------------------------------------------------------- postprocess
-
-using Box = std::array<int, 4>; // x0, y0, x1, y1 in frame pixels
-
-// Python's round(): halves go to the even neighbour.
-int round_even(double value) {
-  return static_cast<int>(std::nearbyint(value));
-}
-
-std::vector<cv::Point> mask_outline(const cv::Mat& mask_logits, const Box& box, int width,
-                                    int height, float logit_threshold) {
-  const int mask_h = mask_logits.rows;
-  const int mask_w = mask_logits.cols;
-  const double cell_w = static_cast<double>(width) / mask_w;
-  const double cell_h = static_cast<double>(height) / mask_h;
-  const auto [x0, y0, x1, y1] = box;
-  const int mx0 = std::max(0, static_cast<int>(std::floor(x0 / cell_w)) - 1);
-  const int my0 = std::max(0, static_cast<int>(std::floor(y0 / cell_h)) - 1);
-  const int mx1 = std::min(mask_w, static_cast<int>(std::ceil(x1 / cell_w)) + 1);
-  const int my1 = std::min(mask_h, static_cast<int>(std::ceil(y1 / cell_h)) + 1);
-  const int out_x0 = round_even(mx0 * cell_w);
-  const int out_y0 = round_even(my0 * cell_h);
-  const cv::Size out_size(round_even(mx1 * cell_w) - out_x0, round_even(my1 * cell_h) - out_y0);
-  // Upscale the mask cells under the box before thresholding, as SAM 3 does, so the outline follows
-  // the interpolated mask.
-  cv::Mat upscaled;
-  cv::resize(mask_logits(cv::Range(my0, my1), cv::Range(mx0, mx1)), upscaled, out_size, 0, 0,
-             cv::INTER_LINEAR);
-  std::vector<std::vector<cv::Point>> contours;
-  cv::findContours(upscaled > logit_threshold, contours, cv::RETR_EXTERNAL,
-                   cv::CHAIN_APPROX_SIMPLE);
-  if (contours.empty()) {
-    return {};
-  }
-  const auto& largest =
-      *std::max_element(contours.begin(), contours.end(), [](const auto& a, const auto& b) {
-        return cv::contourArea(a) < cv::contourArea(b);
-      });
-  std::vector<cv::Point> polygon;
-  cv::approxPolyDP(largest, polygon, 0.004 * cv::arcLength(largest, true), true);
-  if (polygon.size() < 3) {
-    return {};
-  }
-  for (cv::Point& point : polygon) {
-    point += cv::Point(out_x0, out_y0);
-  }
-  return polygon;
-}
-
-struct Segment {
-  std::string id;
-  std::string label;
-  double confidence = 0.0;
-  Box box{};
-  std::vector<cv::Point> mask;
-};
-
-double box_iou(const Box& a, const Box& b) {
-  const double inter =
-      static_cast<double>(std::max(0, std::min(a[2], b[2]) - std::max(a[0], b[0]))) *
-      std::max(0, std::min(a[3], b[3]) - std::max(a[1], b[1]));
-  const double area_a = static_cast<double>(a[2] - a[0]) * (a[3] - a[1]);
-  const double area_b = static_cast<double>(b[2] - b[0]) * (b[3] - b[1]);
-  return inter / (area_a + area_b - inter);
-}
-
-// detections: queries x 6 (x1, y1, x2, y2, score, -) in model pixels; masks: mask_h x mask_w x
-// queries logits.
-std::vector<Segment> segments_of(const cv::Mat& detections, const cv::Mat& masks, const Config& cfg,
-                                 int width, int height) {
-  const auto logit_threshold =
-      static_cast<float>(std::log(cfg.mask_threshold / (1.0 - cfg.mask_threshold)));
-  std::vector<int> best(detections.rows);
-  std::iota(best.begin(), best.end(), 0);
-  std::stable_sort(best.begin(), best.end(), [&](int a, int b) {
-    return detections.at<float>(a, 4) > detections.at<float>(b, 4);
-  });
-  const double sx = static_cast<double>(width) / kModelSize;
-  const double sy = static_cast<double>(height) / kModelSize;
-  std::vector<Segment> segments;
-  int n = 0;
-  for (const int query : best) {
-    // Duplicates and empty masks are skipped, so the limit counts the instances sent.
-    if (segments.size() == static_cast<std::size_t>(cfg.max_detections)) {
-      break;
-    }
-    const float* row = detections.ptr<float>(query);
-    if (!(row[4] > static_cast<float>(cfg.min_score))) {
-      continue;
-    }
-    ++n;
-    const int x0 = std::clamp(static_cast<int>(std::floor(row[0] * sx)), 0, width - 1);
-    const int y0 = std::clamp(static_cast<int>(std::floor(row[1] * sy)), 0, height - 1);
-    const Box box{x0, y0,
-                  std::max(x0 + 1, std::min(width, static_cast<int>(std::ceil(row[2] * sx)))),
-                  std::max(y0 + 1, std::min(height, static_cast<int>(std::ceil(row[3] * sy))))};
-    if (std::any_of(segments.begin(), segments.end(),
-                    [&](const Segment& kept) { return box_iou(box, kept.box) > kDuplicateIou; })) {
-      continue;
-    }
-    cv::Mat mask_logits;
-    cv::extractChannel(masks, mask_logits, query);
-    std::vector<cv::Point> outline = mask_outline(mask_logits, box, width, height, logit_threshold);
-    if (!outline.empty()) {
-      segments.push_back({"seg_" + std::to_string(n), cfg.prompt,
-                          std::nearbyint(row[4] * 1e4) / 1e4, box, std::move(outline)});
-    }
-  }
-  return segments;
-}
-
-std::string segments_json(const std::vector<Segment>& segments) {
-  nlohmann::ordered_json items = nlohmann::ordered_json::array();
-  std::size_t size = sizeof(R"({"segments":[]})") - 1U;
-  for (const Segment& segment : segments) {
-    nlohmann::ordered_json mask = nlohmann::ordered_json::array();
-    for (const cv::Point& point : segment.mask) {
-      mask.push_back({point.x, point.y});
-    }
-    const auto& [x0, y0, x1, y1] = segment.box;
-    nlohmann::ordered_json item = {{"id", segment.id},
-                                   {"label", segment.label},
-                                   {"confidence", segment.confidence},
-                                   {"bbox", {x0, y0, x1 - x0, y1 - y0}},
-                                   {"mask_format", "polygon"},
-                                   {"mask", mask}};
-    size += item.dump().size() + 1U;
-    if (size > kMetadataByteBudget) {
-      break;
-    }
-    items.push_back(std::move(item));
-  }
-  return nlohmann::ordered_json{{"segments", items}}.dump();
-}
-
-// Insight draws metadata only on the frame with its timestamp, and the model segments every second
-// or third frame, so every frame is sent the result of the segmented frame nearest to it in time.
-class OverlayClock {
-public:
-  struct Message {
-    std::string data;
-    int64_t timestamp_ms;
-    std::string frame_id;
-  };
-
-  void add_frame(const neat::Sample& sample) {
-    waiting_.emplace_back(sample.pts_ns / 1'000'000, std::to_string(sample.frame_id));
-  }
-
-  std::vector<Message> add_result(int64_t pts_ms, const std::string& data) {
-    std::vector<Message> messages;
-    while (!waiting_.empty() && waiting_.front().first <= pts_ms) {
-      const auto [frame_pts, frame_id] = waiting_.front();
-      waiting_.pop_front();
-      const bool closer_to_previous =
-          previous_ && frame_pts - previous_->first < pts_ms - frame_pts;
-      messages.push_back({closer_to_previous ? previous_->second : data, frame_pts, frame_id});
-    }
-    previous_ = {pts_ms, data};
-    return messages;
-  }
-
-private:
-  std::deque<std::pair<int64_t, std::string>> waiting_;
-  std::optional<std::pair<int64_t, std::string>> previous_;
-};
-
-std::optional<neat::Sample> newest_frame(neat::Run& run, OverlayClock& overlay, int timeout_ms) {
+// The newest decoded frame, waiting up to `timeout_ms` for the first. Every frame pulled joins
+// the overlay, so it is sent a result too.
+std::optional<neat::Sample> newest_frame(neat::Run& run, efficientsam3::OverlayClock& overlay,
+                                         int timeout_ms) {
   std::optional<neat::Sample> newest;
-  while (std::optional<neat::Sample> sample = run.pull("frame", timeout_ms)) {
-    overlay.add_frame(*sample);
+  while (true) {
+    neat::Sample sample;
+    neat::PullError error;
+    const auto status = run.pull("frames", timeout_ms, sample, &error);
+    if (!sima_examples::pull_status_has_sample(status, "frames", error, run.last_error())) {
+      return newest;
+    }
+    overlay.add_frame(sample.pts_ns / 1'000'000, std::to_string(sample.frame_id));
     newest = std::move(sample);
     timeout_ms = 0;
   }
-  return newest;
 }
 
-void save_frame(const fs::path& path, const cv::Mat& frame, const std::vector<Segment>& segments) {
-  const cv::Scalar color(255, 191, 0);
-  cv::Mat bgr;
-  cv::cvtColor(frame, bgr, cv::COLOR_YUV2BGR_NV12);
-  std::vector<std::vector<cv::Point>> outlines;
-  for (const Segment& segment : segments) {
-    outlines.push_back(segment.mask);
-  }
-  cv::Mat filled = bgr.clone();
-  cv::fillPoly(filled, outlines, color);
-  cv::Mat annotated;
-  cv::addWeighted(filled, 0.5, bgr, 0.5, 0.0, annotated);
-  cv::polylines(annotated, outlines, true, color, 2);
-  for (const Segment& segment : segments) {
-    const auto [x0, y0, x1, y1] = segment.box;
-    cv::rectangle(annotated, cv::Point(x0, y0), cv::Point(x1, y1), color, 2);
-    cv::putText(annotated, segment.label + cv::format(" %.2f", segment.confidence),
-                cv::Point(x0, std::max(12, y0 - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
-                cv::LINE_AA);
-  }
-  if (!cv::imwrite(path.string(), annotated)) {
-    std::cerr << "[warn] failed to write output frame: " << path.string() << "\n";
-  }
-}
-
-// ------------------------------------------------------------------------------------- run
-
-void run(const Config& cfg) {
-  // Check the prompt and the stream first: loading the two models takes about a minute.
-  const std::vector<int64_t> tokens = prompt_tokens(cfg.prompt);
-  const sima_examples::RtspStreamInfo stream = probe_stream(cfg);
-  const neat::Tensor text_tensor =
-      ev74_tensor(encode_prompt(cfg, tokens), {1, kTextTokens + 1, kTextDim});
-  neat::RunOptions model_options;
-  model_options.queue_depth = kPipelineDepth;
+// Segment the newest frame whenever the model has room, and send every frame the nearest result,
+// until `frames` results (0: no limit) or a stop signal; return the count.
+int segment_frames(neat::Run& run, neat::Model::Runner& segmenter, const neat::Tensor& text,
+                   const neat::MetadataSender& metadata_sender,
+                   const efficientsam3::SegmentOptions& options, int frames,
+                   const std::atomic<bool>& stop) {
+  // Each frame on the model keeps its own image tensor, and one more is filled meanwhile.
   std::vector<neat::Tensor> images;
   for (int i = 0; i <= kPipelineDepth; ++i) {
-    images.push_back(ev74_tensor(std::vector<float>(kModelSize * kModelSize * 3, 0.0F),
-                                 {kModelSize, kModelSize, 3}));
+    images.push_back(ev74_tensor(
+        std::vector<float>(efficientsam3::kModelSize * efficientsam3::kModelSize * 3, 0.0F),
+        {efficientsam3::kModelSize, efficientsam3::kModelSize, 3}));
   }
-  neat::Model model(cfg.model_path);
-  neat::Model::Runner runner = model.build(neat::TensorList{images[0], text_tensor},
-                                           neat::Model::RouteOptions{}, model_options);
-  const int width = stream.width;
-  const int height = stream.height;
-  Source source = build_source(cfg, width, height, stream.fps);
-  neat::MetadataSenderOptions metadata_options;
-  metadata_options.host = cfg.insight_host;
-  metadata_options.metadata_port_base = cfg.metadata_port;
-  const neat::MetadataSender metadata(metadata_options);
-  std::cout << "rtsp=" << cfg.rtsp_url << " stream=" << width << "x" << height << "@" << stream.fps
-            << " codec=" << cfg.codec << " prompt='" << cfg.prompt << "' tokens="
-            << std::count_if(tokens.begin(), tokens.end(), [](int64_t id) { return id != 0; })
-            << " insight=" << cfg.insight_host << " video=" << cfg.video_port
-            << " metadata=" << cfg.metadata_port << " channel=0" << std::endl;
-
-  OverlayClock overlay;
-  std::deque<std::pair<int64_t, std::optional<cv::Mat>>> in_flight;
+  efficientsam3::OverlayClock overlay;
+  std::deque<int64_t> in_flight; // The presentation time, in ms, of each frame on the model.
   int pushed = 0;
   int processed = 0;
-  int window_instances = 0;
-  double window_start_ms = sima_examples::time_ms();
-  g_stop_requested = 0;
-  const auto previous_sigint = std::signal(SIGINT, request_stop);
-  const auto finish = [&] {
-    std::signal(SIGINT, previous_sigint);
-    source.run.close();
-    runner.close();
-    std::cout << "processed=" << processed << " video_sender=" << cfg.insight_host << ":"
-              << cfg.video_port << std::endl;
-  };
-  try {
-    while (g_stop_requested == 0 && (cfg.frames <= 0 || processed < cfg.frames)) {
-      if (static_cast<int>(in_flight.size()) < kPipelineDepth) {
-        std::optional<neat::Sample> sample =
-            newest_frame(source.run, overlay, in_flight.empty() ? kPullTimeoutMs : 0);
-        sima_examples::require(sample || !in_flight.empty(), "timed out waiting for a frame");
-        if (sample) {
-          const cv::Mat frame = nv12(sample->tensors.at(0));
-          const neat::Tensor& image = images[pushed % images.size()];
-          {
-            neat::Mapping mapping = image.map_write();
-            cv::Mat out(kModelSize, kModelSize, CV_32FC3, mapping.data);
-            preprocess(frame, out);
-          }
-          runner.push(neat::TensorList{image, text_tensor});
-          ++pushed;
-          const bool save =
-              !cfg.save_dir.empty() && cfg.save_every > 0 && pushed % cfg.save_every == 0;
-          in_flight.emplace_back(sample->pts_ns / 1'000'000,
-                                 save ? std::optional<cv::Mat>(frame) : std::nullopt);
-          continue;
+  while (!stop && (frames == 0 || processed < frames)) {
+    if (static_cast<int>(in_flight.size()) < kPipelineDepth) {
+      const std::optional<neat::Sample> sample =
+          newest_frame(run, overlay, in_flight.empty() ? kPullTimeoutMs : 0);
+      if (sample) {
+        const neat::Tensor& image = images[pushed % images.size()];
+        {
+          neat::Mapping mapping = image.map_write();
+          cv::Mat out(efficientsam3::kModelSize, efficientsam3::kModelSize, CV_32FC3, mapping.data);
+          efficientsam3::preprocess(nv12(sample->tensors.at(0)), out);
         }
+        segmenter.push(neat::TensorList{image, text});
+        ++pushed;
+        in_flight.push_back(sample->pts_ns / 1'000'000);
+        continue;
       }
-
-      const neat::Sample result = runner.pull();
-      sima_examples::require(result.tensors.size() == 2, "model returned no result");
-      const auto [pts_ms, saved_frame] = in_flight.front();
-      in_flight.pop_front();
-      const neat::Tensor& detections = result.tensors[0];
-      const neat::Tensor& masks = result.tensors[1];
-      const neat::Mapping detections_view = detections.view_read();
-      const neat::Mapping masks_view = masks.view_read();
-      const std::size_t mask_rank = masks.shape.size();
-      const auto queries = static_cast<int>(masks.shape.at(mask_rank - 1));
-      const cv::Mat detection_rows(queries, static_cast<int>(detections.shape.back()), CV_32F,
-                                   detections_view.data);
-      const cv::Mat mask_planes(static_cast<int>(masks.shape.at(mask_rank - 3)),
-                                static_cast<int>(masks.shape.at(mask_rank - 2)), CV_32FC(queries),
-                                masks_view.data);
-      const std::vector<Segment> segments =
-          segments_of(detection_rows, mask_planes, cfg, width, height);
-      for (const auto& message : overlay.add_result(pts_ms, segments_json(segments))) {
-        std::string error;
-        if (!metadata.send_metadata("segmentation", message.data, message.timestamp_ms,
-                                    message.frame_id, &error) &&
-            !error.empty()) {
-          throw std::runtime_error("Insight metadata send failed: " + error);
-        }
-      }
-
-      ++processed;
-      window_instances += static_cast<int>(segments.size());
-      if (saved_frame) {
-        save_frame(fs::path(cfg.save_dir) / ("frame_" + std::to_string(processed) + ".jpg"),
-                   *saved_frame, segments);
-      }
-      if (cfg.profile && processed % cfg.profile_interval == 0) {
-        const double elapsed_s = (sima_examples::time_ms() - window_start_ms) / 1000.0;
-        std::cout << cv::format("[profile] frames=%d segmentation_fps=%.1f avg_instances=%.2f",
-                                cfg.profile_interval, cfg.profile_interval / elapsed_s,
-                                static_cast<double>(window_instances) / cfg.profile_interval)
-                  << std::endl;
-        window_start_ms = sima_examples::time_ms();
-        window_instances = 0;
+      if (in_flight.empty()) {
+        continue;
       }
     }
-  } catch (...) {
-    finish();
-    throw;
+
+    const neat::Sample result = segmenter.pull();
+    sima_examples::require(result.tensors.size() == 2, "the segmentation model returned no result");
+    const neat::Tensor& detections = result.tensors[0];
+    const neat::Tensor& masks = result.tensors[1];
+    const neat::Mapping detections_view = detections.view_read();
+    const neat::Mapping masks_view = masks.view_read();
+    const std::size_t mask_rank = masks.shape.size();
+    const auto queries = static_cast<int>(masks.shape.at(mask_rank - 1));
+    const cv::Mat detection_rows(queries, static_cast<int>(detections.shape.back()), CV_32F,
+                                 detections_view.data);
+    const cv::Mat mask_planes(static_cast<int>(masks.shape.at(mask_rank - 3)),
+                              static_cast<int>(masks.shape.at(mask_rank - 2)), CV_32FC(queries),
+                              masks_view.data);
+    const std::string data = efficientsam3::segments_json(
+        efficientsam3::segments_of(detection_rows, mask_planes, options));
+    for (const auto& message : overlay.add_result(in_flight.front(), data)) {
+      // A nonblocking send drops the message while the socket buffer is full; the drops are
+      // counted in the sender's stats and reported when the run ends. Any other failure throws.
+      std::string send_error;
+      if (!metadata_sender.send_metadata("segmentation", message.data, message.timestamp_ms,
+                                         message.frame_id, &send_error) &&
+          !send_error.empty()) {
+        throw std::runtime_error("metadata send failed: " + send_error);
+      }
+    }
+    in_flight.pop_front();
+    ++processed;
   }
-  finish();
+  return processed;
+}
+
+int run_app(const fs::path& config_path) {
+  const auto config = sima_examples::Config::load(config_path);
+  // Check the prompt and the stream first: loading the two models takes about a minute.
+  const std::string prompt = config.string("app.prompt");
+  // The CLIP vocabulary ships in src/common/, next to the default config.
+  const ClipTokenizer tokenizer(
+      sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).parent_path() /
+      "bpe_simple_vocab_16e6.txt.gz");
+  const std::vector<int64_t> tokens = prompt_tokens(tokenizer, prompt, kTextTokens);
+  // The stream's size and rate come from the probe for each value the config leaves at 0.
+  const auto stream = sima_examples::probe_rtsp_stream_info(
+      config.string("input.source"), config.boolean("input.rtsp.tcp"),
+      {config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")});
+  const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
+  neat::Model text_encoder((model_path.parent_path() / kTextEncoderPackage).string());
+  const neat::Tensor text =
+      ev74_tensor(text_features(text_encoder, tokens), {1, kTextTokens + 1, kTextDim});
+  const neat::Tensor image = ev74_tensor(
+      std::vector<float>(efficientsam3::kModelSize * efficientsam3::kModelSize * 3, 0.0F),
+      {efficientsam3::kModelSize, efficientsam3::kModelSize, 3});
+  neat::Model model(model_path.string());
+  neat::Model::Runner segmenter = model.build(neat::TensorList{image, text},
+                                              neat::Model::RouteOptions{}, segmenter_run_options());
+
+  auto source = groups::RtspDecodedInput(rtsp_options(config, stream));
+  neat::Graph graph;
+  graph.connect(source, groups::VideoSender(video_options(config, stream)));
+  graph.connect(source, neat::nodes::Output("frames", frames_options()));
+
+  std::string metadata_error;
+  neat::MetadataSender metadata_sender(metadata_options(config), &metadata_error);
+  sima_examples::require(metadata_sender.ok(), metadata_error);
+  std::atomic<bool>& stop = sima_examples::stop_on_signals();
+  neat::Run run = graph.build(run_options());
+  const std::string host = config.string("output.insight.host");
+  const int video_port = config.integer("output.insight.video_port_base");
+  std::cout << "source=" << config.string("input.source")
+            << " codec=" << config.string("input.codec") << " stream=" << stream.width << "x"
+            << stream.height << "@" << stream.fps << " prompt='" << prompt << "' tokens="
+            << std::count_if(tokens.begin(), tokens.end(), [](int64_t id) { return id != 0; })
+            << " insight=" << host << " video=" << video_port
+            << " metadata=" << config.integer("output.insight.metadata_port_base") << std::endl;
+  int processed = 0;
+  std::exception_ptr segment_error;
+  try {
+    processed = segment_frames(run, segmenter, text, metadata_sender,
+                               segment_options(config, stream, prompt),
+                               config.integer("inference.frames"), stop);
+  } catch (...) {
+    segment_error = std::current_exception();
+  }
+  run.close();
+  segmenter.close();
+  if (segment_error) {
+    std::rethrow_exception(segment_error);
+  }
+
+  std::cout << "processed=" << processed << " video_sender=" << host << ":" << video_port
+            << std::endl;
+  const auto failures = metadata_sender.stats().send_failures;
+  if (failures > 0) {
+    std::cout << failures << " metadata messages dropped" << std::endl;
+  }
+  return 0;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
   try {
-    fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
-    for (int i = 1; i < argc; ++i) {
-      const std::string arg = argv[i];
-      if (arg == "--config") {
-        sima_examples::require(i + 1 < argc, "--config requires a path");
-        config_path = argv[++i];
-      } else if (arg == "--help" || arg == "-h") {
-        std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
-        return 0;
-      } else {
-        throw std::runtime_error("unknown argument: " + arg);
-      }
-    }
-    const Config cfg = load_config(config_path);
-    if (!cfg.save_dir.empty()) {
-      fs::create_directories(cfg.save_dir);
-    }
-    run(cfg);
-    return 0;
-  } catch (const std::exception& e) {
-    std::cerr << "[ERR] " << e.what() << "\n";
+    return run_app(parse_args(argc, argv));
+  } catch (const std::exception& error) {
+    std::cerr << "[ERR] " << error.what() << "\n";
     return 1;
   }
 }
