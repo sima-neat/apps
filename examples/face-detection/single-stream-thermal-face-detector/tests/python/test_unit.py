@@ -130,6 +130,8 @@ def test_decode_faces_rejects_heads_it_cannot_pair():
 def test_letterbox_centers_the_frame_on_the_canvas():
     assert yolov5_face.letterbox(1600, 900) == (0.5, 0, 175)
     assert yolov5_face.letterbox(640, 512) == (1.25, 0, 80)
+    # 901 x 0.5 = 450.5 rounds half away from zero to 451, as std::round does in C++.
+    assert yolov5_face.letterbox(1600, 901) == (0.5, 0, 174)
 
 
 def test_to_frame_maps_canvas_pixels_to_the_frame_and_clips_only_boxes():

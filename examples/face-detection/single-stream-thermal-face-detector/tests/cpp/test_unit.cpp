@@ -224,8 +224,11 @@ bool test_decode_faces_rejects_heads_it_cannot_pair() {
 bool test_letterbox_centers_the_frame_on_the_canvas() {
   const auto wide = yolov5_face::letterbox(1600, 900);
   const auto tall = yolov5_face::letterbox(640, 512);
+  // 901 x 0.5 = 450.5 rounds half away from zero to 451, as Python's letterbox does too.
+  const auto half = yolov5_face::letterbox(1600, 901);
   return expect_true(wide.scale == 0.5f && wide.pad_left == 0 && wide.pad_top == 175 &&
-                         tall.scale == 1.25f && tall.pad_left == 0 && tall.pad_top == 80,
+                         tall.scale == 1.25f && tall.pad_left == 0 && tall.pad_top == 80 &&
+                         half.pad_top == 174,
                      "the letterbox scale and padding center the frame");
 }
 

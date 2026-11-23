@@ -9,6 +9,7 @@ BBOX format has no landmark slots, so the decode runs here instead of in a Neat 
 from __future__ import annotations
 
 import json
+import math
 from typing import NamedTuple
 
 import numpy as np
@@ -53,8 +54,9 @@ class Faces(NamedTuple):
 def letterbox(frame_w: int, frame_h: int) -> Letterbox:
     """The centered letterbox the model's preprocessing applies to a frame of this size."""
     scale = min(INFER_SIZE / frame_w, INFER_SIZE / frame_h)
-    pad_left = (INFER_SIZE - round(frame_w * scale)) // 2
-    pad_top = (INFER_SIZE - round(frame_h * scale)) // 2
+    # Half away from zero, as std::round in C++; Python's round() rounds half to even.
+    pad_left = (INFER_SIZE - math.floor(frame_w * scale + 0.5)) // 2
+    pad_top = (INFER_SIZE - math.floor(frame_h * scale + 0.5)) // 2
     return Letterbox(scale, pad_left, pad_top)
 
 
