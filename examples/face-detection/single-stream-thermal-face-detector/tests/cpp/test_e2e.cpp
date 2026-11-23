@@ -65,7 +65,8 @@ int main(int argc, char** argv) {
   }
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
+  // Absolute, because a relative model.path starts at the config file, not the working directory.
+  const std::string models_dir = fs::absolute(models_dir_raw ? models_dir_raw : "models").string();
   const std::string model_path =
       configured_model_path("single-stream-thermal-face-detector", models_dir);
   if (model_path.empty() || !fs::exists(model_path)) {
