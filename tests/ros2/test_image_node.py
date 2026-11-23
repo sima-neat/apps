@@ -290,13 +290,19 @@ def test_finished_source_can_disconnect_after_initial_readiness(nodes):
     assert node.error is None and node.completed == 2
 
 
+PACKER_ENTRIES = sorted(path for path in (Path(__file__).resolve().parents[2] / "examples/ros2").glob("*/*/src/python/*.py")
+                        if path.name in ("input_node.py", "camera_image.py", "image_transport.py")
+                        and "\ndef pack_image(" in path.read_text())
+
+
+@pytest.mark.parametrize("entry", PACKER_ENTRIES, ids=lambda path: path.parents[2].name)
+@pytest.mark.parametrize("output_encoding", ["native", "bgr8"])
 @pytest.mark.parametrize("encoding", ["nv12", "nv16"])
-def test_decoder_plane_padding_is_removed_before_ros_transport(encoding):
+def test_decoder_plane_padding_is_removed_before_ros_transport(entry, output_encoding, encoding):
+    import cv2
     from builtin_interfaces.msg import Time
-    image_tensor, planar_array = transport.image_tensor, transport.planar_array
-    pack_image = load_node(Path(__file__).resolve().parents[2] /
-        "examples/ros2/face-detection/single-stream-thermal-face-detector/src/python/input_node.py",
-        "node_test_live_input").pack_image
+    image_tensor = transport.image_tensor
+    pack_image = load_node(entry, "node_test_live_input").pack_image
 
     width, height = 4, 4
     uv_rows = height // 2 if encoding == "nv12" else height
@@ -316,13 +322,27 @@ def test_decoder_plane_padding_is_removed_before_ros_transport(encoding):
         plane.strides_bytes, plane.byte_offset = [8, 1], offset
         planes.append(plane)
     tensor.planes = planes
-    message = pack_image(tensor, Time(sec=123, nanosec=456), "camera", "native")
-    assert (message.encoding, message.width, message.height, message.step) == (encoding, width, height, width)
+    message = pack_image(tensor, Time(sec=123, nanosec=456), "camera", output_encoding)
+    expected = packed
+    expected_encoding, step = encoding, width
+    if output_encoding == "bgr8":
+        expected = (cv2.cvtColor(packed, cv2.COLOR_YUV2BGR_NV12) if encoding == "nv12"
+                    else cv2.cvtColor(np.dstack([packed[:height], packed[height:]]), cv2.COLOR_YUV2BGR_YUY2))
+        expected_encoding, step = "bgr8", width * 3
+    assert (message.encoding, message.width, message.height, message.step) == (expected_encoding, width, height, step)
     assert message.header.frame_id == "camera" and message.header.stamp.sec == 123
-    np.testing.assert_array_equal(planar_array(message), packed)
+    assert message.header.stamp.nanosec == 456
+    assert message.data.tobytes() == expected.tobytes()
     restored = image_tensor(message, memory=pyneat.TensorMemory.CPU)
-    assert restored.image_format() == pixel_format
-    assert restored.copy_payload_bytes() == packed.tobytes()
+    assert restored.copy_payload_bytes() == expected.tobytes()
+    # Each published message owns its storage; altering one cannot alter the
+    # decoder payload or a later message produced from the same frame.
+    source_bytes = tensor.copy_payload_bytes()
+    message.data[0] ^= 255
+    assert tensor.copy_payload_bytes() == source_bytes
+    again = pack_image(tensor, Time(), "other-camera", output_encoding)
+    assert again.data.tobytes() == expected.tobytes()
+    assert message.data[0] != again.data[0]
 
 
 def test_saved_visual_is_complete_before_result_acknowledgment(nodes, tmp_path):

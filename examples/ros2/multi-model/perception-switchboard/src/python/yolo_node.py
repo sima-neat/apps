@@ -14,7 +14,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from image_transport import header_dict, sample_tensors, to_message
+from image_transport import header_dict, image_array, sample_tensors, to_message
 from visual_output import image_bgr
 from node_tools import read_only, run
 from ament_index_python.packages import get_package_share_directory
@@ -114,7 +114,8 @@ class YoloNode(Node):
             self.condition.notify_all()
 
     def prepare_input(self, image):
-        bgr = image_bgr(image)
+        # Read BGR directly from the ROS buffer; the Neat tensor still owns its copy.
+        bgr = image_array(image) if image.encoding == "bgr8" else image_bgr(image)
         return [pyneat.Tensor.from_numpy(np.ascontiguousarray(bgr), copy=True,
                     image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.EV74)]
 

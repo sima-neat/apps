@@ -14,7 +14,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from image_transport import header_dict, sample_tensors, to_message
+from image_transport import header_dict, image_array, sample_tensors, to_message
 from visual_output import image_bgr
 from overlays import render_depth
 from node_tools import read_only, run
@@ -104,7 +104,8 @@ class DepthNode(Node):
             self.condition.notify_all()
 
     def prepare_input(self, image):
-        bgr = image_bgr(image)
+        # Read BGR directly from the ROS buffer; the Neat tensor still owns its copy.
+        bgr = image_array(image) if image.encoding == "bgr8" else image_bgr(image)
         scale = self.max_input_size / max(bgr.shape[:2])
         if scale < 1:
             size = (max(1, int(bgr.shape[1] * scale)), max(1, int(bgr.shape[0] * scale)))
