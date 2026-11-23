@@ -1,14 +1,24 @@
-model:                       # SSD detector selection (SSD300 or SSD-MobileNet v1/v2/v3).
-  path: <model-path>         # Example: models/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
-  preprocessing_profile: tensorflow_ssd  # tensorflow_ssd or torchvision_ssdlite (v3 matrix).
-  labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt      # 91 lines: 0=background, 1..90 COCO.
+# SSD-MobileNet object detection of a folder of images, saved as annotated PNGs and JSON.
+model:
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+  # Class labels, one per line, background first; a relative path starts at the working
+  # directory.
+  labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt
 
-io:                          # Input and output paths.
-  input_dir: assets/datasets/coco                     # Folder containing input images.
-  output_dir: sandbox/ssd-mobilenet-object-detector   # Folder for annotated images.
-  detections_json: ""        # Optional path for a machine-readable detections report.
+input:
+  source: assets/datasets/coco  # Folder of .jpg, .jpeg, .png, and .bmp images.
 
-decode:                      # Model-managed SSD BoxDecode settings.
-  score_threshold: 0.55      # Filters weak SSD-MobileNet false positives in rendered output.
-  nms_iou: 0.60              # Overlap threshold for on-device NMS.
-  max_detections: 100        # Top-K detections to keep per image.
+inference:
+  min_score: 0.55               # Lowest score a detection needs.
+  nms_iou: 0.60                 # Overlap at which NMS drops the weaker box.
+  max_detections: 100           # Boxes kept per image.
+
+output:
+  dir: sandbox/ssd-mobilenet-object-detector  # Folder for the annotated PNGs.
+
+app:
+  # Normalization the model was trained with: tensorflow_ssd for SSD-MobileNet V1 and V2, or
+  # torchvision_ssdlite for SSDlite-MobileNetV3.
+  preprocessing_profile: tensorflow_ssd
+  detections_json: sandbox/ssd-mobilenet-object-detector.json  # Every image's boxes.

@@ -1,6 +1,8 @@
 // E2E test: run the binary and validate annotated images plus decoded detections.
-#include "sima_examples/testing/test_process.h"
+#include "sima_examples/config.h"
+#include "sima_examples/labels.h"
 #include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 
@@ -38,7 +40,8 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
+  // The application reads a relative model.path from the config file's folder.
+  const std::string models_dir = fs::absolute(models_dir_raw ? models_dir_raw : "models").string();
 
   const std::string model_path = configured_model_path("ssd-mobilenet-object-detector", models_dir);
 
@@ -67,9 +70,9 @@ int main(int argc, char** argv) {
   const fs::path detections_path = run_dir / "detections.json";
   write_e2e_config("ssd-mobilenet-object-detector", config_path,
                    {{"model.path", model_path},
-                    {"io.input_dir", input_dir},
-                    {"io.output_dir", out_dir},
-                    {"io.detections_json", detections_path.string()}});
+                    {"input.source", input_dir},
+                    {"output.dir", out_dir},
+                    {"app.detections_json", detections_path.string()}});
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
   auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
@@ -82,7 +85,8 @@ int main(int argc, char** argv) {
   }
 
   const int output_files = count_output_files(out_dir);
-  const std::string output_problem = saved_frames_problem(out_dir, supported_image_count(input_dir));
+  const std::string output_problem =
+      saved_frames_problem(out_dir, supported_image_count(input_dir));
   if (!output_problem.empty()) {
     std::cerr << "[FAIL] " << output_problem << "\n";
     remove_dir(out_dir);
@@ -97,6 +101,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  const auto config = sima_examples::Config::load(config_path);
+  const auto labels = sima_examples::load_labels(config.string("model.labels"));
+  const double min_score = config.number("inference.min_score");
   int detection_count = 0;
   try {
     const auto& images = reported.at("images");
@@ -117,9 +124,11 @@ int main(int argc, char** argv) {
         const double y2 = box.at(3).get<double>();
         const double score = detection.at("score").get<double>();
         const int class_id = detection.at("class_id").get<int>();
+        // Class 0 is the background, which the SSD decoder never reports.
         if (!(0.0 <= x1 && x1 < x2 && x2 <= width && 0.0 <= y1 && y1 < y2 && y2 <= height &&
-              0.0 <= score && score <= 1.0 && class_id > 0 && class_id < 91 &&
-              !detection.at("label").get<std::string>().empty())) {
+              min_score <= score && score <= 1.0 && class_id > 0 &&
+              class_id < static_cast<int>(labels.size()) &&
+              detection.at("label").get<std::string>() == labels[static_cast<size_t>(class_id)])) {
           throw std::runtime_error("invalid detection record");
         }
         ++detection_count;

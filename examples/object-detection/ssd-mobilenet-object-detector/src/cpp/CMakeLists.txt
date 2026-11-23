@@ -10,4 +10,7 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 sima_neat_apps_module("ssd-mobilenet-object-detector" UNIT_TEST E2E_TEST
-                      OUTPUT_TARGET_VAR ssd_mobilenet_target)
+                      OUTPUT_TARGET_VAR SSD_MOBILENET_TARGET)
+
+# The annotated images and the report; the unit test includes the same header.
+target_sources(${SSD_MOBILENET_TARGET} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/utils/annotate.h")

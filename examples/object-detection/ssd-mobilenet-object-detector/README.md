@@ -14,11 +14,37 @@
 
 ## Concept
 
-Detects objects in a folder of images with SSD MobileNet, saves annotated PNGs, and can write the same detections to a JSON report.
+Detects objects in a folder of images with SSD-MobileNet, saves annotated PNGs, and writes every detection to a JSON report.
 
-The application supports 300×300 SSD-MobileNet V1/V2 and 320×320 SSDlite-MobileNetV3 models. Neat owns
-the recipe-specific priors, class scoring, and non-maximum suppression through
-`BoxDecodeType::Ssd`; the example only selects the matching preprocessing profile.
+```text
+How does an image move through ssd-mobilenet-object-detector?
+
+   ┌────────────────────────────────────────┐
+   │ Image folder, input.source             │
+   └────────────────────────────────────────┘
+        │ one BGR image at a time, runner.run
+╭┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN   ▼ from model.build                               ┆
+┆  ┌────────────────────────────────────────┐            ┆
+┆  │ SSD-MobileNet Model                    │            ┆
+┆  │ stretch, normalize, MLA, SSD decode    │            ┆
+┆  └────────────────────────────────────────┘            ┆
+╰┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+        ▼ BBOX tensor, decode_bbox_tensor
+   ┌────────────────────────────────────────┐
+   │ annotate                               │
+   └────────────────────────────────────────┘
+        │ boxes drawn          │ every box
+        ▼                      ▼
+   ┌─────────────────┐   ┌──────────────────────┐
+   │ output.dir      │   │ app.detections_json  │
+   │ PNG per image   │   │ one JSON report      │
+   └─────────────────┘   └──────────────────────┘
+```
+
+The application reads the images one at a time with OpenCV and sends each through `runner.run`, the run that `model.build` creates from the first image. Neat stretches the image to the model's input size, normalizes it, runs the model, and decodes the boxes with `BoxDecodeType::Ssd`, which owns the SSD priors, class scoring, and non-maximum suppression. The application draws each image's boxes on a copy, saves it as a PNG under `output.dir`, and adds its boxes to the report at `app.detections_json`.
+
+The application supports 300×300 SSD-MobileNet V1 and V2 and 320×320 SSDlite-MobileNetV3 models; `app.preprocessing_profile` selects the normalization each was trained with.
 
 ## Preview
 
@@ -55,16 +81,17 @@ sima-cli download \
 cd ..
 ```
 
-The configuration below uses
+The packaged config reads
 `models/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz`.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `io.input_dir`, and `io.output_dir`. Set `io.detections_json` to a file path if you also want a JSON report.
+Open `${APP_DIR}/src/common/config.yaml`. It reads the downloaded model from `models/`. Set:
 
-`io.input_dir` is a folder, not a single image. The application processes every
-`.jpg`, `.jpeg`, `.png`, and `.bmp` file directly inside it in filename order. Subdirectories are
-not searched. Each input produces an annotated PNG under `io.output_dir`.
+- `input.source`: the folder of images. The application processes every `.jpg`, `.jpeg`, `.png`, and `.bmp` file directly inside it, in file-name order, and does not search subfolders. The packaged `assets/datasets/coco` folder holds 21 images.
+- `output.dir`: the folder for the annotated PNGs, one per input image. Keep it apart from `input.source`.
+- `app.detections_json`: the JSON report with the class, label, score, and box of every detection.
+- `app.preprocessing_profile`: `tensorflow_ssd` for SSD-MobileNet V1 and V2, or `torchvision_ssdlite` for SSDlite-MobileNetV3.
 
 ## Run
 
@@ -87,37 +114,33 @@ python3 ${APP_DIR}/src/python/main.py \
 ## Expected Result
 
 The application prints one line per image with the file it wrote and the number
-of objects found:
+of objects found, then the report it wrote:
 
 ```text
 [1/21] 000000081061.jpg -> 000000081061_jpg.png (3 detections)
 [2/21] 000000116439.jpg -> 000000116439_jpg.png (2 detections)
 [3/21] 000000129492.jpg -> 000000129492_jpg.png (3 detections)
+...
+Done: 21 images processed, detections in sandbox/ssd-mobilenet-object-detector.json
 ```
 
-`io.output_dir` then holds one annotated PNG per input image; with the packaged
-`assets/datasets/coco` folder that is 21 files. Both implementations print this
-format.
-
-Set `io.detections_json` to also write the class, score and box for every
-detection, which is easier to check than reading the images.
+`output.dir` then holds one annotated PNG per input image: 21 files for the
+packaged `assets/datasets/coco` folder. Both implementations print this format.
 
 ## Troubleshooting
 
-- Verify `model.path` and the labels file if detections are missing.
-- Confirm the input folder contains `.jpg`, `.jpeg`, `.png`, or `.bmp` files.
-- Keep `io.input_dir` and `io.output_dir` different.
-- If boxes look vertically squished or shifted toward the frame center, the resize mode is wrong.
-  This model requires a **stretch** resize; the example already sets it.
-- If detections are missing but the pipeline runs, lower `decode.score_threshold` because INT8
-  quantization can drop weak detections.
-- Set `io.detections_json` to write per-image detections (class, score, box) for offline checks.
+- `input.source has no .jpg, .jpeg, .png, or .bmp files`: point `input.source` at a folder that holds images directly, not in subfolders.
+- If boxes look vertically squished or shifted toward the image center, the resize mode is wrong. SSD models need a stretch resize, which the example sets.
+- If detections are missing but the application runs, lower `inference.min_score`: INT8 quantization can lower the scores of weak detections.
+- If the model fails to load, check that `model.path` points to the downloaded `_mpk.tar.gz` file; a relative path starts at the config file.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`
-- Python source: `src/python/main.py`
-- Shared config and labels: `src/common/`
+- C++ reference source: `src/cpp/main.cpp`, and `src/cpp/utils/annotate.h` for the annotated images and the report
+- Python source: `src/python/main.py`, and `src/python/utils/annotate.py`
+- Shared config: `src/common/config.yaml`
+- Class labels: `src/common/coco_labels.txt`
+- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 

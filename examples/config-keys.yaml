@@ -22,7 +22,7 @@ input.type:
   meaning: Input kind the config sets, such as rtsp, http, or usb, for an example that takes several. Only the keys of that kind are read, and the config's comments list the keys of the others.
 input.source:
   type: string_list
-  meaning: Input streams, one RTSP URL per stream. The same URL may repeat. With input.type http or usb, an http:// or https:// MJPEG URL or a USB camera ID.
+  meaning: Input streams, one RTSP URL per stream. The same URL may repeat. With input.type http or usb, an http:// or https:// MJPEG URL or a USB camera ID. For an example that reads image files, the folder that holds them, read relative to the working directory.
 input.codec:
   type: string
   meaning: Encoded video format of every input stream, such as h264, h265, or mjpeg. The example's config lists the formats it decodes.
@@ -64,6 +64,9 @@ inference.max_inflight_total:
 output.video_enabled:
   type: boolean
   meaning: Send each stream's video to Insight. false sends only the metadata.
+output.dir:
+  type: string
+  meaning: Folder the example writes its result files to, such as annotated images. A relative path starts at the working directory.
 output.insight.host:
   type: string
   meaning: Address of the machine running Insight.

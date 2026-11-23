@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.utils.output_assertions import (
     assert_saved_frames_are_usable,
@@ -13,10 +14,15 @@ from tests.utils.output_assertions import (
 )
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+APPS_ROOT = EXAMPLE_DIR.parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
 
-def _assert_valid_detections(report, expected_images):
+def load_labels(path):
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _assert_valid_detections(report, expected_images, labels, min_score):
     entries = report["images"]
     assert {entry["image"] for entry in entries} == expected_images
     detection_count = 0
@@ -28,9 +34,10 @@ def _assert_valid_detections(report, expected_images):
             x1, y1, x2, y2 = detection["box"]
             assert 0 <= x1 < x2 <= width
             assert 0 <= y1 < y2 <= height
-            assert 0 <= detection["score"] <= 1
-            assert 0 < detection["class_id"] < 91
-            assert detection["label"]
+            assert min_score <= detection["score"] <= 1
+            # Class 0 is the background, which the SSD decoder never reports.
+            assert 0 < detection["class_id"] < len(labels)
+            assert detection["label"] == labels[detection["class_id"]]
     assert detection_count > 0, "expected at least one decoded detection"
 
 
@@ -53,11 +60,9 @@ class TestE2E:
         detections_path = tmp_output_dir.parent / "detections.json"
         config_path = e2e_config_writer(
             {
-                "io": {
-                    "input_dir": str(test_images_dir),
-                    "output_dir": str(tmp_output_dir),
-                    "detections_json": str(detections_path),
-                }
+                "input": {"source": str(test_images_dir)},
+                "output": {"dir": str(tmp_output_dir)},
+                "app": {"detections_json": str(detections_path)},
             }
         )
         result = subprocess.run(
@@ -78,13 +83,13 @@ class TestE2E:
             f"main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert_saved_frames_are_usable(
-            tmp_output_dir, len(supported_image_files(test_images_dir))
-        )
+        assert_saved_frames_are_usable(tmp_output_dir, len(supported_image_files(test_images_dir)))
 
-        assert detections_path.is_file(), (
-            f"Expected a detections report at {detections_path}"
-        )
+        assert detections_path.is_file(), f"Expected a detections report at {detections_path}"
         reported = json.loads(detections_path.read_text(encoding="utf-8"))
         expected_images = {path.name for path in supported_image_files(test_images_dir)}
-        _assert_valid_detections(reported, expected_images)
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        labels = load_labels(APPS_ROOT / config["model"]["labels"])
+        _assert_valid_detections(
+            reported, expected_images, labels, config["inference"]["min_score"]
+        )
