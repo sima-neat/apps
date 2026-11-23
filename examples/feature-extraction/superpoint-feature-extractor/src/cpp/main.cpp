@@ -48,7 +48,7 @@ struct Config {
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model = raw.string_or("model.path", "models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz");
+  cfg.model = raw.string_or("model.path", "models/superpoint/w16a16/superpoint_w16a16_mpk.tar.gz");
   cfg.rtsp_url = raw.string_or("source.rtsp_url", "");
   cfg.tcp = raw.bool_or("source.tcp", true);
   cfg.latency_ms = raw.int_or("source.latency_ms", 100);

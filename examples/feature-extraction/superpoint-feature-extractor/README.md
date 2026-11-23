@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | superpoint-feature-extractor |
-| Model | superpoint (w8a8) |
+| Model | superpoint (w16a16) |
 
 ## Concept
 
@@ -48,19 +48,41 @@ SuperPoint is licensed by Magic Leap under the [SuperPoint Software License Agre
 
 Follow steps 1 to 5 of [Getting started](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/docs/getting-started.md) in the models repository, replacing `yolo26n` with `superpoint`. Steps 4 and 5 convert the checkpoint to ONNX and compile it into a model package; the later performance and accuracy steps are optional. Choose one build profile:
 
-- **`w16a16`, the simplest.** It needs no calibration images, so skip step 3, replace `w8a8` with `w16a16` in the step 5 commands, and drop `--dataset` from the compile command. The compile writes `build/superpoint/w16a16/model/superpoint_w16a16_mpk.tar.gz`. Copy that file to the DevKit, into `models/superpoint/w16a16/` under `prebuilt-apps/`, and point the config at it, because the packaged config names the `w8a8` package:
+- **`w16a16`, the packaged default.** It needs no calibration images, so skip step 3, replace `w8a8` with `w16a16` in the step 5 commands, and drop `--dataset` from the compile command. The whole build needs only the public Hugging Face checkpoint the recipe pins; no SiMa.ai dataset or credential takes part in it. The compile writes `build/superpoint/w16a16/model/superpoint_w16a16_mpk.tar.gz`. Copy that file to the DevKit, into `models/superpoint/w16a16/` under `prebuilt-apps/`, where the packaged config already points.
+
+- **`w8a8`, the faster model.** It runs at about 1.9 times the throughput of `w16a16` and calibrates on 50 HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/models/superpoint/model.yaml)). Step 3's `model-registry fetch-calibration models/superpoint --build-profile w8a8 --component model` downloads them, but only with SiMa.ai Dataset Registry (Artifactory) access, and `model-registry` installs only where the Model Compiler is installed. [Compiling `w8a8` Without SiMa.ai Access](#compiling-w8a8-without-simaai-access) builds the same calibration input from the public HPatches release. The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`. Copy it to `models/superpoint/w8a8/` under `prebuilt-apps/` and point the config at it:
 
   ```bash
-  sed -i 's#models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz#models/superpoint/w16a16/superpoint_w16a16_mpk.tar.gz#' ${APP_DIR}/src/common/config.yaml
+  sed -i 's#models/superpoint/w16a16/superpoint_w16a16_mpk.tar.gz#models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz#' ${APP_DIR}/src/common/config.yaml
   ```
 
-- **`w8a8`, the packaged default.** It calibrates on 50 HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/models/superpoint/model.yaml)). Step 3's `model-registry fetch-calibration models/superpoint --build-profile w8a8 --component model` downloads them, but only with SiMa.ai Dataset Registry (Artifactory) access, and `model-registry` installs only where the Model Compiler is installed. Without that access, pass `--dataset` a `.tar` or `.tar.gz` archive of at least 50 HPatches images stored as `hpatches/cal/<sequence>/<n>.ppm`, which is the layout the recipe's `calibration.py` reads. Other images give a different INT8 model from the published one. The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`; copy it to `models/superpoint/w8a8/` under `prebuilt-apps/`, where the packaged config already points.
+### Compiling `w8a8` Without SiMa.ai Access
+
+`models/superpoint/scripts/calibration.py` reads a tar archive and takes every `.ppm` file two levels under a directory named `cal`, then samples 50 of them with a fixed seed. The `hpatches-cal` archive in the Dataset Registry holds ten sequences of the public HPatches sequences release, copied unchanged, so the same ten reproduce its calibration images:
+
+```bash
+curl -L -o hpatches-sequences-release.zip \
+  https://huggingface.co/datasets/vbalnt/hpatches/resolve/main/hpatches-sequences-release.zip
+unzip -q hpatches-sequences-release.zip
+mkdir -p hpatches/cal
+for sequence in i_kurhaus i_lionday i_table i_whitebuilding i_zion \
+                v_apprentices v_calder v_dogman v_graffiti v_home; do
+  cp -r "hpatches-sequences-release/$sequence" hpatches/cal/
+done
+COPYFILE_DISABLE=1 tar -czf hpatches-cal.tar.gz hpatches
+```
+
+Read the [HPatches dataset repository](https://github.com/hpatches/hpatches-dataset)'s terms before using the images. The download is about 1.3 GB and holds 116 sequences, named `i_<name>` for an illumination change and `v_<name>` for a viewpoint change, each with the images `1.ppm` to `6.ppm`.
+
+`COPYFILE_DISABLE=1` matters on macOS. The downloaded files carry an extended attribute, and macOS `tar` then writes a `._<name>.ppm` companion for each one. The compile reads every `.ppm` member under `hpatches/cal/<sequence>/` as an image and stops at the first companion with `ValueError: could not decode image`. macOS `tar -tzf` hides those members, so the archive looks correct while half of it is unreadable. On Linux the variable does nothing.
+
+Pass the archive to the step 5 compile with `--dataset hpatches-cal.tar.gz`. Other sequences also calibrate a working model, as long as the archive holds at least 50 `.ppm` files under `hpatches/cal/<sequence>/`; they pick different INT8 ranges, so the package is then a different model from the published `w8a8` one. Whatever images you calibrate with, the compile gates the result: it compares the quantized model's keypoints with FP32's and fails the build when keypoint recall falls below 0.8 or descriptor similarity below 0.9.
 
 ## Configure
 
 Upload `assets/datasets/tum-rgbd/freiburg1-desk.mp4` to Insight and start it under Media Sources. The clip loops at its native 30 FPS.
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `source.rtsp_url` (for example, `rtsp://<insight-host-ip>:8554/src1`) and `output.insight.host`. `model.path` already points at the package you compiled; change it only if you saved it elsewhere or built another build profile.
+Open `${APP_DIR}/src/common/config.yaml`. Set `source.rtsp_url` (for example, `rtsp://<insight-host-ip>:8554/src1`) and `output.insight.host`. `model.path` already points at the `w16a16` package; change it only if you saved it elsewhere or built another build profile.
 
 Set `runtime.frames` to `0` to run until Ctrl-C. The RTSP source must keep the same resolution for the whole run.
 
@@ -105,7 +127,7 @@ investigating even though the run exits successfully.
 
 ## Troubleshooting
 
-- Confirm `model.path` points to the compiled `superpoint_w8a8_mpk.tar.gz`.
+- Confirm `model.path` points to the compiled `superpoint_w16a16_mpk.tar.gz`, or to the package of the build profile you compiled.
 - A missing or incompatible typed SuperPoint contract fails during model construction.
 - Confirm the H.264 RTSP source is running and keeps a stable resolution.
 - Confirm Insight is reachable at the configured host and UDP video port.
