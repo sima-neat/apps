@@ -84,6 +84,9 @@ neat::RunOptions run_options() {
   // sends. Its KeepLatest overflow policy drops nothing here, because runner.run waits for each
   // result before the next image.
   options.preset = neat::RunPreset::Realtime;
+  // 8 queue slots, not the preset's 2. One image is in flight at a time, so a smaller depth may do
+  // as well, but that is not measured.
+  options.queue_depth = 8;
   return options;
 }
 
