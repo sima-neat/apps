@@ -97,7 +97,7 @@ no effect while `decode_type` is `Unspecified` (see Pitfalls).
 | Score threshold | `score_threshold` | `score_threshold` | `0.0`: no score filter | Drops detections whose score is below this value. `0` keeps zero-score detections; NMS and `top_k` still apply. For `SuperPoint`, `0` takes the profile's default, for example 0.1 for `A65V1`. | Set it to the confidence below which a detection is noise for your application: the YOLO26 Object Detector uses 0.40, the PCB Defect Detector 0.25, the SSD-MobileNet Object Detector 0.55. Raise it when a live display shows false boxes. Lower it only when you rank or filter the boxes yourself. |
 | NMS overlap | `nms_iou_threshold` | `nms_iou_threshold` | `0.0`. For YOLO26 (`YoloV26`, `YoloV26Pose`, `YoloV26Seg`) this turns NMS off. It does not turn NMS off for the other detectors: YOLOv5 to v10, YOLOX, EfficientDet, SSD and `YoloV8Obb` always run NMS, and at `0` it removes every box that overlaps a higher-scoring box of the same class, even slightly. With the default, these decoders silently lose objects that overlap (see Pitfalls). | Non-maximum suppression (NMS), the step that removes duplicate boxes, removes a box that overlaps a higher-scoring box of the same class by more than this IoU (intersection over union, 0–1). | Set 0.45 to 0.6 for every decoder that runs NMS, as the YOLO26 examples do. Raise it when real objects overlap, such as a crowd, so their boxes are kept. Lower it when the same object gets two boxes. Leave `0` for `YoloV26Obb`, `Detr` and `DetrFocal`, which apply no NMS. |
 | Detection cap | `top_k` | `top_k` | `0`: unset, and box routes fail on it (see Pitfalls) | The most detections one frame can return. It also sizes the output tensor: 4 + 24 × `top_k` bytes for plain boxes. | Always set it on a box route, to the most objects you expect in one frame: 50 in the YOLO26 Object Detector, 300 in the PCB Defect Detector for many small defects. For `SuperPoint`, `0` takes the profile default (600 for `A65V1`). |
-| SuperPoint settings | `superpoint` | `superpoint` | `SuperPointOptions{}`: profile `Auto`, `nms_radius = -1`, `border_margin = -1`, Float32 descriptors, `FeaturePointsV1` output | Settings of the `SuperPoint` decoder. See [SuperPoint and YOLOX settings](#superpoint-and-yolox-settings). | Only with `decode_type = SuperPoint`. The SuperPoint Feature Extractor sets the `A65V1` profile, `FeaturePointsV1` output and Float32 descriptors explicitly. |
+| SuperPoint settings | `superpoint` | `superpoint` | `SuperPointOptions{}`: profile `Auto`, `nms_radius = -1`, `border_margin = -1`, Float32 descriptors, `FeaturePointsV1` output | Settings of the `SuperPoint` decoder. See [SuperPoint and YOLOX settings](#superpoint-and-yolox-settings). | Only with `decode_type = SuperPoint`. The SuperPoint Feature Extractor sets the `A65V1` profile explicitly. |
 | Class count | `num_classes` | `num_classes` | `0`: taken from the model package | The number of classes the detection heads produce. | Set it when the package cannot give the right count. The Multi-Stream Multi-Model example sets `1` for YOLO pose, whose package declares 80 detector classes for single-class pose heads. For every YOLO26 type, `YoloV5` and `YoloXSegPose`, a value that differs from the heads fails, so leave `0` there unless you want that check. Other types print a warning and use your value. |
 | YOLOX keypoint classes | `yolox_seg_pose` | `yolox_seg_pose` | `YoloXSegPoseOptions{}`: empty `pose_classes`, every class has keypoints | Settings of the `YoloXSegPose` decoder. See [SuperPoint and YOLOX settings](#superpoint-and-yolox-settings). | Only with `YoloXSegPose`, for a model whose classes mix objects with and without keypoints. |
 | Source width (deprecated) | `boxdecode_original_width` | `boxdecode_original_width` | `0`: use the size the route's preprocessing records | Width, in pixels, of the image the boxes are mapped back to. Set it with `boxdecode_original_height`. | Leave it `0` on an image route, which knows the frame size (see Pitfalls). Set it on a tensor route, where you preprocess the image yourself and Neat cannot know the source size; without it the first run fails. |
@@ -200,8 +200,8 @@ The helpers read the packed tensor a BoxDecode route returns, in your
 application, on the host CPU. Each one fails on a tensor of another kind,
 except `decode_bbox_tensor` with an untagged tensor and `parse_bbox_bytes`
 with any bytes (see Pitfalls). Coordinates come out in the source image's
-pixels as the route wrote them; `img_w` and `img_h` (Python `clamp_to`) only
-clamp boxes to that rectangle.
+pixels as the route wrote them, except `decode_superpoint`'s; see Pitfalls.
+`img_w` and `img_h` (Python `clamp_to`) only clamp boxes to that rectangle.
 
 | C++ | Python | Reads | Returns |
 |---|---|---|---|
@@ -270,6 +270,8 @@ payload stores whole pixels, so the floats have no fractional part.
 
 ## Pitfalls
 
+- **SuperPoint keypoints are in model-input pixels** (sima-neat/core#1328).
+  Fix: scale them by the source size over `resolved_preprocess_plan().mla_contract`.
 - **Decode options without `decode_type` do nothing.** With `score_threshold`,
   `nms_iou_threshold` and `top_k` set but `decode_type` left `Unspecified`,
   YOLO26n on a DevKit returned the six raw head tensors, with no warning. Fix:
@@ -368,4 +370,4 @@ payload stores whole pixels, so the floats have no fractional part.
   `ModelOptions`, `decode_bbox`, `decode_pose`, `decode_segmentation`,
   `decode_segmentation_pose`, `decode_obb`, `decode_obb_tensor`,
   `decode_superpoint` and the `detections` submodule
-- Core commit: `6ed16525`
+- Core commit: `7e5317be`

@@ -187,10 +187,9 @@ directly.
 on the producer's buffer pool. Hold several frames' worth and the pool runs
 out, the producer blocks, and throughput collapses — with no error message.
 Symptom: frame rate drops to near zero after a few seconds, and nothing in the
-logs. Fix: scope the mapping tightly and copy out what you need to keep. Both
-shipped examples say so in a comment where they do it: patchcore scores while
-the read mapping owns the loan and releases it before drawing; superpoint notes
-that the CPU copy outlives the decoder loan held by the sample. If you must
+logs. Fix: scope the mapping tightly and copy out what you need to keep. Patchcore
+says so in a comment where it does it: it scores while the read mapping owns
+the loan and releases it before drawing. If you must
 keep tensors, use `OutputMemory::Owned`, or `clone()` them.
 
 **`strides_bytes` being empty does not mean "contiguous unknown".** It means
@@ -220,7 +219,7 @@ not. Cast before pushing.
 
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) — `map_read()` guarded by `is_contiguous()` and `dense_bytes_tight()`, loan released before drawing
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — `map_read()` with a copy fallback, `ZeroCopy` output
-- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — `Tensor::from_cv_mat` with `TensorMemory::CPU`; Python `from_numpy`
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — the Y plane of a pulled NV12 frame (C++ `copy_nv12_contiguous`, Python `planes` and `copy_payload_bytes`) as a `GRAY8` tensor in `TensorMemory::EV74`
 - [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — Python `copy_payload_bytes()` into numpy, `TensorMemory.EV74`
 - [image-classification-explorer](../../../examples/classification/image-classification-explorer/) — Python `copy_dense_bytes_tight()` with an explicit dtype
 

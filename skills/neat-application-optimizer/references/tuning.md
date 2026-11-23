@@ -16,7 +16,8 @@ Use them for live views, and keep every-frame paths where every frame must be pr
 
 - Feed decoder or camera output to the model as NV12 frames with the model's NV12
   preprocessing, as the builder's model reference ("Construct and configure") sets it up. That
-  moves color conversion and resizing from the CPU to the EV74.
+  moves color conversion and resizing from the CPU to the EV74. A gray-input model takes no NV12;
+  give it each frame's Y plane as `GRAY8` instead of a CPU conversion to BGR.
 - Send video to Insight with `VideoSenderOptions::Passthrough(codec)` from the encoded stream,
   which skips decoding and re-encoding for the display path. The builder's application output
   reference owns the sender's link.
@@ -30,6 +31,11 @@ Use them for live views, and keep every-frame paths where every frame must be pr
 - A `cv::Mat` or NumPy input is copied into device memory when pushed. Create the tensor in the
   `TensorMemory` its first stage runs on: `EV74` for a model with preprocessing, `MLA` for
   direct model input, `CPU` for CPU work.
+
+## Keep metadata small
+
+A `send_metadata` call costs more the larger the message: on a DevKit about 9 ms for 37 KB and
+3 ms for 10 KB. For many points per frame, send only the fields Insight draws, in whole pixels.
 
 ## Share the model across streams
 

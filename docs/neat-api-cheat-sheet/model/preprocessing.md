@@ -81,7 +81,7 @@ In Python, an unset optional field is `None`.
 | Maximum input height | `input_max_height` | `input_max_height` | `0`: 1080 px | The tallest image the route accepts. | Same cases as `input_max_width`, for a source taller than 1080 px. |
 | Maximum input channels | `input_max_depth` | `input_max_depth` | `0`: taken from the image format (3 for RGB or BGR) | Channel capacity of the input. | Some examples set `3` explicitly next to the width and height. Leave it otherwise. |
 | Resize | `resize` | `resize` | `ResizeSpec{}`: `Auto`, mode `Letterbox`, `pad_value` 114 | How the image is fitted to the model's input size. See [`ResizeSpec`](#resize-resizespec). | Set it when the model was trained with a specific fit: letterbox for YOLO, stretch for some depth models, center crop for ImageNet classifiers. |
-| Color conversion | `color_convert` | `color_convert` | `ColorConvertSpec{}`: `Auto` | The pixel format you send. See [`ColorConvertSpec`](#color-colorconvertspec). | Always set `input_format` on an image route: `BGR` for OpenCV frames, `RGB` for PIL or converted frames, `NV12` for decoded video or a camera. |
+| Color conversion | `color_convert` | `color_convert` | `ColorConvertSpec{}`: `Auto` | The pixel format you send. See [`ColorConvertSpec`](#color-colorconvertspec). | Always set `input_format` on an image route: `BGR` for OpenCV frames, `RGB` for PIL or converted frames, `NV12` for decoded video or a camera. A gray-input model, such as SuperPoint, takes `GRAY8`, not `NV12`; see Pitfalls. |
 | Layout change | `layout_convert` | `layout_convert` | `LayoutConvertSpec{}`: `Auto`, empty `perm` | Reorders tensor axes, for example height-width-channel to channel-height-width. See [`LayoutConvertSpec`](#layout-layoutconvertspec). | Rarely. No shipped example sets it. |
 | Normalization | `normalize` | `normalize` | `NormalizeSpec{}`: `Auto`, mean `{0, 0, 0}`, stddev `{1, 1, 1}`, no explicit stats | Per-channel `(pixel / 255 − mean) / stddev` on the EV74. See [`NormalizeSpec`](#normalize-normalizespec). | Set it, or `preset`, for every image route: without it the model receives unnormalized 0–255 values; see Pitfalls. Set your own mean and stddev for a model trained with other statistics, as the FastFlow example does. |
 | Quantization | `quantize` | `quantize` | `QuantizeSpec{}`: `Auto` | Conversion to the model's INT8 input. The package's scale and zero point replace any values you set. | Leave it. Setting `enable` selects a tensor route, and image-only options then fail. |
@@ -124,7 +124,7 @@ Python `pyneat.ColorConvertSpec`.
 | Field | Default | What it controls | When to set it |
 |---|---|---|---|
 | `enable` | `Auto` | Turns color conversion on. `Auto` turns it on when you set a format. | Leave it. |
-| `input_format` | `PreprocessColorFormat::Auto`: RGB | The pixel format you send. It must match the format the input tensor is tagged with, or `run` fails with `Tensor image format mismatch`. | Every image route: `BGR` for OpenCV, `NV12` for video and cameras. |
+| `input_format` | `PreprocessColorFormat::Auto`: RGB | The pixel format you send. It must match the format the input tensor is tagged with, or `run` fails with `Tensor image format mismatch`. | Every image route: `BGR` for OpenCV, `NV12` for video and cameras, `GRAY8` for a gray model. |
 | `output_format` | `Auto`: what the model takes | The format handed to the model. | The MIPI multi-model example sets `RGB` explicitly after NV12 input. Usually leave it. |
 
 ### Layout: `LayoutConvertSpec`
@@ -271,7 +271,8 @@ use `input_specs()` to know what to send.
   `kind = Image` and no preset or statistics, the model gets unnormalized
   0–255 pixel values. On a DevKit, ResNet-50 classified a Labrador photo as
   class 253 (basenji, softmax 0.32) instead of 208 (Labrador retriever, 0.83
-  with `preset = ImageNet` and otherwise the same options). Fix: set a
+  with `preset = ImageNet` and otherwise the same options). SuperPoint without
+  statistics kept only 20 % to 50 % of its keypoints. Fix: set a
   preset or explicit statistics, and check
   `preprocess_plan().effective.normalize.enable` is `On`.
 - **Mean and stddev alone do not turn normalization on.** With
@@ -299,8 +300,13 @@ use `input_specs()` to know what to send.
   `resize` left at `Auto`, the image is still fitted to the model, but with
   pad `0`, not the `pad_value` default of 114. On ResNet-50 the scores matched
   an explicit `Letterbox` with `pad_value = 0` exactly, and differed from
-  `Stretch` and from `Letterbox` with pad 114. Fix: set `resize.enable = On`
-  with the `mode` and `pad_value` your model was trained with.
+  `Stretch` and from `Letterbox` with pad 114. Setting only `mode` does not
+  apply it, though the plan's `effective.resize.mode` shows it. Fix: set
+  `resize.enable = On` with the `mode` and `pad_value` your model was trained
+  with.
+- **A gray model does not take NV12.** The run fails to start with `Gray
+  output requires Gray/RGB/BGR input; no implicit YUV conversion`. Fix: send
+  the frames' Y plane as a `GRAY8` tensor and set `input_format = GRAY8`.
 - **`COCO_YOLO` overrides your resize mode.** The preset sets `Letterbox` and
   pad 114 even if you set `resize.mode = Stretch`; the plan shows `Letterbox`
   and gives no warning. Fix: for another resize mode, leave `preset` at
@@ -331,6 +337,7 @@ use `input_specs()` to know what to send.
 - [FastFlow Anomaly Detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/): explicit mean and stddev
 - [Image Classification Explorer](../../../examples/classification/image-classification-explorer/): `ImageNet` preset with input capacity per model
 - [MIPI Multi-Model](../../../examples/benchmarking/mipi-multi-model/) (Python): NV12 camera input; `Letterbox` for YOLO26, `Stretch` with mean and stddev 0.5 for SSD
+- [SuperPoint Feature Extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `GRAY8` input from the decoder's Y plane, `Stretch` with mean 0 and stddev 1
 - Other detection, pose, segmentation and tracking examples set `preprocess` too; list them with `git grep -n "preprocess\." -- examples`.
 
 ## Source
@@ -346,4 +353,4 @@ use `input_specs()` to know what to send.
   `ResizeMode`, `LetterboxPlacement`, `PreprocessColorFormat`,
   `NormalizePreset`, `TransformType`, `ResizeInterpolation`,
   `PreprocColorConversionPlacement`, `PreprocFloatingConversion`
-- Core commit: `6ed16525`
+- Core commit: `7e5317be`
