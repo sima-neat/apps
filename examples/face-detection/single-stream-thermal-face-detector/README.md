@@ -14,16 +14,24 @@
 ## Concept
 Detects faces and five facial landmarks in a live thermal RTSP stream with YOLOv5s-Face, then sends the overlay to Insight.
 
-The pipeline keeps the video and landmarks on the same frame:
+The graph decodes the stream once and branches the frames to Insight's video and to the
+model:
 
+```text
+RtspDecodedInput (H.264 to NV12) --> Branch --> "video": VideoSender (H.264 RTP/UDP to Insight)
+                                            \--> "model": yolov5s-face (six raw heads)
+                                                    --> Output "detections" --> host decode
+                                                    --> MetadataSender (pose-estimation to Insight)
 ```
-RTSP decode (NV12) --> branch --> video_sender (H264 RTP/UDP -> Insight)
-                            \--> model (raw split heads) --> detections
-```
+
+Both branch links keep only the newest frame, so a slow branch drops frames instead of holding
+back the stream. The model's postprocessing adapters run on the EV74 vision processor.
 
 Each frame sends one `pose-estimation` message with the left eye, right eye, nose tip, and both mouth corners. Insight draws them as labeled dots. The application sends one metadata type because Insight shows only one type per channel at a time.
 
-YOLOv5s-Face returns raw box and landmark outputs. The C++ and Python applications decode those outputs with the same math before sending the five points to Insight.
+YOLOv5s-Face returns raw box and landmark outputs. The C++ and Python applications decode
+those outputs with the same math, in `src/cpp/utils/yolov5_face.h` and
+`src/python/utils/yolov5_face.py`, before sending the five points to Insight.
 
 ## Preview
 ![Thermal face detector reference preview](../../../portal/assets/examples/face-detection/single-stream-thermal-face-detector/image.png)
@@ -67,8 +75,8 @@ sima-cli download \
 cd ..
 ```
 
-The command stores the package under `models/`; set `model.path` to the
-downloaded `yolov5s_face_raw_split_mpk.tar.gz` file.
+The command stores the package under `models/`, where the shipped `model.path` points. A
+relative `model.path` starts at the config file.
 
 ## Prepare Insight
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive landmark metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
@@ -88,9 +96,10 @@ To create a reproducible RTSP input:
 2. In Insight, open `RTSP Source`.
 3. Use a sample video or upload your own video.
 4. Start the stream and copy the RTSP URL.
-5. Put that RTSP URL into `source.rtsp_url`.
+5. Put that RTSP URL into `input.source`.
 
-Use the same `neat` output to set `output.insight.host`, `video_port`, and `metadata_port` from the reported `videoUDP` and `metadataUDP` ranges.
+Use the same `neat` output to set `output.insight.host`, `video_port_base`, and
+`metadata_port_base` from the reported `videoUDP` and `metadataUDP` ranges.
 
 **Ports when the app runs on a board.** Insight runs inside the SDK container and
 builds its URLs from the container's own view, so the RTSP link copied from the UI
@@ -105,13 +114,16 @@ assume the defaults:
 | Video UDP | 9000 | `videoUDP` → `hostPortStart` |
 | Metadata UDP | 9100 | `metadataUDP` → `hostPortStart` |
 
-Keep video and metadata on the same channel (0).
-
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.rtsp_url`, and `output.insight.host`. If Insight uses nondefault ports, also set the video and metadata ports reported by `neat --json`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `input.source` to the H.264 RTSP URL and
+`output.insight.host` to the machine running Insight. If Insight uses nondefault ports, also set
+`output.insight.video_port_base` and `output.insight.metadata_port_base` to the ports reported
+by `neat --json`.
 
-Keep video and metadata on the same Insight channel. The checked-in thresholds and runtime settings are ready to use for a first run.
+`input.width`, `input.height`, and `input.fps` stay at 0 to read the stream's frame size and
+rate with a probe; set them only for a stream that does not report them. The shipped thresholds
+are ready for a first run.
 
 ## Run
 ### C++
@@ -134,25 +146,25 @@ watch the annotated stream.
 ## Expected Result
 
 This application writes nothing to disk; its output is the Insight video channel
-plus the landmark metadata channel. It prints the resolved source on startup and
-a count when the frame limit is reached:
+plus the landmark metadata channel. It prints the source on startup and a count when it
+stops:
 
 ```text
-rtsp=rtsp://<host>:<port>/<stream> stream=1280x720@30 insight=<insight-host> video=9000 metadata=9100 channel=0
+source=rtsp://<host>:<port>/<stream> stream=1280x720@30 insight=<insight-host> video=9000 metadata=9100
 processed=200 video_sender=<insight-host>:9000
 ```
 
-The packaged config ships `inference.frames: 0`, which runs continuously. The
-closing `processed=` line prints only when a finite limit is reached, and
-interrupting the run with Ctrl-C skips it in both implementations. For a bounded
-check that ends by itself and prints the count, set a positive limit first:
+The packaged config ships `inference.frames: 0`, which runs until Ctrl-C, SIGTERM, or a closed
+ssh session stops it; the count prints then too. For a bounded check that ends by itself, set
+a positive limit:
 
 ```yaml
 inference:
   frames: 200
 ```
 
-Left at `0`, the live Insight stream is the success signal instead.
+When the metadata socket is full, a message is dropped rather than delaying the stream, and the
+count of dropped messages prints after `processed=`.
 
 Either way, `processed` reports frames pushed through the pipeline, not faces
 found, so a healthy count does not by itself confirm detections. Confirm those
@@ -164,19 +176,12 @@ application publishes only the five landmarks, not those boxes.
 
 ## Debugging Notes
 
-Check the configuration before involving hardware. This validates and exits
-without opening a stream:
-
-```bash
-python3 ${APP_DIR}/src/python/main.py \
-  --config ${APP_DIR}/src/common/config.yaml --validate-config-only
-```
-
-- `source.rtsp_url must be set`, `model.path must be set` and
-  `output.insight.host must be set` mean the value is empty or missing. Note that
-  validation does not detect an unedited placeholder: the packaged
-  `<rtsp-url>` and `<insight-host-ip>` are non-empty strings and pass, so a config
-  you have not filled in still validates cleanly.
+- A missing or mistyped config key stops the application with the key's name, such as
+  `input.source`. An unedited placeholder, such as `<insight-host-ip>`, fails when the
+  application probes the stream or opens the sender.
+- `failed to probe RTSP frame size` means the stream did not report its size from the target;
+  verify the RTSP URL from the board itself, or set `input.width`, `input.height`, and
+  `input.fps`.
 - `method SETUP failed: 461 Unsupported Transport` was observed once at startup
   against an Insight-hosted source, after which the pipeline built and the run
   completed normally. Treat a single occurrence as noise unless the pipeline also
@@ -184,28 +189,20 @@ python3 ${APP_DIR}/src/python/main.py \
 - If the run reports no frames at all, verify the RTSP URL from the board itself
   rather than from the machine running Insight. The URL Insight displays is not
   always reachable from the target, and the ports table above explains why.
-
 - If the viewer shows video but no overlays, confirm `output.insight.host` and the
   metadata port are reachable and match the viewer's channel. Use Insight's
   `/api/ingest/stats` to check `metadata.messages_received`.
-- If the streamed video looks blocky, raise `encoder.bitrate_kbps` in
-  `build_pipeline` (the Neat default is 4000). Check the delivered rate with
-  `/api/ingest/stats` -> `rtp.bitrate_bps`; the source stream itself is only
-  re-encoded here, so a sharp source plus a blocky viewer means the encoder is
-  starved.
 - If the viewer shows no video, verify the video UDP port and that RTP is arriving
   (`/api/ingest/stats` -> `rtp.packets_received`, `media.seen_sps`).
 - If keypoints look mis-anchored, the model may have been retrained with different
-  anchors -- update `_STRIDES`/`_anchors()` in `src/python/main.py` and
-  `kStrides`/`kAnchors` in `src/cpp/main.cpp` to match.
-- Set `runtime.profile: true` to print rolling pull/decode/metadata timing and
-  output FPS.
+  anchors: update `STRIDES` and `ANCHORS` in `src/python/utils/yolov5_face.py` and
+  `kStrides` and `kAnchors` in `src/cpp/utils/yolov5_face.h` to match.
 - Use `inference.min_score` and `inference.nms_iou` to tune detection sensitivity.
 
 ## Source Files
-- C++ source: `src/cpp/main.cpp`
+- C++ source: `src/cpp/main.cpp`, `src/cpp/utils/yolov5_face.h`
 - C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
-- Python source: `src/python/main.py`
+- Python source: `src/python/main.py`, `src/python/utils/yolov5_face.py`
 - Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
 - Shared assets: `src/common/face_label.txt`
 

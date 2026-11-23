@@ -1,25 +1,54 @@
-// E2E test for single-stream-thermal-face-detector.
-// Runs the single-stream RTSP pipeline and verifies the app publishes valid
-// pose-estimation metadata JSON (the 5 facial landmarks) to the Insight metadata
-// UDP port, then stops it the way an operator would and checks it shut down
-// cleanly. A local UDP listener stands in for Insight, so no running viewer is
-// required -- only an RTSP H.264 source (SIMANEAT_TEST_RTSP_H264_URL) and the model.
+// End-to-end test: the RTSP stream's faces reach Insight as pose-estimation metadata, and the
+// application stops cleanly when interrupted. A local UDP listener stands in for Insight, so only
+// an RTSP H.264 source (SIMANEAT_TEST_RTSP_H264_URL) and the model are needed.
+#include "sima_examples/labels.h"
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
 
 namespace {
 constexpr const char* kE2eInsightHost = "127.0.0.1";
+const std::vector<std::string> kLandmarkNames = {"eye_l", "eye_r", "nose_tip", "mouth_l",
+                                                 "mouth_r"};
+// The shipped config's inference values, which every pose must respect.
+constexpr double kMinScore = 0.25;
+constexpr std::size_t kMaxDetections = 50;
+
+// Why a pose message breaks the contract, or "" when every pose holds: at most kMaxDetections
+// poses, the label from the label file, five named keypoints, each scoring above kMinScore.
+std::string poses_problem(const nlohmann::json& poses, const std::string& label) {
+  if (poses.size() > kMaxDetections) {
+    return "more than " + std::to_string(kMaxDetections) + " poses in one message";
+  }
+  for (const auto& pose : poses) {
+    if (pose.at("label") != label) {
+      return "pose label " + pose.at("label").dump() + " is not the label file's " + label;
+    }
+    std::vector<std::string> names;
+    for (const auto& point : pose.at("keypoints")) {
+      names.push_back(point.at("name"));
+      if (point.at("confidence").get<double>() <= kMinScore) {
+        return "keypoint confidence " + point.at("confidence").dump() + " is not above " +
+               std::to_string(kMinScore);
+      }
+    }
+    if (names != kLandmarkNames) {
+      return "keypoints are not the five named landmarks: " + pose.at("keypoints").dump();
+    }
+  }
+  return "";
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -55,11 +84,13 @@ int main(int argc, char** argv) {
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   write_e2e_config("single-stream-thermal-face-detector", config_path,
                    {{"model.path", model_path},
-                    {"source.rtsp_url", rtsp_url},
+                    {"input.source", rtsp_url},
                     {"output.insight.host", kE2eInsightHost},
-                    {"output.insight.video_port", std::to_string(video_port)},
-                    {"output.insight.metadata_port", std::to_string(metadata_port)},
-                    {"inference.frames", "0"}});
+                    {"output.insight.video_port_base", std::to_string(video_port)},
+                    {"output.insight.metadata_port_base", std::to_string(metadata_port)},
+                    {"inference.frames", "0"},
+                    {"inference.min_score", std::to_string(kMinScore)},
+                    {"inference.max_detections", std::to_string(kMaxDetections)}});
 
   MetadataJsonListenerOptions metadata_options;
   metadata_options.host = kE2eInsightHost;
@@ -98,17 +129,20 @@ int main(int argc, char** argv) {
       std::cerr << "[FAIL] pose-estimation metadata was not received: " << metadata.error << "\n";
       rc = 1;
     } else {
-      const bool all_have_five_keypoints =
-          std::all_of(metadata.messages.begin(), metadata.messages.end(), [](const auto& message) {
-            const auto payload = nlohmann::json::parse(message.payload);
-            const auto& poses = payload.at("data").at("poses");
-            return std::all_of(poses.begin(), poses.end(), [](const auto& pose) {
-              return pose.contains("keypoints") && pose["keypoints"].is_array() &&
-                     pose["keypoints"].size() == 5;
-            });
-          });
-      if (!all_have_five_keypoints) {
-        std::cerr << "[FAIL] each detected pose must contain exactly five keypoints\n";
+      const std::string label =
+          sima_examples::load_labels(
+              "examples/face-detection/single-stream-thermal-face-detector/src/common/"
+              "face_label.txt")
+              .front();
+      std::string problem;
+      for (const auto& message : metadata.messages) {
+        if (problem.empty()) {
+          problem =
+              poses_problem(nlohmann::json::parse(message.payload).at("data").at("poses"), label);
+        }
+      }
+      if (!problem.empty()) {
+        std::cerr << "[FAIL] " << problem << "\n";
         rc = 1;
       } else {
         std::cout << "[OK] yolov5s-face published valid pose-estimation metadata on "

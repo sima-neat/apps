@@ -1,307 +1,173 @@
-"""Unit tests for single-stream-thermal-face-detector (Python)."""
-import subprocess
-import sys
+"""Unit tests for the thermal face detector: the checks the application leaves to its config,
+and the yolov5s-face decode in utils/yolov5_face.py. tests/cpp/test_unit.cpp runs the same
+checks in C++.
+"""
+
+from __future__ import annotations
+
+import json
+import math
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from tests.utils.config_cases import config_writer, load_example_main
-from tests.utils.fake_run import FakeRun
+from tests.utils.config_cases import load_example_main
 
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-COMMON_CONFIG = EXAMPLE_DIR / "src" / "common" / "config.yaml"
+EXAMPLE_DIR = Path(__file__).resolve().parents[2]
+COMMON_DIR = EXAMPLE_DIR / "src" / "common"
+APPS_ROOT = EXAMPLE_DIR.parents[2]
 
-# Pyramid grid sizes for the 800x800 canvas the model was compiled for.
-LEVEL_SIZES = (100, 50, 25)
+main_module = load_example_main(EXAMPLE_DIR, "single_stream_thermal_face_detector_main")
+yolov5_face = main_module.yolov5_face
+
+pytestmark = pytest.mark.unit
+
+# The planted faces sit on the 100x100 grid (stride 8), in cell x 20, y 10.
+CELL_X, CELL_Y = 20, 10
+# Logits whose sigmoids are 0.8 and 0.5: a face score of 0.4.
+SCORE_LOGITS = (math.log(4.0), 0.0)
 
 
-def load_example():
-    module = load_example_main(EXAMPLE_DIR, "thermal_face_example")
-    module.np = np  # main.py binds numpy lazily at runtime
-    return module
-
-
-def build_nhwc_heads(example):
-    """Six [1,H,W,C] split heads with one planted high-confidence face per level."""
-    rng = np.random.default_rng(0)
+def heads_with_faces(faces: list[tuple[int, tuple[float, float]]]) -> list[np.ndarray]:
+    """Six [1, H, W, C] heads, largest grid first, with a face planted at (CELL_X, CELL_Y) for
+    each (anchor, (object logit, class logit)). Every other score is about 2e-9."""
     heads = []
-    for size in LEVEL_SIZES:
-        for channels in (example.BOX_CHANNELS, example.LM_CHANNELS):
-            head = rng.standard_normal((1, size, size, channels)).astype(np.float32) * 0.5
-            if channels == example.BOX_CHANNELS:
-                head[0, size // 3, size // 4, 4] = 4.0  # objectness logit
-                head[0, size // 3, size // 4, 5] = 4.0  # class logit
-            heads.append(head)
+    for grid in (100, 50, 25):
+        box = np.zeros((1, grid, grid, 18), dtype=np.float32)
+        box[..., 4::6] = -10.0
+        box[..., 5::6] = -10.0
+        landmarks = np.zeros((1, grid, grid, 30), dtype=np.float32)
+        if grid == 100:
+            for anchor, (object_logit, class_logit) in faces:
+                box[0, CELL_Y, CELL_X, anchor * 6 + 4] = object_logit
+                box[0, CELL_Y, CELL_X, anchor * 6 + 5] = class_logit
+                # Landmark k is (k, -k) anchor sizes from the cell's corner.
+                for k in range(5):
+                    landmarks[0, CELL_Y, CELL_X, anchor * 10 + 2 * k] = k
+                    landmarks[0, CELL_Y, CELL_X, anchor * 10 + 2 * k + 1] = -k
+        heads += [box, landmarks]
     return heads
 
 
-@pytest.mark.unit
-class TestSplitHeadLayouts:
-    """The decoder must accept every layout a raw split head can arrive in.
-
-    NEAT delivers raw heads as [1,H,C,W] (the RetinaFace example documents the
-    same), so a decoder that only probed the last and first axes rejected the
-    real runtime tensors and published no metadata at all.
-    """
-
-    def decode(self, example, heads):
-        return example.decode_yolov5face_split(
-            heads, conf_threshold=0.25, iou_threshold=0.45, max_detections=50)
-
-    def test_nhwc_layout_decodes(self):
-        example = load_example()
-        boxes, scores, landmarks = self.decode(example, build_nhwc_heads(example))
-        assert len(boxes) > 0
-        assert scores.shape == (len(boxes),)
-        assert landmarks.shape == (len(boxes), example.NUM_LANDMARKS, 2)
-
-    @pytest.mark.parametrize("name,axes", [
-        ("neat_hcw", (0, 1, 3, 2)),  # [1,H,W,C] -> [1,H,C,W], NEAT's raw layout
-        ("nchw", (0, 3, 1, 2)),      # [1,H,W,C] -> [1,C,H,W], ONNX-native
-    ])
-    def test_permuted_layouts_match_nhwc(self, name, axes):
-        """A permuted head must decode to exactly the NHWC result."""
-        example = load_example()
-        nhwc = build_nhwc_heads(example)
-        permuted = [np.ascontiguousarray(h.transpose(*axes)) for h in nhwc]
-
-        expected = self.decode(example, nhwc)
-        actual = self.decode(example, permuted)
-
-        for got, want, field in zip(actual, expected, ("boxes", "scores", "landmarks")):
-            assert np.allclose(got, want, atol=1e-5), f"{name}: {field} differ"
-
-    def test_unrecognized_shape_is_rejected(self):
-        example = load_example()
-        bogus = [np.zeros((1, 7, 7, 7), dtype=np.float32)]
-        with pytest.raises(ValueError, match="Unrecognized split output shape"):
-            self.decode(example, bogus)
-
-
-@pytest.mark.unit
-class TestArgParsing:
-    """Validate CLI argument parsing for the single-stream yolov5s-face pipeline."""
-
-    def test_help(self):
-        """--help should describe the config-driven CLI."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--help"],
-            capture_output=True, text=True, timeout=20,
-        )
-        assert r.returncode == 0
-        assert "--config" in r.stdout
-
-    def test_bad_config_path(self):
-        """A missing config file should produce a nonzero exit."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", "/nonexistent/single-stream-thermal-face-detector-config.yaml"],
-            capture_output=True, text=True, timeout=20,
-        )
-        assert r.returncode != 0
-
-    def test_unknown_flag(self):
-        """An unrecognized flag should cause argparse to exit with code 2."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--bogus"],
-            capture_output=True, text=True, timeout=20,
-        )
-        assert r.returncode == 2
-        assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()
-
-    def test_validate_config_only(self):
-        """--validate-config-only should parse the shipped config without touching hardware."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(COMMON_CONFIG), "--validate-config-only"],
-            capture_output=True, text=True, timeout=20,
-        )
-        assert r.returncode == 0
-        assert "validated" in r.stdout.lower()
-
-    def test_validate_config_rejects_empty_labels_path(self, tmp_path):
-        """An explicit empty path must not be normalized to the current directory."""
-        config = COMMON_CONFIG.read_text(encoding="utf-8")
-        config = config.replace(
-            "labels: examples/face-detection/single-stream-thermal-face-detector/src/common/face_label.txt",
-            'labels: ""',
-        )
-        config_path = tmp_path / "empty-labels.yaml"
-        config_path.write_text(config, encoding="utf-8")
-
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path), "--validate-config-only"],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        assert r.returncode != 0
-        assert "model.labels must be set" in r.stderr
-
-
-@pytest.mark.unit
-def test_single_frame_profile_includes_frame_elapsed_time(monkeypatch, capsys):
-    example = load_example()
-    timestamps = iter((100.0, 110.0))
-    monkeypatch.setattr(example, "time_ms", lambda: next(timestamps))
-
-    profile = example.ProfileWindow(enabled=True, interval=1)
-    profile.start_frame()
-    profile.add(pull_ms=6.0, decode_ms=3.0, metadata_ms=1.0, face_count=1)
-
-    assert "output_fps=100.0" in capsys.readouterr().out
-
-
-# ---------------------------------------------------------------------------
-# Configuration handling and option validation (Refs #526).
-# Each test starts from VALID_CONFIG and breaks exactly one thing, so a failure
-# names the rule that fired rather than "config rejected". The empty labels
-# value is owned by TestArgParsing above through --validate-config-only.
-# ---------------------------------------------------------------------------
-
-main_module = load_example()
-
-VALID_CONFIG = {
-    "model": {"path": "model.tar.gz", "labels": "face_label.txt"},
-    "source": {"rtsp_url": "rtsp://127.0.0.1:8554/src1", "tcp": True, "latency_ms": 100},
-    "inference": {"frames": 0, "min_score": 0.25, "nms_iou": 0.45, "max_detections": 50},
-    "runtime": {"profile": False, "profile_interval": 100},
-    "output": {"insight": {"host": "127.0.0.1", "video_port": 9000, "metadata_port": 9100}},
-}
-
-
-# Writes VALID_CONFIG with overrides applied as ((section, ..., key), value).
-write_full_config = config_writer(VALID_CONFIG)
-
-
-@pytest.mark.unit
-class TestValidBaseline:
-    def test_the_baseline_config_loads(self, tmp_path):
-        """If this breaks, every rejection test below is testing the wrong thing."""
-        cfg = main_module.load_app_config(write_full_config(tmp_path))
-
-        assert cfg.model_path == "model.tar.gz"
-        assert cfg.rtsp_url == "rtsp://127.0.0.1:8554/src1"
-        assert cfg.insight_host == "127.0.0.1"
-
-    def test_omitted_optional_values_fall_back_to_documented_defaults(self, tmp_path):
-        raw = {
-            "model": {"path": "model.tar.gz"},
-            "source": {"rtsp_url": "rtsp://127.0.0.1:8554/src1"},
-            "output": {"insight": {"host": "127.0.0.1"}},
-        }
-
-        cfg = main_module.load_app_config(write_full_config(tmp_path, root=raw))
-
-        assert cfg.latency_ms == 200
-        assert cfg.tcp == True
-        assert cfg.frames == 0
-        assert cfg.min_score == pytest.approx(0.25)
-        assert cfg.nms_iou == pytest.approx(0.45)
-        assert cfg.max_detections == 50
-        assert cfg.profile == False
-        assert cfg.profile_interval == 100
-        assert cfg.video_port == 9000
-        assert cfg.metadata_port == 9100
-        assert cfg.labels_path.name == "face_label.txt"
-
-
-REJECTED = [
-    pytest.param(('source', 'rtsp_url'), '', 'source.rtsp_url must be set', id='rtsp-url-empty'),
-    pytest.param(('model', 'path'), '', 'model.path must be set', id='model-path-empty'),
-    pytest.param(('output', 'insight', 'host'), '', 'output.insight.host must be set', id='insight-host-empty'),
-    pytest.param(('source', 'latency_ms'), -1, 'source.latency_ms must be >= 0', id='latency-negative'),
-    pytest.param(('inference', 'frames'), -1, 'inference.frames must be >= 0', id='frames-negative'),
-    pytest.param(('inference', 'min_score'), -0.01, 'inference.min_score must be between 0 and 1', id='min-score-below'),
-    pytest.param(('inference', 'min_score'), 1.01, 'inference.min_score must be between 0 and 1', id='min-score-above'),
-    pytest.param(('inference', 'nms_iou'), -0.01, 'inference.nms_iou must be between 0 and 1', id='nms-below'),
-    pytest.param(('inference', 'nms_iou'), 1.01, 'inference.nms_iou must be between 0 and 1', id='nms-above'),
-    pytest.param(('inference', 'max_detections'), 0, 'inference.max_detections must be > 0', id='max-detections-zero'),
-    pytest.param(('runtime', 'profile_interval'), 0, 'runtime.profile_interval must be > 0', id='profile-interval-zero'),
-    pytest.param(('output', 'insight', 'video_port'), 0, 'output.insight.video_port must be > 0', id='video-port-zero'),
-    pytest.param(('output', 'insight', 'metadata_port'), 0, 'output.insight.metadata_port must be > 0', id='metadata-port-zero'),
-]
-
-
-@pytest.mark.unit
-class TestRejectedValues:
-    @pytest.mark.parametrize(("path", "value", "message"), REJECTED)
-    def test_invalid_value_is_rejected_with_an_actionable_message(
-        self, tmp_path, path, value, message
+def test_shipped_config_names_the_model_labels_and_usable_values():
+    """The checks the application leaves to its config: the values it reads are usable."""
+    config = main_module.Config.load(COMMON_DIR / "config.yaml")
+    model_path = COMMON_DIR / config.string("model.path")
+    assert model_path.name == "yolov5s_face_raw_split_mpk.tar.gz"
+    # The packaged path reaches prebuilt-apps/models from the config file.
+    assert model_path.resolve().is_relative_to(APPS_ROOT / "models")
+    # The model has one class, and its name labels every pose.
+    assert main_module.load_labels(APPS_ROOT / config.string("model.labels")) == ["face"]
+    assert config.string("input.source").startswith("rtsp://")
+    for key in (
+        "input.width",
+        "input.height",
+        "input.fps",
+        "input.rtsp.latency_ms",
+        "inference.frames",
     ):
-        with pytest.raises(ValueError) as excinfo:
-            main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+        assert config.integer(key) >= 0, key
+    assert config.integer("inference.max_detections") > 0
+    assert 0 <= config.number("inference.min_score") <= 1
+    assert 0 <= config.number("inference.nms_iou") <= 1
+    for key in ("output.insight.video_port_base", "output.insight.metadata_port_base"):
+        assert 1 <= config.integer(key) <= 65535, key
+    # Core sends to 127.0.0.1 when the host is empty.
+    assert config.string("output.insight.host")
+    assert config.boolean("input.rtsp.tcp")
 
-        assert message in str(excinfo.value)
+
+def test_decode_faces_places_the_box_and_landmarks_of_a_planted_face():
+    """Anchor 1 of the first level is 8x10 pixels: a zero box offset centers the face on
+    (20.5, 10.5) cells of 8 pixels, the size of the anchor."""
+    faces = yolov5_face.decode_faces(heads_with_faces([(1, SCORE_LOGITS)]), 0.25, 0.45, 50)
+    assert_close(faces.boxes, [[160.0, 79.0, 168.0, 89.0]])
+    assert_close(faces.scores, [0.4])
+    expected_landmarks = [[160.0 + 8 * k, 80.0 - 10 * k] for k in range(5)]
+    assert_close(faces.landmarks, [expected_landmarks])
 
 
-@pytest.mark.unit
-class TestBoundariesAreAccepted:
-    """An off-by-one that rejects a legal value is the failure nobody writes a test for."""
+def test_decode_faces_drops_faces_at_or_below_min_score():
+    heads = heads_with_faces([(1, SCORE_LOGITS)])
+    assert len(yolov5_face.decode_faces(heads, 0.45, 0.45, 50).scores) == 0
 
-    @pytest.mark.parametrize(
-        ("path", "value"),
-        [
-            (('inference', 'min_score'), 0.0),
-            (('inference', 'min_score'), 1.0),
-            (('inference', 'nms_iou'), 0.0),
-            (('inference', 'nms_iou'), 1.0),
-            (('source', 'latency_ms'), 0),
-            (('inference', 'frames'), 0),
-            (('inference', 'max_detections'), 1),
-            (('runtime', 'profile_interval'), 1),
-        ],
+
+@pytest.mark.parametrize("axes", [(0, 1, 3, 2), (0, 3, 1, 2)], ids=["neat-hcw", "onnx-chw"])
+def test_decode_faces_reads_every_head_layout_alike(axes):
+    """Neat delivers raw heads as [1, H, C, W]; ONNX runs give [1, C, H, W]."""
+    heads = heads_with_faces([(1, SCORE_LOGITS), (2, (5.0, 5.0))])
+    permuted = [np.ascontiguousarray(head.transpose(axes)) for head in heads]
+    expected = yolov5_face.decode_faces(heads, 0.25, 0.45, 50)
+    actual = yolov5_face.decode_faces(permuted, 0.25, 0.45, 50)
+    assert len(expected.scores) == 2
+    for got, want in zip(actual, expected):
+        assert_close(got, want)
+
+
+def test_decode_faces_keeps_the_higher_score_of_two_overlapping_faces():
+    """Two faces on one cell, 8x10 (score 0.4) and 13x16 (score near 1), overlap by
+    80 / 208 = 0.385 of their union."""
+    heads = heads_with_faces([(1, SCORE_LOGITS), (2, (10.0, 10.0))])
+    suppressed = yolov5_face.decode_faces(heads, 0.25, 0.3, 50)
+    assert_close(suppressed.boxes, [[157.5, 76.0, 170.5, 92.0]])
+    kept = yolov5_face.decode_faces(heads, 0.25, 0.45, 50)
+    assert_close(kept.scores, [sigmoid(10.0) ** 2, 0.4])
+    capped = yolov5_face.decode_faces(heads, 0.25, 0.45, 1)
+    assert_close(capped.scores, [sigmoid(10.0) ** 2])
+
+
+def test_decode_faces_rejects_heads_it_cannot_pair():
+    heads = heads_with_faces([])
+    with pytest.raises(ValueError, match="expected 6 split heads"):
+        yolov5_face.decode_faces(heads[:5], 0.25, 0.45, 50)
+    with pytest.raises(ValueError, match="no axis of 18 or 30 channels"):
+        yolov5_face.decode_faces(heads[:5] + [np.zeros((1, 7, 7, 7))], 0.25, 0.45, 50)
+    with pytest.raises(ValueError, match="a box and a landmark head on 3 grids"):
+        yolov5_face.decode_faces(heads[:4] + [heads[0], heads[5]], 0.25, 0.45, 50)
+
+
+def test_letterbox_centers_the_frame_on_the_canvas():
+    assert yolov5_face.letterbox(1600, 900) == (0.5, 0, 175)
+    assert yolov5_face.letterbox(640, 512) == (1.25, 0, 80)
+
+
+def test_to_frame_maps_canvas_pixels_to_the_frame_and_clips_only_boxes():
+    faces = yolov5_face.Faces(
+        boxes=np.array([[100, 275, 300, 475], [700, 150, 900, 300]], dtype=np.float32),
+        scores=np.array([0.9, 0.8], dtype=np.float32),
+        landmarks=np.array([[[400, 575]] * 5, [[-10, 100]] * 5], dtype=np.float32),
     )
-    def test_boundary_value_is_accepted(self, tmp_path, path, value):
-        main_module.load_app_config(write_full_config(tmp_path, [(path, value)]))
+    mapped = yolov5_face.to_frame(faces, yolov5_face.letterbox(1600, 900), 1600, 900)
+    assert mapped.boxes.tolist() == [[200, 200, 600, 600], [1400, 0, 1600, 250]]
+    assert mapped.landmarks[:, 0].tolist() == [[800, 800], [-20, -150]]
+    assert_close(mapped.scores, [0.9, 0.8])
 
 
-@pytest.mark.unit
-class TestMalformedConfigFiles:
-    def test_a_non_mapping_root_is_rejected(self, tmp_path):
-        """Raised as TypeError here, unlike the other applications; main() reports
-        both the same way, so the message is what matters."""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text("- not\n- a mapping\n", encoding="utf-8")
+def test_poses_json_gives_each_face_five_named_keypoints_with_its_score():
+    faces = yolov5_face.Faces(
+        boxes=np.zeros((1, 4), dtype=np.float32),
+        scores=np.array([0.5], dtype=np.float32),
+        landmarks=np.arange(10, dtype=np.float32).reshape(1, 5, 2),
+    )
+    names = ["eye_l", "eye_r", "nose_tip", "mouth_l", "mouth_r"]
+    assert json.loads(yolov5_face.poses_json(faces, "face")) == {
+        "poses": [
+            {
+                "id": "face_1",
+                "label": "face",
+                "keypoints": [
+                    {"name": name, "x": 2.0 * k, "y": 2.0 * k + 1, "confidence": 0.5}
+                    for k, name in enumerate(names)
+                ],
+            }
+        ]
+    }
 
-        with pytest.raises((TypeError, ValueError), match="config root must be a mapping"):
-            main_module.load_app_config(config_path)
 
-    def test_an_empty_file_is_reported_as_missing_settings_not_a_crash(self, tmp_path):
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text("", encoding="utf-8")
-
-        with pytest.raises(ValueError, match="source.rtsp_url must be set"):
-            main_module.load_app_config(config_path)
+def sigmoid(value: float) -> float:
+    return 1.0 / (1.0 + math.exp(-value))
 
 
-@pytest.mark.unit
-class TestPullOutcomes:
-    """The pull loop, driven by a run that yields no sample.
-
-    A timeout is a warning and another pull, and a runtime error raised by the pull ends
-    the run without a summary. pyneat's pull returns None for a closed output as for a
-    timeout, so Python cannot yet tell a source that ended from a slow one.
-    """
-
-    def test_timeout_is_not_a_sample(self):
-        example = load_example()
-        run = FakeRun("timeout")
-        run.pull("detections", 20000)
-
-        assert example.pull_result_has_sample(run, None, "detections") is False
-
-    def test_run_pipeline_warns_on_timeout_and_stops_on_runtime_error(self, capsys):
-        example = load_example()
-        run = FakeRun("timeout", ("error", "queue torn down"))
-        runtime = SimpleNamespace(run=run)
-        cfg = SimpleNamespace(frames=0, profile=False, profile_interval=1)
-
-        with pytest.raises(RuntimeError, match="queue torn down"):
-            example.run_pipeline(runtime, cfg)
-
-        captured = capsys.readouterr()
-        assert captured.err.count("[warn] timed out waiting for detections") == 1
-        assert "processed=" not in captured.out
-        assert run.pulls == [("detections", 20000)] * 2
+def assert_close(actual, expected) -> None:
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=0, atol=1e-4)
