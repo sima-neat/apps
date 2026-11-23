@@ -1,0 +1,37 @@
+model:                       # Depth model selection.
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
+
+io:                          # Input and output paths.
+  input_dir: <image-directory>       # Folder containing input images.
+  output_dir: sandbox/depth-estimator # Folder for depth visualizations.
+
+runtime:                     # Runtime settings.
+  infer_size: 518            # Square model input size; Neat uses bicubic resizing.
+  max_input_size: 1920       # Area-downscale only larger images before Neat preprocessing.
+  queue_depth: 4             # Runtime queue depth.
+
+output:
+  overlay: true             # Save native annotated/depth PNGs; false measures inference without rendering.
+
+# ROS image-topic settings. See this example's README.md.
+ros:
+  # Optional outputs; inference/results are unchanged when both are disabled.
+  visualization:
+    max_streams: 4       # Bound the number of distinct input header.frame_id values.
+    save:
+      enabled: false
+      directory: sandbox/ros2/depth-estimation/depth-estimator/visuals  # Each run creates a new subfolder.
+      every_n_frames: 1       # Save every N completed frames per camera.
+    insight:
+      enabled: false         # Launch reads this automatically; no extra sink command.
+      host: ""               # Reachable Insight host/IP; required when enabled.
+      video_port_base: 9000   # Use the UDP base exposed by your Insight service.
+      channel_base: 0
+      max_visible_streams: 4  # Limit hardware encoders; inference still handles all inputs.
+      fps: 30                # Maximum visualization sends/second per camera.
+      bitrate_kbps: 4000
+      channels: {}           # Optional {input_frame_id: Insight_channel}; selects visible streams.
+  input_policy: complete       # complete preserves admitted frames; latest favors freshness.
+  pending_frames: 8
+  inflight_frames: 4
+  source_window: 4            # Outstanding images per source in complete mode.

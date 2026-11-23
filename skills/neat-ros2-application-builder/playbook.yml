@@ -1,0 +1,9 @@
+id: neat-ros2-application-builder
+name: Neat ROS 2 Application Builder
+version: 0.1.0
+agents: [codex, claude]
+description: Build, integrate, debug and validate ROS 2 applications using the public Neat Library APIs on Modalix.
+compatibility:
+  env_types: [sdk, board]
+  env_subtypes: [palette, modalix]
+  min_cli_version: 2.1.1

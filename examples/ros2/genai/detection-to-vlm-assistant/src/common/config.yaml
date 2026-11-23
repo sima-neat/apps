@@ -1,0 +1,70 @@
+source:                      # RTSP input source.
+  rtsp_url: <rtsp-url-1>     # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+
+model:                       # Detector model selection.
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
+  labels: coco_label.txt    # Relative to this config file.
+
+inference:                   # Detection controls.
+  frames: 0                  # Frame limit. 0 means run continuously.
+  min_score: 0.55            # Detection score threshold.
+  nms_iou: 0.60              # NMS IoU threshold.
+  max_detections: 50         # Max detections to keep per frame.
+  # classes:
+  #   - person
+  #   - car
+  #   - truck
+
+runtime:                     # Runtime settings.
+  timeout_ms: 50000          # Inference timeout in milliseconds.
+
+genai_server:                # Local GenAI server process.
+  host: 0.0.0.0              # Host interface to bind.
+  port: 9998                 # Server port.
+  model:                     # Vision-language model served locally.
+    name: Qwen3-VL-4B-Instruct-Autoround-a16w4
+    path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-Autoround-a16w4
+
+genai:                       # VLM client: full image on demand, person crop periodically.
+  enabled: true              # Start the VLM node and optional local service.
+  mode: periodic             # periodic or on_demand; restart the launch to change.
+  image_max_age_seconds: 3.0   # Reject an image received longer ago than this (monotonic time).
+  host: 127.0.0.1            # GenAI server client host.
+  port: 9998                 # GenAI server client port.
+  max_tokens: 128            # Max generated tokens per request.
+  interval_seconds: 5        # Minimum seconds between VLM requests.
+  timeout_seconds: 30        # Request timeout in seconds.
+  system_prompt: >-
+    Answer the question about the supplied image. Be factual,
+    concise, and avoid guessing identity or protected attributes.
+  user_prompt: >-
+    What is the person doing in this crop?
+
+# ROS image-topic settings. See this example's README.md.
+ros:
+  image_topic: image         # Source -> detection and on-demand VLM; packed nv12.
+  results_topic: results     # Detection -> consumers and source acknowledgments.
+  crop_topic: person_crop    # Detection -> periodic VLM; rgb8 sensor_msgs/Image.
+  question_topic: question   # User -> VLM; std_msgs/String with the question text.
+  vlm_input_topic: vlm_input # Exact accepted VLM image (retained rgb8 preview).
+  captions_topic: captions   # VLM -> consumers; std_msgs/String JSON.
+  crop_interval_seconds: 1.0 # Publish the latest completed person crop at most once/second.
+  # Optional outputs; inference/results are unchanged when both are disabled.
+  visualization:
+    max_streams: 1       # This app uses one camera with a stable header.frame_id.
+    save:
+      enabled: false
+      directory: sandbox/ros2/genai/detection-to-vlm-assistant/visuals  # Each run creates a new subfolder.
+      every_n_frames: 1       # Save every N completed frames per camera.
+    insight:
+      enabled: false         # Enables detection video AND the last VLM input preview.
+      host: ""               # Reachable Insight host/IP; required when enabled.
+      video_port_base: 9000   # Use the UDP base exposed by your Insight service.
+      channel_base: 0        # Detection channel; VLM input preview uses the next channel.
+      max_visible_streams: 1  # One detection channel, plus a separate VLM preview channel.
+      fps: 30                # Maximum visualization sends/second per camera.
+      bitrate_kbps: 4000
+  input_policy: complete       # complete preserves admitted frames; latest favors freshness.
+  pending_frames: 8
+  inflight_frames: 4
+  source_window: 4            # Outstanding images per source in complete mode.

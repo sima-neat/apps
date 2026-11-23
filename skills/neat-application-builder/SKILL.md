@@ -18,6 +18,9 @@ behavior. Verify the APIs affected by the task against that installation.
   input owner, and API family before committing to a topology.
 - For classic model execution or graph composition, read
   [Model, Graph, and Run](references/model-graph-run.md).
+- For ROS 2 integration, use `neat-ros2-application-builder` when installed.
+  Otherwise inspect the chosen standalone package under `examples/ros2/` and
+  `examples/ros2/NODE_DEVELOPMENT.md`; preserve its native model route.
 - For LLM, VLM, ASR, or HTTP model serving, read
   [GenAI APIs](references/genai.md).
 - When locating an unfamiliar API, use the

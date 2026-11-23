@@ -1,0 +1,6 @@
+/build/
+/install/
+/log/
+/.venv*/
+/config.local.yaml
+/.neat-genai-studio.*

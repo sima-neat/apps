@@ -1,0 +1,4 @@
+interface:
+  display_name: "Neat ROS 2 Application Builder"
+  short_description: "Build and validate ROS 2 apps with the Neat Library"
+  default_prompt: "Use $neat-ros2-application-builder to build or improve a ROS 2 application using the installed Neat Library."

@@ -1,0 +1,22 @@
+# Build each listed app independently before starting the containers.
+apps_root: /absolute/path/to/apps
+image: neat-ros-apps:local
+apps:
+  - name: neat-ros-segmentation
+    path: segmentation/single-stream-instance-segmenter
+    package: neat_single_stream_instance_segmenter
+  - name: neat-ros-detection
+    path: object-detection/rfdetr-detection-segmentation
+    package: neat_rfdetr_detection_segmentation
+  - name: neat-ros-tracking
+    path: tracking/multi-stream-tracker
+    package: neat_multi_stream_tracker
+  - name: neat-ros-pose
+    path: pose-estimation/multi-stream-pose-estimator
+    package: neat_multi_stream_pose_estimator
+  - name: neat-ros-drone
+    path: tracking/yolo26-tiny-drone-tracker
+    package: neat_yolo26_tiny_drone_tracker
+  - name: neat-ros-blazepose
+    path: pose-estimation/multi-stream-blazepose3d
+    package: neat_multi_stream_blazepose3d

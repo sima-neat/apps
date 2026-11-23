@@ -6,7 +6,9 @@ consistent with the installed `prebuilt-apps/` bundle.
 
 ## Example Layout
 
-Every example lives under `examples/<category>/<example>/`.
+Native examples live under `examples/<category>/<example>/`. ROS adapters live
+separately under `examples/ros2/<category>/<example>/`, with their own README,
+config and Python entrypoint; see [ROS2.md](ROS2.md).
 
 Required:
 
@@ -238,6 +240,20 @@ generation, and affected CI workflows.
 
 The installed bundle does not contain CMake files or tests. Clone the repository
 to compile source or run the Apps test suite.
+
+ROS examples are built from a repository checkout on Modalix, independently of
+`build.sh`. Each app under `examples/ros2/<category>/<example>/` owns its local
+`package.xml`, `CMakeLists.txt`, `launch/`, nodes, helpers, labels and config.
+Run `colcon build` inside that folder. It must not import `neat_apps` or load
+source files from another example. ROS tests exercise the local app modules.
+ROS package installation through the Apps runtime bundle is not currently supported.
+
+Keep inference setup, execution, subscriptions and publication visible in the
+app's node files. Preserve native Python model routes, numerical decoding and
+asynchronous bounds. Validate output and throughput against native Python;
+C++ is an additional diagnostic reference. Physical-camera/Docker and runtime
+limitations must be recorded separately from build success. ROS layout/transport
+tests live in `tests/ros2`; no duplicate native targets or portal entries are added.
 
 ## Repository Layout
 
