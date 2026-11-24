@@ -78,7 +78,7 @@ Complete flow: [single-stream-thermal-face-detector](../../../examples/face-dete
 | Policy | `policy` | `policy` | `GraphLinkPolicy::Default` | Chooses how the link behaves when the receiver is slow. See the next table | Set `RealtimeLatestByStream` on live video branches |
 | Stream ID | `stream_id` | `stream_id` | `""` | Stable stream identity stamped on samples before realtime scheduling. Empty derives the identity from the source link | Several cameras share a model and you need to tell their results apart, count drops per camera, or keep IDs stable across restarts |
 | Inflight per stream | `max_inflight_per_stream` | `max_inflight_per_stream` | `-1` (the framework default, 4) | Maximum decoded frames one stream may have in the graph at once. Applies only to realtime links that carry raw decoder frames | A stream must keep more frames in flight to reach its frame rate, or fewer to leave decoder buffers for others |
-| Inflight total | `max_inflight_total` | `max_inflight_total` | `-1` (the per-stream limits added up, at most 8) | Maximum decoded frames all streams together may have in the graph. Applies only to realtime links that carry raw decoder frames | More than two streams share one model: the default total of 8 caps them below their per-stream limits. The pose estimator sets 16 for four streams |
+| Inflight total | `max_inflight_total` | `max_inflight_total` | `-1` (the per-stream limits added up, at most 8) | Maximum decoded frames all streams together may have in the graph. Applies only to realtime links that carry raw decoder frames | More than two streams share one model: the default total of 8 caps them below their per-stream limits. The pose estimator sets 16 for four streams. The total counts the streams on one link, so a link that carries one stream into its own model holds up to the per-stream limit (`EdgeRouter.cpp`) |
 
 `GraphLinkOptions` also has `queue_depth`, which is kept so that older code
 still compiles. It has no effect, see Pitfalls.
@@ -122,7 +122,7 @@ None. Python has every field and both policy values.
 - [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/)
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) (`stream_id`, `max_inflight_per_stream`, `max_inflight_total`)
 - [multi-stream-blazepose3d](../../../examples/pose-estimation/multi-stream-blazepose3d/)
-- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`stream_id`)
+- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (one realtime link into each stream's model)
 - [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/)
 
 ## Source

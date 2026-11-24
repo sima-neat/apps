@@ -67,29 +67,33 @@ GStreamer element that Neat has no node for.
 
 ## Minimal example
 
-A linear model graph with one named input and one named output.
+A model graph with one named input and one named output. The `Input` sits alone
+in its own graph, and `connect()` joins it to the model's stages.
 
 C++
 
 ```cpp
-simaai::neat::Graph graph("model_" + std::to_string(stream.index));
-graph.add(simaai::neat::nodes::Input(
-    kModelInput, make_nv12_input_options(stream.frame_w, stream.frame_h, stream.output_fps)));
-graph.add(*stream.model);
-graph.add(simaai::neat::nodes::Output(
-    kModelOutput,
-    simaai::neat::OutputOptions::EveryFrame(std::max(1, cfg.max_inflight_per_stream))));
+simaai::neat::Graph frames;
+frames.add(simaai::neat::nodes::Input("model_frame", model.input_appsrc_options(false)));
+simaai::neat::Graph results;
+results.add(simaai::neat::nodes::Output(results_output(index)));
+simaai::neat::Graph stages = model.graph();
+simaai::neat::Graph graph;
+graph.connect(frames, stages);
+graph.connect(stages, results);
 ```
 
 Python
 
 ```python
-graph = pyneat.Graph(f"model_{stream.index}")
-graph.add(pyneat.nodes.input(
-    MODEL_INPUT, make_nv12_input_options(stream.frame_w, stream.frame_h, stream.output_fps)))
-graph.add(stream.model)
-graph.add(pyneat.nodes.output(
-    MODEL_OUTPUT, pyneat.OutputOptions.every_frame(max(1, cfg.max_inflight_per_stream))))
+frames = pyneat.Graph()
+frames.add(pyneat.nodes.input("model_frame", model.input_appsrc_options(False)))
+results = pyneat.Graph()
+results.add(pyneat.nodes.output(results_output(index)))
+stages = model.graph()
+graph = pyneat.Graph()
+graph.connect(frames, stages)
+graph.connect(stages, results)
 ```
 
 Complete flow: [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/)

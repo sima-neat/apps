@@ -133,7 +133,7 @@ close but not right.
 - [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/): one named output, `EveryFrame(4)`
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `Latest()` with `CombinePolicy::ByFrame`
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/): two named outputs joined with `graphs::Combine`
-- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/): `drop = true` on a frame output
+- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/): one named output per stream, and `Latest()` on an output of encoded frames
 - [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `max_buffers` set by hand
 
 ## Source

@@ -106,7 +106,7 @@ SPS and PPS are the H.264 headers that a decoder needs before the first frame.
 | Fallback width | `fallback_h264_width` | `fallback_h264_width` | `-1` | H.264 width used when the stream does not carry one | The camera does not announce its size |
 | Fallback height | `fallback_h264_height` | `fallback_h264_height` | `-1` | H.264 height used when the stream does not carry one | Same as fallback width |
 | Source FPS | `source_fps` | `source_fps` | `-1` | The frame rate the camera sends. Written into the caps for every codec | The camera does not announce its frame rate. Set the real rate, it does not change the rate |
-| Payload type | `payload_type` | `payload_type` | `-1` | Only RTP packets with this payload type are accepted. `-1` means the codec default: `96` for H.264 and H.265, `26` for MJPEG. `0` accepts any | Keep the default, which already matches the codec |
+| Payload type | `payload_type` | `payload_type` | `-1` | Only RTP packets with this payload type are accepted. `-1` means the codec default: `96` for H.264 and H.265, `26` for MJPEG. `0` accepts any | Keep the default when the camera sends the codec's default type. Set `0` when it may announce another dynamic type, because the default filters on 96 for H.265 too (`RtspCodecMapping.h`) |
 
 `RtspDecodedInputOptions`
 
