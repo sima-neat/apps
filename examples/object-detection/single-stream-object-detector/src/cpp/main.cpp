@@ -67,8 +67,10 @@ struct AppConfig {
   // The key that names the source: source.<type>.url, or source.usb.camera.
   std::string source_key = "source.rtsp.url";
   SourceType source_type = SourceType::Rtsp;
-  // source.type=usb: the camera's stable ID (usb_camera_ids()) and one of its MJPEG modes.
+  // source.type=usb: the camera's stable ID (usb_camera_ids()), mjpeg or yuyv, and one of its
+  // modes in that format.
   std::string camera;
+  std::string usb_format = "mjpeg";
   int source_width = 1920;
   int source_height = 1080;
   SourceCodec source_codec = SourceCodec::H264;
@@ -222,11 +224,21 @@ void validate_config(const AppConfig& cfg) {
     sima_examples::require(cfg.source_width > 0 && cfg.source_height > 0,
                            "source.usb.width and source.usb.height must be > 0");
     sima_examples::require(cfg.source_fps > 0, "source.usb.fps must be > 0");
-    // The camera's JPEG goes to Insight as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
-    sima_examples::require(cfg.source_width <= 2040 && cfg.source_height <= 2040 &&
-                               cfg.source_width % 8 == 0 && cfg.source_height % 8 == 0,
-                           "source.usb.width and source.usb.height must be multiples of 8 and at "
-                           "most 2040 (RTP/JPEG)");
+    sima_examples::require(cfg.usb_format == "mjpeg" || cfg.usb_format == "yuyv",
+                           "source.usb.format must be mjpeg or yuyv");
+    if (cfg.usb_format == "yuyv") {
+      // YUYV frames go to Insight as 4:2:0 H.264: even sizes, 3840x2160 at most.
+      sima_examples::require(cfg.source_width <= 3840 && cfg.source_height <= 2160 &&
+                                 cfg.source_width % 2 == 0 && cfg.source_height % 2 == 0,
+                             "source.usb.width and source.usb.height must be even and at most "
+                             "3840x2160 (H.264)");
+    } else {
+      // The camera's JPEG goes to Insight as RTP/JPEG (RFC 2435): 8-pixel blocks, 2040 at most.
+      sima_examples::require(cfg.source_width <= 2040 && cfg.source_height <= 2040 &&
+                                 cfg.source_width % 8 == 0 && cfg.source_height % 8 == 0,
+                             "source.usb.width and source.usb.height must be multiples of 8 and at "
+                             "most 2040 (RTP/JPEG)");
+    }
   } else {
     sima_examples::require(!cfg.source_url.empty(), cfg.source_key + " must be set");
   }
@@ -261,9 +273,10 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.source_key = src + (cfg.source_type == SourceType::Usb ? "camera" : "url");
   cfg.source_url = raw.string_or(src + "url", "");
   cfg.camera = raw.string_or(src + "camera", "");
+  cfg.usb_format = lower_copy(raw.string_or(src + "format", "mjpeg"));
   cfg.source_width = raw.int_or(src + "width", 1920);
   cfg.source_height = raw.int_or(src + "height", 1080);
-  // HTTP streams and USB cameras are MJPEG; only RTSP names a codec.
+  // HTTP streams are MJPEG and USB cameras name a format; only RTSP names a codec.
   cfg.source_codec = cfg.source_type == SourceType::Rtsp
                          ? parse_source_codec(raw.string_or(src + "codec", "h264"))
                          : SourceCodec::Mjpeg;
@@ -558,6 +571,9 @@ simaai::neat::UsbCameraInputOptions make_usb_camera_options(const AppConfig& cfg
   opt.width = static_cast<std::uint32_t>(cfg.source_width);
   opt.height = static_cast<std::uint32_t>(cfg.source_height);
   opt.framerate_num = static_cast<std::uint32_t>(cfg.source_fps);
+  if (cfg.usb_format == "yuyv") {
+    opt.format = simaai::neat::UsbCameraFormat::YUYV;
+  }
   return opt;
 }
 
@@ -668,9 +684,11 @@ std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg,
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
   model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
-  model_opt.preprocess.color_convert.input_format = nv16_frames
-                                                        ? simaai::neat::PreprocessColorFormat::NV16
-                                                        : simaai::neat::PreprocessColorFormat::NV12;
+  model_opt.preprocess.color_convert.input_format =
+      cfg.source_type == SourceType::Usb && cfg.usb_format == "yuyv"
+          ? simaai::neat::PreprocessColorFormat::YUYV
+      : nv16_frames ? simaai::neat::PreprocessColorFormat::NV16
+                    : simaai::neat::PreprocessColorFormat::NV12;
   if (geometry.width > 0 && geometry.height > 0) {
     model_opt.preprocess.input_max_width = geometry.width;
     model_opt.preprocess.input_max_height = geometry.height;
@@ -695,8 +713,11 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
 
   // A USB camera's JPEG goes to Insight unchanged and is decoded only for the model, in the
   // camera's own sampling: most webcams send 4:2:2 MJPEG, which decodes to NV16, and the model
-  // reads NV16 directly. Other sources are decoded once and re-encoded as H.264 for Insight.
+  // reads NV16 directly. A YUYV camera's frames go to the model as they are and to the H.264
+  // encoder as NV12. Other sources are decoded once and re-encoded as H.264 for Insight.
   const bool usb = cfg.source_type == SourceType::Usb;
+  const bool raw_usb = usb && cfg.usb_format == "yuyv";
+  const bool mjpeg_usb = usb && !raw_usb;
   // The camera is checked once; the same info gives the decoded layout and builds the node.
   const std::optional<simaai::neat::UsbCameraInfo> usb_camera =
       usb ? std::optional(simaai::neat::usb_camera_info(make_usb_camera_options(cfg)))
@@ -707,13 +728,16 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   runtime.labels = load_labels(cfg.labels_path);
 
   auto video_options =
-      usb ? simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
-                simaai::neat::nodes::groups::RtspCodec::MJPEG)
-          : simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = runtime.output_fps});
+      mjpeg_usb ? simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
+                      simaai::neat::nodes::groups::RtspCodec::MJPEG)
+                : simaai::neat::nodes::groups::VideoSenderOptions::FromRaw(
+                      {.fps = runtime.output_fps,
+                       .input_policy = raw_usb ? simaai::neat::EncoderInputPolicy::RequireDirect
+                                               : simaai::neat::EncoderInputPolicy::Compatible});
   video_options.host = cfg.insight_host;
   video_options.channel = 0;
   video_options.video_port_base = cfg.video_port;
-  if (!usb) {
+  if (!mjpeg_usb) {
     video_options.encoder.bitrate_kbps = 1000;
   }
   runtime.video_port = video_options.video_port();
@@ -725,23 +749,42 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   if (save_frames) {
     decoded_outputs.push_back("frame");
   }
-  if (!usb) {
+  if (!mjpeg_usb) {
     decoded_outputs.insert(decoded_outputs.begin(), "video");
   }
   auto source = make_source_graph(cfg, geometry, usb_camera);
-  auto branch = simaai::neat::graphs::Branch(usb ? "decoded" : "source", decoded_outputs);
+  auto branch = simaai::neat::graphs::Branch(mjpeg_usb ? "decoded" : "source", decoded_outputs);
 
   simaai::neat::Graph video_graph("video");
-  video_graph.connect(simaai::neat::nodes::Input("video"),
-                      simaai::neat::nodes::groups::VideoSender(video_options));
+  video_graph.add(simaai::neat::nodes::Input("video"));
+  if (raw_usb) {
+    simaai::neat::ColorConvertOptions convert;
+    convert.output_format = simaai::neat::ImageFormat::NV12;
+    convert.surface = simaai::neat::ImageSurfaceLayout::EncoderNv12;
+    convert.color = usb_camera->color;
+    convert.color.output_siting = {simaai::neat::ImageChromaSiting::Cosited,
+                                   simaai::neat::ImageChromaSiting::Centered};
+    convert.input_colorimetry = usb_camera->colorimetry;
+    video_graph.add(simaai::neat::nodes::ColorConvert(convert));
+  }
+  video_graph.add(simaai::neat::nodes::groups::VideoSender(video_options));
 
   simaai::neat::Graph model_graph("model");
-  model_graph.connect(simaai::neat::nodes::Input("model"), *runtime.model);
+  if (raw_usb) {
+    model_graph.add(simaai::neat::nodes::Input("model"));
+    simaai::neat::PreprocOptions preproc(*runtime.model);
+    preproc.input_color = usb_camera->color;
+    model_graph.add(simaai::neat::nodes::Preproc(preproc));
+    model_graph.add(runtime.model->inference());
+    model_graph.add(runtime.model->postprocess());
+  } else {
+    model_graph.connect(simaai::neat::nodes::Input("model"), *runtime.model);
+  }
   simaai::neat::Graph detections_graph("detections");
   detections_graph.add(
       simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
 
-  if (usb) {
+  if (mjpeg_usb) {
     simaai::neat::Graph decode_graph("decode");
     decode_graph.connect(
         simaai::neat::nodes::Input("decode"),
@@ -755,12 +798,26 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
     runtime.graph.connect(decode_graph, branch);
   } else {
     runtime.graph.connect(source, branch);
-    runtime.graph.connect(branch, video_graph);
+    if (raw_usb) {
+      simaai::neat::GraphLinkOptions latest;
+      latest.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
+      runtime.graph.connect(branch, video_graph, latest);
+    } else {
+      runtime.graph.connect(branch, video_graph);
+    }
   }
   runtime.graph.connect(branch, model_graph);
   runtime.graph.connect(model_graph, detections_graph);
   if (save_frames) {
     simaai::neat::Graph frame_graph("frame");
+    if (raw_usb) {
+      frame_graph.add(simaai::neat::nodes::Input("frame"));
+      simaai::neat::ColorConvertOptions snapshot;
+      snapshot.output_format = simaai::neat::ImageFormat::BGR;
+      snapshot.color = usb_camera->color;
+      snapshot.input_colorimetry = usb_camera->colorimetry;
+      frame_graph.add(simaai::neat::nodes::ColorConvert(snapshot));
+    }
     frame_graph.add(
         simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
     auto joined = simaai::neat::graphs::Combine({"frame", "detections"}, "detector_output",
@@ -792,9 +849,9 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   sima_examples::require(runtime.metadata_sender->ok(), metadata_err);
 
   std::cout << "source=" << (cfg.source_type == SourceType::Usb ? cfg.camera : cfg.source_url)
-            << " type=" << source_type_name(cfg.source_type)
-            << " codec=" << source_codec_name(cfg.source_codec) << " stream=" << runtime.frame_w
-            << "x" << runtime.frame_h << "@" << runtime.output_fps
+            << " type=" << source_type_name(cfg.source_type) << " codec="
+            << (usb ? cfg.usb_format : std::string(source_codec_name(cfg.source_codec)))
+            << " stream=" << runtime.frame_w << "x" << runtime.frame_h << "@" << runtime.output_fps
             << " insight=" << cfg.insight_host << " video=" << runtime.video_port
             << " metadata=" << runtime.metadata_sender->metadata_port() << " channel=0\n";
   return runtime;

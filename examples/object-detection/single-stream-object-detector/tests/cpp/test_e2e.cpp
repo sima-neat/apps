@@ -36,6 +36,7 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   const int total_saved_frames = e2e_int(kExampleName, "testing.e2e.output", "total_saved_frames");
   // The case fills its source type's section; a USB case's "URL" is the camera's stable ID.
   const bool usb = source_case.type == "usb";
+  const bool usb_jpeg = usb && source_case.codec == "mjpeg";
   const std::string src = "source." + source_case.type + ".";
   ConfigScalars overrides{{"source.type", source_case.type},
                           {src + (usb ? "camera" : "url"), source_url},
@@ -50,8 +51,16 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   if (source_case.type == "http") {
     overrides[src + "ssl_strict"] = source_case.ssl_strict ? "true" : "false";
   }
+  if (usb) {
+    overrides[src + "format"] = source_case.codec;
+  }
   if (source_case.fps > 0) {
     overrides[src + "fps"] = std::to_string(source_case.fps);
+  }
+  if (source_case.codec == "yuyv") {
+    // UVC cameras commonly list YUYV at 640x480 and 30 fps.
+    overrides[src + "width"] = "640";
+    overrides[src + "height"] = "480";
   }
   write_e2e_config(kExampleName, config_path, overrides);
 
@@ -92,10 +101,10 @@ int run_source_case(const std::string& binary, const std::string& model_path,
       std::cerr << "[FAIL] " << label << " " << problem << "\n";
       rc = 1;
     } else if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 ||
-               (video_packet[1] & 0x7F) != (usb ? 26 : 96)) {
-      // Streams are re-encoded to RTP H.264 (payload type 96); a USB camera's own JPEG is
-      // forwarded as RTP/JPEG (payload type 26).
-      std::cerr << "[FAIL] " << label << " did not publish RTP " << (usb ? "JPEG" : "H.264")
+               (video_packet[1] & 0x7F) != (usb_jpeg ? 26 : 96)) {
+      // Streams and YUYV cameras are encoded to RTP H.264 (payload type 96); an MJPEG camera's
+      // own JPEG is forwarded as RTP/JPEG (payload type 26).
+      std::cerr << "[FAIL] " << label << " did not publish RTP " << (usb_jpeg ? "JPEG" : "H.264")
                 << " video to Insight\n";
       rc = 1;
     } else {
@@ -148,18 +157,22 @@ int main(int argc, char** argv) {
         }
         return case_rc;
       });
-  // USB capture needs a camera on the DevKit, which CI runners do not have, so this case runs
+  // USB capture needs a camera on the DevKit, which CI runners do not have, so these cases run
   // only when SIMANEAT_TEST_USB_CAMERA names one (see usb_camera_ids()), even under --strict.
   int usb_rc = 0;
   bool usb_ran = false;
-  const StreamSourceCase usb_case{"usb_camera", "SIMANEAT_TEST_USB_CAMERA", "usb", "mjpeg", 30,
-                                  true};
-  if (const char* camera = env_or_null(usb_case.env_key.c_str())) {
+  const std::vector<StreamSourceCase> usb_cases = {
+      {"usb_camera", "SIMANEAT_TEST_USB_CAMERA", "usb", "mjpeg", 30, true},
+      {"usb_camera_yuyv", "SIMANEAT_TEST_USB_CAMERA", "usb", "yuyv", 30, true},
+  };
+  if (const char* camera = env_or_null("SIMANEAT_TEST_USB_CAMERA")) {
     usb_ran = true;
-    for (const std::string& model_path : model_paths) {
-      const std::string label = model_case_label(usb_case.name, model_path, model_paths.size());
-      if (run_source_case(binary, model_path, usb_case, camera, label) != 0) {
-        usb_rc = 1;
+    for (const StreamSourceCase& usb_case : usb_cases) {
+      for (const std::string& model_path : model_paths) {
+        const std::string label = model_case_label(usb_case.name, model_path, model_paths.size());
+        if (run_source_case(binary, model_path, usb_case, camera, label) != 0) {
+          usb_rc = 1;
+        }
       }
     }
   } else {

@@ -66,7 +66,12 @@ because 720p rows are unpadded and only the colors shift there.
   `decoded_format` (NV12, or NV16 for 4:2:2 webcams) is the `SimaDecode`
   output format and the model's preprocess input format. Forward the JPEG
   frames to Insight with `Passthrough(RtspCodec::MJPEG)` rather than decoding
-  and re-encoding. Core's `usb-camera-input.md` states which cameras and modes Neat supports.
+  and re-encoding. For uncompressed YUYV modes, set the options' `format` to
+  `UsbCameraFormat::YUYV` before calling `usb_camera_info`; Core's
+  `usb-camera-input.md` shows how the info's `color` and `colorimetry` feed
+  `PreprocOptions::input_color` and a `ColorConvert` to NV12 for H.264; the
+  single-stream object detector uses both formats. That doc also states which
+  cameras and modes Neat supports.
 
 Both camera docs live in `docs/develop-apps/advanced-concepts/application-design/` in Core
 source.
