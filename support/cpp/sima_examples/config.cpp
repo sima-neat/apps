@@ -22,20 +22,31 @@ bool is_nullish(const std::string& value) {
   return lower_copy(trim_copy(value)) == "null";
 }
 
+// std::stoi and std::stod name no key in their errors, so each failure names the key instead.
 int parse_int(const std::string& value, const std::string& key) {
   std::size_t index = 0;
-  const int parsed = std::stoi(value, &index);
-  if (index != value.size()) {
-    throw std::runtime_error(key + " must be an integer");
+  int parsed = 0;
+  try {
+    parsed = std::stoi(value, &index);
+  } catch (const std::logic_error&) {
+    index = 0;
+  }
+  if (index == 0 || index != value.size()) {
+    throw std::runtime_error(key + " must be an integer, got '" + value + "'");
   }
   return parsed;
 }
 
 double parse_double(const std::string& value, const std::string& key) {
   std::size_t index = 0;
-  const double parsed = std::stod(value, &index);
-  if (index != value.size()) {
-    throw std::runtime_error(key + " must be numeric");
+  double parsed = 0.0;
+  try {
+    parsed = std::stod(value, &index);
+  } catch (const std::logic_error&) {
+    index = 0;
+  }
+  if (index == 0 || index != value.size()) {
+    throw std::runtime_error(key + " must be a number, got '" + value + "'");
   }
   return parsed;
 }
