@@ -6,7 +6,8 @@ which ones you obtained.
 
 ## C++ build
 
-A standalone C++ application links the installed package with CMake:
+A standalone C++ application links the installed package with CMake. The `SYSROOT` block lets
+the same file build in the Palette SDK and natively on the DevKit:
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -16,15 +17,34 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(DEFINED ENV{SYSROOT} AND NOT "$ENV{SYSROOT}" STREQUAL "")
+  list(APPEND CMAKE_PREFIX_PATH
+    "$ENV{SYSROOT}/usr"
+    "$ENV{SYSROOT}/usr/lib"
+    "$ENV{SYSROOT}/usr/lib/aarch64-linux-gnu"
+  )
+endif()
+
 find_package(SimaNeat REQUIRED CONFIG)
 
 add_executable(neat_app main.cpp)
 target_link_libraries(neat_app PRIVATE SimaNeat::sima_neat)
 ```
 
-Build in the Neat Development Environment with its toolchain, against the Core the target runs.
-The `libsima_neat.so.<abi>` that `readelf -d <app> | grep NEEDED` shows must match the
-target's installed library.
+Configure and build with no toolchain file:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+In the Palette SDK, the shell's `SYSROOT`, `CC`, `CXX`, `CXXFLAGS`, and `LDFLAGS` select the
+ARM64 cross compiler and the Modalix sysroot. Do not pass the Apps repository's
+`cmake/toolchains/aarch64-modalix.cmake` from `/neat-resources/apps-src`: it exists only in
+Core-bundled images. The build is correct when `file build/neat_app` reports ARM aarch64,
+`SimaNeat_DIR` in `build/CMakeCache.txt` points under `$SYSROOT`, and the
+`libsima_neat.so.<abi>` that `readelf -d build/neat_app | grep NEEDED` shows matches the
+DevKit's installed library.
 
 ## Python import
 
