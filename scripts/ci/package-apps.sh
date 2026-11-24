@@ -6,7 +6,8 @@
 # build; the Vulcan post-build step validates the archives.
 #
 # Usage: scripts/ci/package-apps.sh [--build-dir <dir>]
-#   <dir> is relative to the repository root (default: build, or $BUILD_DIR).
+#   <dir> is absolute or relative to the repository root (default: build, or
+#   $BUILD_DIR). A missing <dir> is an error.
 # Needs deps/neat-core.json, which build.sh --all writes when it resolves Core.
 set -euo pipefail
 
@@ -19,7 +20,7 @@ BUILD_DIR="${BUILD_DIR:-build}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --build-dir) BUILD_DIR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -84,13 +85,16 @@ artifact_version() {
 
 package_distribution() {
   local build_path="${ROOT_DIR}/${BUILD_DIR}"
+  if [[ "${BUILD_DIR}" = /* ]]; then
+    build_path="${BUILD_DIR}"
+  fi
   local stage_root stage_dir test_stage_dir
   local branch_key version archive_name archive_path apps_ref apps_spec
   local test_archive_path="${ROOT_DIR}/neat-apps-tests.tar.gz"
 
   if [[ ! -d "${build_path}" ]]; then
-    echo "Skipping distribution packaging: build directory not found: ${build_path}"
-    return 0
+    echo "ERROR: build directory not found: ${build_path}" >&2
+    return 1
   fi
 
   branch_key="$(git_branch_key)"
@@ -158,7 +162,7 @@ PY
   # preserving the example layout expected by the test runner.
   while IFS= read -r exe; do
     local rel target_dir
-    rel="${exe#${build_path}/}"
+    rel="${exe#"${build_path}"/}"
     if [[ "${exe}" == *_unit_test || "${exe}" == *_e2e_test ]]; then
       target_dir="${test_stage_dir}/$(dirname "${rel}")/tests/cpp"
     else
@@ -182,7 +186,7 @@ PY
   # separately and overlaid only in CI.
   while IFS= read -r src_file; do
     local rel target_dir
-    rel="${src_file#${ROOT_DIR}/examples/}"
+    rel="${src_file#"${ROOT_DIR}"/examples/}"
     target_dir="${stage_dir}/examples/$(dirname "${rel}")"
     mkdir -p "${target_dir}"
     cp "${src_file}" "${target_dir}/"
@@ -215,7 +219,7 @@ PY
 
   while IFS= read -r tests_dir; do
     local rel target_dir
-    rel="${tests_dir#${ROOT_DIR}/examples/}"
+    rel="${tests_dir#"${ROOT_DIR}"/examples/}"
     target_dir="${test_stage_dir}/examples/${rel}"
     mkdir -p "${target_dir}"
     cp -a "${tests_dir}/." "${target_dir}/"
@@ -235,7 +239,7 @@ PY
     mapfile -t asset_files < <(
       find "${ROOT_DIR}/assets/datasets" -type f \
         ! -name '.DS_Store' \
-        | sed "s#^${ROOT_DIR}/##" \
+        -printf 'assets/datasets/%P\n' \
         | sort
     )
   fi
@@ -256,7 +260,7 @@ PY
     mapfile -t test_asset_files < <(
       find "${ROOT_DIR}/assets/datasets-test" -type f \
         ! -name '.DS_Store' \
-        | sed "s#^${ROOT_DIR}/##" \
+        -printf 'assets/datasets-test/%P\n' \
         | sort
     )
   fi

@@ -1,8 +1,13 @@
-"""Contract for scripts/ci/package-apps.sh: the bundles do not depend on git.
+"""Contract for scripts/ci/package-apps.sh and the files it sources.
 
-Inside the Vulcan build container git cannot read the checkout (it is owned by
-another user, so git refuses it as a dubious directory). Packaging must then
-produce the same archives as on a host where git works.
+With GITHUB_SHA and a branch ref set, as in CI, the archives are the same
+whether git can read the checkout or not, for a checkout with no untracked
+files under assets/. In a container git can refuse a checkout that another
+user owns (a dubious directory), so packaging must not need it.
+
+build.sh and package-apps.sh both name artifacts with sanitize_branch_key and
+current_dependency_tag. A regex check keeps their one definition in
+scripts/artifact-refs.sh.
 """
 
 from __future__ import annotations
@@ -15,6 +20,8 @@ import stat
 import subprocess
 import tarfile
 from pathlib import Path
+
+import re
 
 import pytest
 
@@ -62,7 +69,8 @@ def _fake_repo(root: Path) -> None:
     _write(build / "demo", executable=True)
     _write(build / "demo_unit_test", executable=True)
     _write(build / "demo_e2e_test", executable=True)
-    _write(build / "CMakeFiles/demo.dir/link.txt", executable=True)
+    # An executable under CMakeFiles that looks like a test must stay out.
+    _write(build / "CMakeFiles/demo.dir/demo_unit_test", executable=True)
 
 
 def _git(root: Path, *args: str) -> None:
@@ -74,7 +82,9 @@ def _git(root: Path, *args: str) -> None:
     )
 
 
-def _package(root: Path, extra_env: dict[str, str] | None = None) -> dict[str, dict]:
+def _run_package_apps(
+    root: Path, extra_env: dict[str, str] | None = None, args: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess:
     env = {
         key: value
         for key, value in os.environ.items()
@@ -87,17 +97,26 @@ def _package(root: Path, extra_env: dict[str, str] | None = None) -> dict[str, d
             **(extra_env or {}),
         }
     )
-    proc = subprocess.run(
-        ["bash", str(root / "scripts/ci/package-apps.sh")],
+    return subprocess.run(
+        ["bash", str(root / "scripts/ci/package-apps.sh"), *args],
         cwd=root,
         env=env,
         text=True,
         capture_output=True,
         check=False,
     )
+
+
+def _package(
+    root: Path,
+    extra_env: dict[str, str] | None = None,
+    runtime_archive: str = RUNTIME_ARCHIVE,
+    args: tuple[str, ...] = (),
+) -> dict[str, dict]:
+    proc = _run_package_apps(root, extra_env, args)
     assert proc.returncode == 0, proc.stderr + proc.stdout
     archives = sorted(path.name for path in root.glob("neat-apps-*.tar.gz"))
-    assert archives == sorted([RUNTIME_ARCHIVE, TESTS_ARCHIVE])
+    assert archives == sorted([runtime_archive, TESTS_ARCHIVE])
     contents = {}
     for name in archives:
         with tarfile.open(root / name, "r:gz") as tar:
@@ -160,6 +179,8 @@ def test_package_apps_ships_runtime_and_test_layout(packaged_without_git):
         "neat-apps-tests/assets/datasets-test/coco/test.jpg",
     ):
         assert member in tests, member
+    for archive in (runtime, tests):
+        assert not [name for name in archive if "CMakeFiles" in name]
 
 
 @pytest.mark.parametrize("git_state", ["repository", "unreadable-repository"])
@@ -179,6 +200,49 @@ def test_package_apps_output_does_not_depend_on_git(
     assert _package(root, extra_env) == packaged_without_git
 
 
+def test_package_apps_accepts_an_absolute_build_dir(tmp_path, packaged_without_git):
+    root = tmp_path / "absolute"
+    root.mkdir()
+    _fake_repo(root)
+    elsewhere = tmp_path / "elsewhere-build"
+    (root / "build").rename(elsewhere)
+
+    assert _package(root, args=("--build-dir", str(elsewhere))) == packaged_without_git
+
+
+def test_package_apps_fails_without_a_build_dir(tmp_path):
+    root = tmp_path / "unbuilt"
+    root.mkdir()
+    _fake_repo(root)
+
+    proc = _run_package_apps(root, args=("--build-dir", "missing"))
+
+    assert proc.returncode == 1
+    assert f"build directory not found: {root}/missing" in proc.stderr
+    assert not list(root.glob("neat-apps-*.tar.gz"))
+
+
+def test_package_apps_handles_glob_characters_in_the_checkout_path(
+    tmp_path, packaged_without_git
+):
+    root = tmp_path / "check[x]out"
+    root.mkdir()
+    _fake_repo(root)
+
+    assert _package(root) == packaged_without_git
+
+
+def test_package_apps_names_a_tag_build_after_the_tag(tmp_path, packaged_without_git):
+    root = tmp_path / "tag"
+    root.mkdir()
+    _fake_repo(root)
+    tag_env = {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v1.2.3"}
+
+    packaged = _package(root, tag_env, runtime_archive="neat-apps-contract-1.2.3.tar.gz")
+
+    assert packaged["neat-apps-contract-1.2.3.tar.gz"] == packaged_without_git[RUNTIME_ARCHIVE]
+
+
 @pytest.mark.parametrize("script", ["build.sh", "scripts/ci/package-apps.sh"])
 def test_branch_key_and_tag_live_only_in_artifact_refs(script):
     # build.sh resolves Core and package-apps.sh versions the archive with the
@@ -186,4 +250,5 @@ def test_branch_key_and_tag_live_only_in_artifact_refs(script):
     text = (APPS_ROOT / script).read_text(encoding="utf-8")
     assert 'source "${ROOT_DIR}/scripts/artifact-refs.sh"' in text
     for function in ("sanitize_branch_key", "current_dependency_tag"):
-        assert f"{function}() {{" not in text, f"{script} redefines {function}"
+        definition = re.compile(rf"^\s*(function\s+)?{function}\s*(\(\))?\s*\{{", re.M)
+        assert not definition.search(text), f"{script} redefines {function}"

@@ -80,9 +80,6 @@ jobs:
         "${SDK_PACKAGE_HELPER:?Shared SDK package helper required}" "${sdk_container}" configure
 
         packages=()
-        if ! docker exec "${sdk_container}" bash -lc 'command -v npm >/dev/null 2>&1'; then
-          packages+=(nodejs npm)
-        fi
         if ! docker exec "${sdk_container}" bash -lc 'command -v rg >/dev/null 2>&1'; then
           packages+=(ripgrep)
         fi

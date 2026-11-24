@@ -12,8 +12,9 @@ current_dependency_tag() {
     printf '%s\n' "${GITHUB_REF_NAME}"
     return 0
   fi
-  if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git -C "${ROOT_DIR}" describe --tags --exact-match HEAD 2>/dev/null || true
+  local root="${ROOT_DIR:?artifact-refs.sh: set ROOT_DIR}"
+  if command -v git >/dev/null 2>&1 && git -C "${root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${root}" describe --tags --exact-match HEAD 2>/dev/null || true
     return 0
   fi
   printf '\n'

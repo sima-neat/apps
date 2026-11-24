@@ -2,8 +2,8 @@
 
 Apps uses `SDK_PACKAGE_HELPER`, provided by the shared
 `sima-neat/.github/.github/workflows/vulcan-build.yml@main`, to configure the
-selected SDK container and install missing Node.js/npm and ripgrep tools before
-the CLI bootstrap and build.
+selected SDK container and install ripgrep, if it is missing, before the CLI
+bootstrap and build.
 
 The helper retries recognized dpkg/APT lock contention for 120 seconds by
 default, reports lock-owner diagnostics, and preserves unrelated failures.

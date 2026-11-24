@@ -21,12 +21,13 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
     "missing,operation,status,expected",
     [
         ("", "", 0, ["configure", "build"]),
-        ("npm", "", 0, ["configure", "update", "install", "build"]),
+        # build.sh no longer builds the portal, so a missing npm installs nothing.
+        ("npm", "", 0, ["configure", "build"]),
         ("rg", "", 0, ["configure", "update", "install", "build"]),
         ("npm rg", "", 0, ["configure", "update", "install", "build"]),
-        ("npm rg", "configure", 2, ["configure"]),
-        ("npm rg", "update", 100, ["configure", "update"]),
-        ("npm rg", "install", 100, ["configure", "update", "install"]),
+        ("rg", "configure", 2, ["configure"]),
+        ("rg", "update", 100, ["configure", "update"]),
+        ("rg", "install", 100, ["configure", "update", "install"]),
     ],
 )
 def test_sdk_package_operations_precede_build(
@@ -85,12 +86,7 @@ def test_sdk_package_operations_precede_build(
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert [call[0] for call in calls] == expected
     if "install" in expected:
-        packages = []
-        if "npm" in missing.split():
-            packages.extend(["nodejs", "npm"])
-        if "rg" in missing.split():
-            packages.append("ripgrep")
-        assert calls[2] == ["install", "-y", "--no-install-recommends", *packages]
+        assert calls[2] == ["install", "-y", "--no-install-recommends", "ripgrep"]
     if status:
         assert "fixture package failure" in result.stderr
 

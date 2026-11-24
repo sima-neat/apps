@@ -997,5 +997,5 @@ else
 fi
 
 if [[ "${INSTALL_CORE}" -eq 1 ]]; then
-  "${ROOT_DIR}/scripts/ci/package-apps.sh" --build-dir "${BUILD_DIR}"
+  bash "${ROOT_DIR}/scripts/ci/package-apps.sh" --build-dir "${BUILD_DIR}"
 fi
