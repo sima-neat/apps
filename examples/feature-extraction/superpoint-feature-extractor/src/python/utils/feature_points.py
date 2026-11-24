@@ -16,10 +16,11 @@ def source_points(
     """The keypoints `[N, 2]` on the source frame, in whole pixels; both sizes are
     `(width, height)`.
 
-    The decoder reports model-input pixels (sima-neat/core#1328). Preprocessing stretched the
-    source frame to the model input, so each axis maps back by its own ratio. Each point rounds
-    half up, like C++ std::lround on a point that is not negative, and a point that lands on or
-    beyond a frame edge is dropped: the edges are exclusive coordinates.
+    The decoder reports model-input pixels (sima-neat/core#1328). After a Stretch resize
+    (`resize.mode = Stretch` with `resize.enable = On`, as main sets it), each axis maps back by
+    its own ratio. A letterbox would need its padding removed first. Each point rounds half up,
+    like C++ std::lround on a point that is not negative. A point that lands on or beyond a
+    frame edge is dropped: the edges are exclusive coordinates.
     """
     scale = np.asarray(
         [source_size[0] / model_size[0], source_size[1] / model_size[1]], dtype=np.float32

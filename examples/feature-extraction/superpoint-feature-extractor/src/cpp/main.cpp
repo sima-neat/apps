@@ -77,12 +77,12 @@ neat::Model::Options model_options(const sima_examples::RtspStreamInfo& stream) 
   options.preprocess.input_max_height = stream.height;
   options.preprocess.resize.enable = neat::AutoFlag::On;
   options.preprocess.resize.mode = neat::ResizeMode::Stretch;
-  options.preprocess.normalize.mean = {0.0F, 0.0F, 0.0F};
-  options.preprocess.normalize.stddev = {1.0F, 1.0F, 1.0F};
+  // The default mean 0 and stddev 1, marked explicit, turn normalization on: pixels / 255.
   options.preprocess.normalize.has_explicit_stats = true;
   options.decode_type = neat::BoxDecodeType::SuperPoint;
-  // The decoder rules this example documents and tests: at most 600 points per frame, with the
-  // profile's postprocessing on the A65. Auto would take the profile the package names.
+  // A65V1 pins the score threshold at 0.1. Auto would also give A65V1 for this package, which
+  // names no profile, but would follow a package that does. The 600-point limit is Core's
+  // default top_k for every profile.
   options.superpoint.profile = neat::SuperPointProfile::A65V1;
   options.processcvu.post_run_target = "A65";
   return options;
@@ -100,7 +100,6 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
                                              const sima_examples::RtspStreamInfo& stream) {
   groups::RtspEncodedInputOptions options;
   options.url = config.string("input.source");
-  options.codec = groups::RtspCodec::H264;
   options.tcp = config.boolean("input.rtsp.tcp");
   options.latency_ms = config.integer("input.rtsp.latency_ms");
   // With input.fps at 0, Core also takes the caps from the stream: above 60 fps, caps set from
@@ -109,7 +108,6 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
   options.source_fps = stream.fps;
   options.fallback_h264_width = stream.width;
   options.fallback_h264_height = stream.height;
-  options.fallback_h264_fps = stream.fps;
   return options;
 }
 
@@ -117,8 +115,6 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
 // so a pull loop slower than the stream cannot hold back the video sender.
 neat::Graph decoder_graph(const sima_examples::RtspStreamInfo& stream) {
   neat::SimaDecodeOptions decode;
-  decode.type = neat::SimaDecodeType::H264;
-  decode.out_format = neat::FormatTag::NV12;
   decode.dec_width = stream.width;
   decode.dec_height = stream.height;
   decode.dec_fps = stream.fps;
@@ -150,25 +146,30 @@ neat::RunOptions run_options() {
   return options;
 }
 
-// The Y plane of a decoded NV12 frame, a copy: the gray image SuperPoint reads.
-cv::Mat luma(const neat::Sample& sample, const sima_examples::RtspStreamInfo& stream) {
+// A gray image as the model's input tensor, copied into EV74 memory, from_cv_mat's default.
+neat::Tensor gray_tensor(const cv::Mat& gray) {
+  return neat::Tensor::from_cv_mat(gray, neat::ImageSpec::PixelFormat::GRAY8);
+}
+
+// The Y plane of a decoded NV12 frame: the gray image SuperPoint reads. The only copy is the one
+// into EV74 memory, made from a view of the mapped frame while the mapping lives.
+neat::Tensor luma(const neat::Sample& sample, const sima_examples::RtspStreamInfo& stream) {
   // Core candidate: Preproc converts no YUV format to gray, and a VideoConvert before the model
   // drops the frame metadata Preproc needs, so the host hands the model the Y plane.
-  const auto tensor = neat::tensors_from_sample(sample).front();
-  int width = 0;
-  int height = 0;
-  sima_examples::require(sima_examples::infer_dims(tensor, width, height) &&
-                             width == stream.width && height == stream.height,
+  const auto tensors = neat::tensors_from_sample(sample);
+  sima_examples::require(!tensors.empty(), "decoded frame has no tensor");
+  const auto nv12 = tensors.front().map_nv12_read();
+  sima_examples::require(nv12.has_value(), "decoded frame is not NV12");
+  const int width = nv12->view.width;
+  const int height = nv12->view.height;
+  sima_examples::require(width == stream.width && height == stream.height,
                          "frame size " + std::to_string(width) + "x" + std::to_string(height) +
                              " differs from the stream's " + std::to_string(stream.width) + "x" +
                              std::to_string(stream.height) + "; the stream must keep one size");
-  auto nv12 = tensor.copy_nv12_contiguous();
-  return cv::Mat(height, width, CV_8UC1, nv12.data()).clone();
-}
-
-neat::Tensor gray_tensor(const cv::Mat& gray) {
-  return neat::Tensor::from_cv_mat(gray, neat::ImageSpec::PixelFormat::GRAY8,
-                                   neat::TensorMemory::EV74);
+  // from_cv_mat only reads the view, so dropping const here writes nothing.
+  const cv::Mat y_plane(height, width, CV_8UC1, const_cast<std::uint8_t*>(nv12->view.y),
+                        static_cast<std::size_t>(nv12->view.y_stride));
+  return gray_tensor(y_plane);
 }
 
 // Run the model on every frame and send its feature points to Insight until `frames` (0: no
@@ -188,8 +189,7 @@ FeatureCounts send_feature_points(neat::Run& run, neat::Model::Runner& runner,
     }
 
     const auto features =
-        neat::decode_superpoint(runner.run(neat::TensorList{gray_tensor(luma(sample, stream))}))
-            .at(0);
+        neat::decode_superpoint(runner.run(neat::TensorList{luma(sample, stream)})).at(0);
     const auto points = superpoint::source_points(superpoint::floats(features.keypoints),
                                                   model_size, {stream.width, stream.height});
     // A nonblocking send drops the message while the socket buffer is full; the drops are

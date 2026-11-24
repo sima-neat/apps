@@ -48,12 +48,12 @@ def model_options(stream: RtspStreamInfo) -> pyneat.ModelOptions:
     options.preprocess.input_max_height = stream.height
     options.preprocess.resize.enable = pyneat.AutoFlag.On
     options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
-    options.preprocess.normalize.mean = (0.0, 0.0, 0.0)
-    options.preprocess.normalize.stddev = (1.0, 1.0, 1.0)
+    # The default mean 0 and stddev 1, marked explicit, turn normalization on: pixels / 255.
     options.preprocess.normalize.has_explicit_stats = True
     options.decode_type = pyneat.BoxDecodeType.SuperPoint
-    # The decoder rules this example documents and tests: at most 600 points per frame, with the
-    # profile's postprocessing on the A65. Auto would take the profile the package names.
+    # A65V1 pins the score threshold at 0.1. Auto would also give A65V1 for this package, which
+    # names no profile, but would follow a package that does. The 600-point limit is Core's
+    # default top_k for every profile.
     options.superpoint.profile = pyneat.SuperPointProfile.A65V1
     options.processcvu.post_run_target = "A65"
     return options
@@ -70,7 +70,6 @@ def model_size(model: pyneat.Model) -> tuple[int, int]:
 def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
     options.url = config.string("input.source")
-    options.codec = pyneat.RtspCodec.H264
     options.tcp = config.boolean("input.rtsp.tcp")
     options.latency_ms = config.integer("input.rtsp.latency_ms")
     # With input.fps at 0, Core also takes the caps from the stream: above 60 fps, caps set from
@@ -79,7 +78,6 @@ def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedIn
     options.source_fps = stream.fps
     options.fallback_h264_width = stream.width
     options.fallback_h264_height = stream.height
-    options.fallback_h264_fps = stream.fps
     return options
 
 
@@ -87,8 +85,6 @@ def decoder_graph(stream: RtspStreamInfo) -> pyneat.Graph:
     """Hardware decode of the H.264 stream to NV12 frames. The "frames" output keeps only the
     newest, so a pull loop slower than the stream cannot hold back the video sender."""
     decode = pyneat.SimaDecodeOptions()
-    decode.type = pyneat.SimaDecodeType.H264
-    decode.out_format = pyneat.Format.NV12
     decode.dec_width = stream.width
     decode.dec_height = stream.height
     decode.dec_fps = stream.fps
@@ -120,34 +116,41 @@ def run_options() -> pyneat.RunOptions:
     return options
 
 
-def luma(sample: pyneat.Sample, stream: RtspStreamInfo) -> np.ndarray:
-    """The Y plane of a decoded NV12 frame, a writable copy: the gray image SuperPoint reads."""
+def gray_tensor(gray: np.ndarray) -> pyneat.Tensor:
+    """A gray image as the model's input tensor, copied into EV74 memory, from_numpy's default."""
+    return pyneat.Tensor.from_numpy(gray, image_format=pyneat.PixelFormat.GRAY8)
+
+
+def luma(sample: pyneat.Sample, stream: RtspStreamInfo) -> pyneat.Tensor:
+    """The Y plane of a decoded NV12 frame as the model's input: the gray image SuperPoint
+    reads."""
     # Core candidate: Preproc converts no YUV format to gray, and a VideoConvert before the model
     # drops the frame metadata Preproc needs, so the host hands the model the Y plane.
-    tensor = sample.tensor if sample.kind == pyneat.SampleKind.Tensor else sample.tensors[0]
+    # Core candidate: pyneat has no NV12 plane view. copy_payload_bytes copies the frame twice
+    # inside Core, the Y plane is copied once more (below), and gray_tensor copies it into EV74.
+    tensors = [sample.tensor] if sample.kind == pyneat.SampleKind.Tensor else sample.tensors
+    if not tensors:
+        raise RuntimeError("decoded frame has no tensor")
+    tensor = tensors[0]
     if (tensor.width(), tensor.height()) != (stream.width, stream.height):
         raise RuntimeError(
             f"frame size {tensor.width()}x{tensor.height()} differs from the stream's "
             f"{stream.width}x{stream.height}; the stream must keep one size"
         )
-    plane = next(plane for plane in tensor.planes if plane.role == pyneat.PlaneRole.Y)
+    plane = next((plane for plane in tensor.planes if plane.role == pyneat.PlaneRole.Y), None)
+    if plane is None:
+        raise RuntimeError("decoded frame is not NV12")
     stride = plane.strides_bytes[0] if plane.strides_bytes else tensor.width()
-    return np.ndarray(
+    y_plane = np.ndarray(
         (tensor.height(), tensor.width()),
         np.uint8,
         buffer=tensor.copy_payload_bytes(),
         offset=plane.byte_offset,
         strides=(stride, 1),
-    ).copy()
-
-
-def gray_tensor(gray: np.ndarray) -> pyneat.Tensor:
-    return pyneat.Tensor.from_numpy(
-        gray,
-        copy=True,
-        image_format=pyneat.PixelFormat.GRAY8,
-        memory=pyneat.TensorMemory.EV74,
     )
+    # A view of the bytes is read-only, and from_numpy exports it through __dlpack__() without
+    # max_version, which NumPy refuses for a read-only array (BufferError): copy the plane.
+    return gray_tensor(y_plane.copy())
 
 
 def send_feature_points(
@@ -169,10 +172,10 @@ def send_feature_points(
             if run.last_error() or not run.running():
                 raise RuntimeError(f"frames output closed: {run.last_error()}")
             continue
-        outputs = runner.run([gray_tensor(luma(sample, stream))])
+        outputs = runner.run([luma(sample, stream)])
         features = pyneat.decode_superpoint(list(outputs))[0]
         points = feature_points.source_points(
-            features.keypoints.to_numpy(copy=True), model_size, (stream.width, stream.height)
+            features.keypoints.to_numpy(), model_size, (stream.width, stream.height)
         )
         # A nonblocking send drops the message while the socket buffer is full; the drops are
         # counted in the sender's stats and reported when the run ends. Any other failure raises.

@@ -1,3 +1,6 @@
+// Copyright 2026 SiMa Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // SuperPoint feature points: from the decoder's model-input pixels to the metadata Insight draws.
 // Mirrors utils/feature_points.py in the Python implementation, so both send the same metadata.
 
@@ -25,9 +28,10 @@ struct Point {
 std::vector<float> floats(const simaai::neat::Tensor& tensor);
 
 // The keypoints, interleaved x, y, on the source frame, in whole pixels. The decoder reports
-// model-input pixels (sima-neat/core#1328). Preprocessing stretched the source frame to the model
-// input, so each axis maps back by its own ratio. Each point rounds half up with std::lround, and
-// a point that lands on or beyond a frame edge is dropped: the edges are exclusive coordinates.
+// model-input pixels (sima-neat/core#1328). After a Stretch resize (resize.mode = Stretch with
+// resize.enable = On, as main sets it), each axis maps back by its own ratio. A letterbox would
+// need its padding removed first. Each point rounds half up with std::lround, and a point that
+// lands on or beyond a frame edge is dropped: the edges are exclusive coordinates.
 std::vector<Point> source_points(const std::vector<float>& keypoints, const FrameSize& model_size,
                                  const FrameSize& source_size);
 

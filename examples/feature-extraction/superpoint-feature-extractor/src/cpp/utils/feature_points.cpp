@@ -7,15 +7,19 @@
 
 #include <cmath>
 #include <cstddef>
-#include <cstring>
+#include <cstdint>
+#include <stdexcept>
 #include <utility>
 
 namespace superpoint {
 
 std::vector<float> floats(const simaai::neat::Tensor& tensor) {
-  const auto bytes = tensor.copy_dense_bytes_tight();
-  std::vector<float> values(bytes.size() / sizeof(float));
-  std::memcpy(values.data(), bytes.data(), values.size() * sizeof(float));
+  std::vector<float> values(tensor.dense_bytes_tight() / sizeof(float));
+  if (!values.empty() &&
+      !tensor.copy_dense_bytes_tight_to(reinterpret_cast<std::uint8_t*>(values.data()),
+                                        values.size() * sizeof(float))) {
+    throw std::runtime_error("SuperPoint keypoints could not be read");
+  }
   return values;
 }
 
