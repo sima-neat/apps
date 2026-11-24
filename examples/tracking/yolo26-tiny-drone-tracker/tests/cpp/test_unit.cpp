@@ -71,8 +71,9 @@ bool test_shipped_config_is_usable() {
   }
   // Core sends to 127.0.0.1 when the host is empty.
   ok &=
-      expect_true(!config.string("output.insight.host").empty() && config.boolean("input.rtsp.tcp"),
-                  "the shipped Insight host is set and RTSP runs over TCP");
+      expect_true(!config.string("output.insight.host").empty(), "the shipped Insight host is set");
+  // Read for its type only: true and false are both valid.
+  (void)config.boolean("input.rtsp.tcp");
   // Detections below inference.min_score never reach the tracker, so a lower
   // high_score_threshold would make every detection a high-score one.
   const double min_score = config.number("inference.min_score");
@@ -147,6 +148,42 @@ bool test_predicted_motion_keeps_a_fast_box_on_its_track() {
   return ok;
 }
 
+bool test_velocity_takes_a_quarter_of_the_measured_motion() {
+  bool ok = true;
+  for (const auto& third_box : {box(90, 0, 100, 10), box(10, 0, 20, 10)}) {
+    ObjectTracker object_tracker(settings());
+    object_tracker.update({box(0, 0, 10, 10)}, 0);
+    object_tracker.update({box(40, 0, 50, 10)}, 1);
+    // The 40 px move sets a velocity of 10 px, so the box is predicted at x 50..60. Both third
+    // boxes are 40 px from there, within the 42.4 px gate. A velocity below 7.6 px loses the
+    // first, and one above 12.4 px loses the second.
+    ok &= expect_true(ids(object_tracker.update({third_box}, 2)) == std::vector{1},
+                      "a box 40 px from the predicted box at x " +
+                          std::to_string(static_cast<int>(third_box.x1)) + " continues track 1");
+  }
+  return ok;
+}
+
+bool test_box_beyond_the_distance_gate_starts_a_new_track() {
+  ObjectTracker object_tracker(settings());
+  object_tracker.update({box(0, 0, 10, 10)}, 0);
+  // 50 px is 3.5 box diagonals from the predicted box, outside the 3-diagonal gate.
+  return expect_true(ids(object_tracker.update({box(50, 0, 60, 10)}, 1)) == std::vector{2},
+                     "a box 50 px away starts track 2");
+}
+
+bool test_track_is_reported_from_its_min_confirmed_hits_th_detection() {
+  TrackerSettings values = settings();
+  values.min_confirmed_hits = 3;
+  ObjectTracker object_tracker(values);
+  bool ok = expect_true(object_tracker.update({box(0, 0, 10, 10)}, 0).empty() &&
+                            object_tracker.update({box(0, 0, 10, 10)}, 1).empty(),
+                        "the first two detections report no track");
+  ok &= expect_true(ids(object_tracker.update({box(0, 0, 10, 10)}, 2)) == std::vector{1},
+                    "the third detection reports track 1");
+  return ok;
+}
+
 bool test_low_score_detection_continues_only_a_confirmed_track() {
   TrackerSettings values = settings();
   values.min_confirmed_hits = 2;
@@ -189,12 +226,14 @@ bool test_tracks_stop_at_max_active_tracks() {
                      "300 boxes start 256 tracks");
 }
 
-// The tracking message carries each track's ID, label, score, and clamped box, in the envelope
-// the object-detection message uses.
+// The tracking message carries each track's ID, label, score, and box as [x, y, width, height],
+// in the envelope the object-detection message uses. decode_bbox_tensor already clamps every
+// corner to the frame. The second box ends past the right edge, as a box from another source may,
+// and is cut at the frame.
 bool test_serialize_tracks_builds_the_tracking_message() {
   const std::vector<TrackedDetection> tracks{
-      {7, 10.9f, -2.0f, 35.9f, 20.8f, 0.75f, 0},
-      {12, 90.0f, 80.0f, 120.0f, 130.0f, 0.5f, 3},
+      {7, 10.9f, 2.0f, 35.9f, 20.8f, 0.75f, 0},
+      {12, 90.0f, 80.0f, 120.0f, 95.0f, 0.5f, 3},
   };
   sima_examples::detection_egress::FrameMetadata frame;
   frame.stream_id = "decoder";
@@ -206,17 +245,17 @@ bool test_serialize_tracks_builds_the_tracking_message() {
       {{"id", "7"},
        {"label", "drone"},
        {"confidence", 0.75f},
-       {"bbox", {10.0f, 0.0f, 25.0f, 22.0f}}},
+       {"bbox", {10.0f, 2.0f, 25.0f, 18.0f}}},
       {{"id", "12"},
        {"label", "unknown"},
        {"confidence", 0.5f},
-       {"bbox", {90.0f, 80.0f, 10.0f, 20.0f}}},
+       {"bbox", {90.0f, 80.0f, 10.0f, 15.0f}}},
   };
   bool ok = expect_true(parsed.at("type") == "tracking" && parsed.at("timestamp") == 1234 &&
                             parsed.at("frame_id") == "42" && parsed.at("stream_id") == "decoder",
                         "the message carries the type and the frame envelope");
   ok &= expect_true(parsed.at("data") == nlohmann::json{{"tracks", expected_tracks}},
-                    "each track keeps its ID and label, and its box is clamped to the frame: " +
+                    "each track keeps its ID and label, and a box past the edge ends there: " +
                         parsed.at("data").dump());
   return ok;
 }
@@ -229,6 +268,9 @@ int main() {
   ok &= test_higher_affinity_wins_then_lower_track_id();
   ok &= test_track_ends_after_max_missing_frames();
   ok &= test_predicted_motion_keeps_a_fast_box_on_its_track();
+  ok &= test_velocity_takes_a_quarter_of_the_measured_motion();
+  ok &= test_box_beyond_the_distance_gate_starts_a_new_track();
+  ok &= test_track_is_reported_from_its_min_confirmed_hits_th_detection();
   ok &= test_low_score_detection_continues_only_a_confirmed_track();
   ok &= test_new_track_needs_new_track_threshold();
   ok &= test_tracks_stop_at_max_active_tracks();

@@ -96,8 +96,9 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
   options.codec = config.choice("input.codec", kRtspCodecs);
   options.tcp = config.boolean("input.rtsp.tcp");
   options.latency_ms = config.integer("input.rtsp.latency_ms");
-  // With input.fps at 0, Core also takes the caps from the stream: above 60 fps, caps set from
-  // the probed values alone failed to negotiate in some runs.
+  // With input.fps at 0, Core also takes the H.264 caps from the stream: above 60 fps, caps set
+  // from the probed values alone failed to negotiate in some runs. The H.265 path does not read
+  // auto_caps_from_stream (RtspEncodedInput.cpp).
   options.auto_caps_from_stream = config.integer("input.fps") == 0;
   options.source_fps = stream.fps;
   if (options.codec == groups::RtspCodec::H264) {

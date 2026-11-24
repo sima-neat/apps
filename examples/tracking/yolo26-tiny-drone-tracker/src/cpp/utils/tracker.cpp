@@ -54,9 +54,6 @@ int ObjectTracker::tracks_started() const {
 
 std::vector<TrackedDetection>
 ObjectTracker::update(const std::vector<simaai::neat::Box>& detections, int frame_index) {
-  std::erase_if(tracks_, [&](const auto& item) {
-    return frame_index - item.second.last_frame_index - 1 > settings_.max_missing_frames;
-  });
   std::vector<BBox> boxes;
   std::vector<int> high;
   std::vector<int> low;
@@ -153,7 +150,7 @@ void ObjectTracker::associate(const std::vector<BBox>& boxes,
       const BBox& box = boxes[static_cast<std::size_t>(detection_index)];
       const double overlap = iou(predicted, box);
       const double distance = center_distance(predicted, box);
-      if (overlap >= kMatchIou || distance <= kMaxCenterDistance) {
+      if (distance <= kMaxCenterDistance) {
         pairs.emplace_back(overlap + 1.0 / (1.0 + distance), track_id, detection_index);
       }
     }

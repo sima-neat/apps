@@ -1,6 +1,6 @@
 # YOLO26 tiny-drone tracking of one RTSP stream, shown in Insight.
 model:
-  # Compiled model package; a relative path starts at this file.
+  # Compiled model package. A relative path starts at this file.
   path: ../../../../../models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
 
 input:
@@ -14,9 +14,9 @@ input:
     latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0                     # Frames to process before stopping; 0 runs until stopped.
-  min_score: 0.05               # Lowest score a detection needs; low, so faint drones reach
-                                # the tracker, which confirms tracks at higher scores.
+  frames: 0                     # Frames to process before stopping. 0 runs until stopped.
+  min_score: 0.05               # Lowest score a detection needs. Low, so faint drones reach
+                                # the tracker, which needs higher scores to start tracks.
   nms_iou: 0.60                 # Overlap at which NMS drops the weaker box.
   max_detections: 100           # Boxes kept per frame.
 
@@ -28,8 +28,8 @@ output:
 
 app:
   tracking:
-    high_score_threshold: 0.20  # Score that lets a detection start or confirm a track. A lower
-                                # score only continues a confirmed track.
+    high_score_threshold: 0.20  # Score that lets a detection continue any track. A lower score
+                                # only continues a confirmed track.
     new_track_threshold: 0.30   # Score an unmatched detection needs to start a track.
     max_missing_frames: 30      # Frames a track survives without a match.
     min_confirmed_hits: 2       # Detections, counting the first, before a track goes to Insight.

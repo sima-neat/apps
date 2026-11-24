@@ -12,11 +12,10 @@ from typing import Protocol
 
 import numpy as np
 
-# A match needs this IoU between a track's predicted box and the detection, or a center
-# distance within MAX_CENTER_DISTANCE. Tiny boxes that move a few pixels rarely overlap, so
-# the IoU gate is low and the distance gate does most of the matching.
-MATCH_IOU = 0.05
-# Center distance in units of the mean box diagonal of the two boxes.
+# A match needs the detection's center within this distance of the track's predicted center,
+# in units of the mean box diagonal of the two boxes. Tiny boxes that move a few pixels rarely
+# overlap, so this gate does all of the matching: two boxes that overlap are always closer than
+# one mean diagonal. IoU only ranks the pairs that pass it.
 MAX_CENTER_DISTANCE = 3.0
 # Weight of the previous velocity when a match updates it; the rest is the measured motion.
 VELOCITY_MOMENTUM = 0.75
@@ -39,7 +38,7 @@ class Box(Protocol):
 
 @dataclass(frozen=True)
 class TrackerSettings:
-    high_score_threshold: float  # Score that lets a detection start or confirm a track.
+    high_score_threshold: float  # Score that lets a detection continue any track.
     new_track_threshold: float  # Score an unmatched detection needs to start a track.
     max_missing_frames: int  # Frames a track survives without a match.
     min_confirmed_hits: int  # Detections, counting the first, before a track is reported.
@@ -95,21 +94,14 @@ class ObjectTracker:
 
     def update(self, detections: list[Box], frame_index: int) -> list[TrackedDetection]:
         """Match this frame's detections to the tracks, and return those of confirmed tracks in
-        detection order. `frame_index` counts the stream's frames and only grows."""
+        detection order. `frame_index` counts the processed frames: 0, 1, 2, and so on."""
         settings = self.settings
-        self._tracks = {
-            track_id: track
-            for track_id, track in self._tracks.items()
-            if frame_index - track.last_frame_index - 1 <= settings.max_missing_frames
-        }
         boxes = np.array([_bbox(detection) for detection in detections], dtype=np.float64)
         boxes = boxes.reshape(-1, 4)
-        high = [
-            index
-            for index, detection in enumerate(detections)
-            if detection.score >= settings.high_score_threshold
-        ]
-        low = [index for index in range(len(detections)) if index not in high]
+        high = []
+        low = []
+        for index, detection in enumerate(detections):
+            (high if detection.score >= settings.high_score_threshold else low).append(index)
 
         assignments: dict[int, int] = {}
         self._associate(boxes, high, frame_index, assignments, confirmed_only=False)
@@ -185,7 +177,7 @@ class ObjectTracker:
         )
         iou = _iou_matrix(predicted, boxes[candidates])
         center_distance = _center_distance_matrix(predicted, boxes[candidates])
-        eligible = (iou >= MATCH_IOU) | (center_distance <= MAX_CENTER_DISTANCE)
+        eligible = center_distance <= MAX_CENTER_DISTANCE
         affinity = iou + 1.0 / (1.0 + center_distance)
 
         rows, cols = np.nonzero(eligible)

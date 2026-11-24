@@ -64,7 +64,8 @@ def test_shipped_config_is_usable():
         assert 1 <= config.integer(key) <= 65535, key
     # Core sends to 127.0.0.1 when the host is empty.
     assert config.string("output.insight.host")
-    assert config.boolean("input.rtsp.tcp")
+    # Read for its type only: true and false are both valid.
+    config.boolean("input.rtsp.tcp")
     tracking = main_module.tracker_settings(config)
     # Detections below inference.min_score never reach the tracker, so a lower
     # high_score_threshold would make every detection a high-score one.
@@ -120,6 +121,31 @@ def test_predicted_motion_keeps_a_fast_box_on_its_track():
     # 44 px from the last box is 3.1 diagonals, outside the gate. The predicted box is 34 px
     # away, 2.4 diagonals, so the track continues.
     assert ids(object_tracker.update([Box(84, 0, 94, 10)], 2)) == [1]
+
+
+@pytest.mark.parametrize("third_box", [Box(90, 0, 100, 10), Box(10, 0, 20, 10)])
+def test_velocity_takes_a_quarter_of_the_measured_motion(third_box):
+    object_tracker = tracker.ObjectTracker(settings())
+    object_tracker.update([Box(0, 0, 10, 10)], 0)
+    object_tracker.update([Box(40, 0, 50, 10)], 1)
+    # The 40 px move sets a velocity of 10 px, so the box is predicted at x 50..60. Both third
+    # boxes are 40 px from there, within the 42.4 px gate. A velocity below 7.6 px loses the
+    # first, and one above 12.4 px loses the second.
+    assert ids(object_tracker.update([third_box], 2)) == [1]
+
+
+def test_box_beyond_the_distance_gate_starts_a_new_track():
+    object_tracker = tracker.ObjectTracker(settings())
+    object_tracker.update([Box(0, 0, 10, 10)], 0)
+    # 50 px is 3.5 box diagonals from the predicted box, outside the 3-diagonal gate.
+    assert ids(object_tracker.update([Box(50, 0, 60, 10)], 1)) == [2]
+
+
+def test_track_is_reported_from_its_min_confirmed_hits_th_detection():
+    object_tracker = tracker.ObjectTracker(settings(min_confirmed_hits=3))
+    assert object_tracker.update([Box(0, 0, 10, 10)], 0) == []
+    assert object_tracker.update([Box(0, 0, 10, 10)], 1) == []
+    assert ids(object_tracker.update([Box(0, 0, 10, 10)], 2)) == [1]
 
 
 def test_low_score_detection_continues_only_a_confirmed_track():

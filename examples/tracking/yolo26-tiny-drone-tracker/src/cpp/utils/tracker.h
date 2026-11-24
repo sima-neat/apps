@@ -16,11 +16,10 @@
 
 namespace drone_tracker {
 
-// A match needs this IoU between a track's predicted box and the detection, or a center distance
-// within kMaxCenterDistance. Tiny boxes that move a few pixels rarely overlap, so the IoU gate is
-// low and the distance gate does most of the matching.
-constexpr double kMatchIou = 0.05;
-// Center distance in units of the mean box diagonal of the two boxes.
+// A match needs the detection's center within this distance of the track's predicted center, in
+// units of the mean box diagonal of the two boxes. Tiny boxes that move a few pixels rarely
+// overlap, so this gate does all of the matching: two boxes that overlap are always closer than
+// one mean diagonal. IoU only ranks the pairs that pass it.
 constexpr double kMaxCenterDistance = 3.0;
 // Weight of the previous velocity when a match updates it; the rest is the measured motion.
 constexpr double kVelocityMomentum = 0.75;
@@ -29,7 +28,7 @@ constexpr int kMaxActiveTracks = 256;
 
 struct TrackerSettings {
   // Doubles, as Python reads them, so a score at a threshold falls on the same side in both.
-  double high_score_threshold = 0.0; // Score that lets a detection start or confirm a track.
+  double high_score_threshold = 0.0; // Score that lets a detection continue any track.
   double new_track_threshold = 0.0;  // Score an unmatched detection needs to start a track.
   int max_missing_frames = 0;        // Frames a track survives without a match.
   int min_confirmed_hits = 0;        // Detections, counting the first, before it is reported.
@@ -54,7 +53,7 @@ public:
   int tracks_started() const;
 
   // Matches this frame's detections to the tracks, and returns those of confirmed tracks in
-  // detection order. `frame_index` counts the stream's frames and only grows.
+  // detection order. `frame_index` counts the processed frames: 0, 1, 2, and so on.
   std::vector<TrackedDetection> update(const std::vector<simaai::neat::Box>& detections,
                                        int frame_index);
 

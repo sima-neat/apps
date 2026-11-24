@@ -128,10 +128,11 @@ class Track(Box):
 
 def test_tracking_message_matches_the_cpp_envelope():
     """The inputs and expected values are the ones yolo26-tiny-drone-tracker's C++ unit test
-    uses."""
+    uses. decode_bbox_tensor already clamps every corner to the frame. The second box ends past
+    the right edge, as a box from another source may, and is cut at the frame."""
     tracks = [
-        Track(10.9, -2.0, 35.9, 20.8, 0.75, 0, track_id=7),
-        Track(90.0, 80.0, 120.0, 130.0, 0.5, 3, track_id=12),
+        Track(10.9, 2.0, 35.9, 20.8, 0.75, 0, track_id=7),
+        Track(90.0, 80.0, 120.0, 95.0, 0.5, 3, track_id=12),
     ]
     frame = detection_egress.FrameMetadata(
         stream_index=0, stream_id="decoder", frame_id=42, pts_ns=1_234_567_890
@@ -143,7 +144,7 @@ def test_tracking_message_matches_the_cpp_envelope():
     assert (message["frame_id"], message["stream_id"]) == ("42", "decoder")
     assert message["data"] == {
         "tracks": [
-            {"id": "7", "label": "drone", "confidence": 0.75, "bbox": [10.0, 0.0, 25.0, 22.0]},
-            {"id": "12", "label": "unknown", "confidence": 0.5, "bbox": [90.0, 80.0, 10.0, 20.0]},
+            {"id": "7", "label": "drone", "confidence": 0.75, "bbox": [10.0, 2.0, 25.0, 18.0]},
+            {"id": "12", "label": "unknown", "confidence": 0.5, "bbox": [90.0, 80.0, 10.0, 15.0]},
         ]
     }

@@ -58,11 +58,11 @@ Insight colors each track by its ID and draws its trail.
 
 The tracker matches boxes in two passes. First, a box at or above `app.tracking.high_score_threshold` can continue any track.
 Then a box with a lower score can continue only a confirmed track.
-An unmatched box at or above `app.tracking.new_track_threshold` starts a new track.
+An unmatched box at or above both thresholds starts a new track.
 A track is confirmed at its `app.tracking.min_confirmed_hits`-th detection, counting the one that started it.
 Only confirmed tracks go to Insight.
 A tiny box rarely overlaps its previous position, so the tracker also matches by the distance to the position its velocity predicts.
-Track IDs start at 1 and are local to the stream.
+Track IDs start at 1.
 
 ## Preview
 
@@ -110,7 +110,7 @@ The packaged `model.path` already points to it: a relative `model.path` starts a
 
 In the Insight Web UI, open Media Sources and upload a drone video.
 Insight's YouTube import also works.
-Then assign the video to an RTSP source, start the stream, and copy its URL into `input.source`.
+Under Streaming Sources, assign the video to a source slot, start it, and copy its URL into `input.source`.
 Use a host and port that the target can reach, not `localhost`.
 The application prints the source and its frame size on startup.
 
@@ -175,7 +175,9 @@ Insight shows the video with a box, an ID, and a trail on every confirmed drone.
 - Python source: `src/python/main.py`
 - Python tracker: `src/python/utils/tracker.py`
 - Shared config: `src/common/config.yaml`
-- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds above itself. Their C++ reference source is in `support/cpp/sima_examples/`.
+- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle.
+  `main.py` finds that folder above itself.
+  Their C++ reference source is in `support/cpp/sima_examples/`.
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`. The installed bundle does not include CMake files.
 

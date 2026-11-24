@@ -3,8 +3,7 @@
 
 Candidates:
   greedy_iou   The previous multi-stream-people-tracker matcher (no motion model).
-  greedy_cv    IoU and center distance with constant-velocity prediction
-               (yolo26-tiny-drone-tracker).
+  greedy_cv    Center distance with constant-velocity prediction (yolo26-tiny-drone-tracker).
   bytetrack    This example's per-class ByteTrack-style tracker.
 
 Inputs:
@@ -78,12 +77,8 @@ class GreedyIouCandidate:
 
 
 class GreedyCvCandidate:
-    """Drone-tracker matcher, one instance per class.
-
-    It uses the drone tracker's fixed gates: IoU 0.05 or center distance 3.0, momentum 0.75.
-    Before the tracker's conversion (#785) this candidate was IoU-only at 0.30, momentum 0.80,
-    so earlier greedy_cv results do not reproduce.
-    """
+    """Drone-tracker matcher with its fixed gates (center distance 3.0, momentum 0.75), one
+    instance per class."""
 
     def __init__(self, class_ids: list[int]) -> None:
         module = _load_module(
