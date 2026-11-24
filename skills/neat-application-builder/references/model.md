@@ -45,6 +45,18 @@ When the user names a model, look for a compiled package in the
     carries none, `YoloV26` skips NMS and the other decoders suppress every overlapping box. The
     high-density example sets `0.60` for `YoloV26` explicitly. Set an explicit value, such as
     `0.45`, for any decoder that runs NMS.
+- `decode_type_option` (`BoxDecodeTypeOption` in `pipeline/BoxDecodeType.h`) sets how the head
+  tensors are arranged and whether class scores are logits or probabilities. The default,
+  `Auto`, decides the score form only when the package's tensor names or score activation
+  declare it. When neither does, the scores can be read in the wrong form.
+  - A decoded score above 1 means the decoder read logits as probabilities. Set the matching
+    `...Logit` option, for example `GroupedByRoleLogit` for a YOLOv8 pose package with separate
+    box, score, and keypoint heads.
+  - Do not clamp scores into [0, 1]. The score threshold is still compared with logits, so a
+    clamp only hides the wrong option and drops correct detections.
+- Pose decoders: choose by the box heads in `output_specs()`. 64-channel DFL box heads mean
+  `YoloV8Pose`, and 4-channel l/t/r/b box heads mean `YoloV26Pose`. `YoloV26Pose` on a YOLOv8
+  package returns valid-looking scores and wrong boxes.
 - Oriented boxes: `YoloV26Obb` requires `nms_iou_threshold = 0` and a positive `top_k`.
   `YoloV8Obb`, used for YOLOv8 and YOLO11 oriented boxes, runs NMS and needs a nonzero
   threshold. The `object-detection/multi-stream-obb-detector` example switches both values with
