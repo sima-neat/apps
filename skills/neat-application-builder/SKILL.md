@@ -12,11 +12,14 @@ the public APIs. The project's own rules decide layout, configuration, and packa
 ## Steps
 
 1. **Locate the installed contract.** Run `neat` (or `neat --json`) where the application will
-   run. It reports the installed Core, PyNeat, Scheduler, Runner, and LLiMa versions. Headers
-   live under `$SYSROOT/usr/include` in the Neat Development Environment and under
-   `/usr/include` on the DevKit. Core source and docs live under `/neat-resources/core-src` in
-   images whose `/etc/sdk-release` reports `Neat Core = bundled`. Otherwise use the Core source
-   at the installed version's tag. To find the header that owns an API, use the
+   run. It reports the installed Core, PyNeat, Scheduler, Runner, and LLiMa versions. In the
+   Palette SDK (also called the Neat Development Environment), the SDK image decides which Core
+   its sysroot holds: `/etc/sdk-release` reports `Neat Core = bundled` and the version in
+   `Neat Core Requested`, or `Neat Core = not bundled` when the image holds no Neat Library to
+   build against. The DevKit must run the same Core the SDK builds against. Headers live under
+   `$SYSROOT/usr/include` in the Palette SDK and under `/usr/include` on the DevKit. Core source
+   and docs live under `/neat-resources/core-src` in Core-bundled images. Otherwise use the Core
+   source at the installed version's tag. To find the header that owns an API, use the
    [API surface map](references/api-surface-map.md). For Python, read the binding in Core's
    `python/src/module.cpp` or run `help(pyneat.<Name>)` on the target. Done when every class,
    function, and option field the planned code names has been found in its header or binding,
@@ -55,8 +58,9 @@ the public APIs. The project's own rules decide layout, configuration, and packa
    and closes every `Run` and `Model::Runner` on every exit path. For
    Insight video and metadata or a local window, read
    [application output](references/application-output.md). For Docker, read
-   [containers](references/containers.md). Done when the application builds against the
-   installed headers (C++), or, in Python, when every options object it uses has been
+   [containers](references/containers.md). For the C++ CMake file and the configure and build
+   commands, read the C++ build section of [validation](references/validation.md). Done when
+   the application builds against the installed headers (C++), or, in Python, when every options object it uses has been
    constructed and every field set on the target without an error. An import alone does not
    check attribute names. Check them with a short script that builds the options and graph
    objects, or with `dir()` and `help()` on each object.
