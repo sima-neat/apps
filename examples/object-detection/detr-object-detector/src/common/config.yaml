@@ -4,7 +4,7 @@ model:
   path: ../../../../../models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz
   # The 91 COCO class IDs DETR scores, one label per line, N/A for the unused IDs; a relative
   # path starts at the working directory.
-  labels: examples/object-detection/detr-object-detector/src/common/coco_labels.txt
+  labels: support/labels/coco91.txt
 
 input:
   source: assets/datasets/coco  # Folder of .jpg, .jpeg, .png, and .bmp images.

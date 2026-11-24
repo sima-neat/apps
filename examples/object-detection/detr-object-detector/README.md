@@ -146,7 +146,7 @@ is too high for the content.
 - C++ reference source: `src/cpp/main.cpp`, with `src/cpp/utils/images.h` for the image folder and `src/cpp/utils/annotate.h` for the annotated images
 - Python source: `src/python/main.py`, with `src/python/utils/images.py` and `src/python/utils/annotate.py`
 - Shared config: `src/common/config.yaml`
-- Class labels: `src/common/coco_labels.txt`
+- Class labels: `support/labels/coco91.txt` in `prebuilt-apps/`, shared with the other examples that score the same classes
 - Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
