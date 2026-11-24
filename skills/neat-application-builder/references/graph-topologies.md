@@ -27,8 +27,8 @@ option and show each default. Set only the options whose default does not fit. C
   example sets `latency_ms = 100`.
 - `payload_type` filters the RTP packets by payload type. The default, `-1`, accepts only the
   codec's default: 96 for H.264 and H.265, 26 for MJPEG. `0` accepts any type. Set `0` when a
-  camera may announce another dynamic type, because a stream that does not match the filter
-  delivers no frames.
+  camera may announce another dynamic type: Core puts the type in the caps before the
+  depayloader, so a stream of another type is never linked to it.
 - `drop_on_latency` (default `true`) drops late packets. Turn it off only when every frame
   matters more than freshness.
 - `buffer_mode = "none"` keeps the RTP timestamps as sent. The RF-DETR example sets it for TCP
