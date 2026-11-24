@@ -51,9 +51,10 @@ def model_options(stream: RtspStreamInfo) -> pyneat.ModelOptions:
     # The default mean 0 and stddev 1, marked explicit, turn normalization on: pixels / 255.
     options.preprocess.normalize.has_explicit_stats = True
     options.decode_type = pyneat.BoxDecodeType.SuperPoint
-    # A65V1 pins the score threshold at 0.1. Auto would also give A65V1 for this package, which
-    # names no profile, but would follow a package that does. The 600-point limit is Core's
-    # default top_k for every profile.
+    # A65V1 sets the decoder's numerics and its defaults: score threshold 0.1 while
+    # score_threshold is 0, and border margin 0. Auto would also give A65V1 for this package,
+    # which names no profile, but would follow a package that does. The 600-point limit is
+    # Core's default top_k for every profile.
     options.superpoint.profile = pyneat.SuperPointProfile.A65V1
     options.processcvu.post_run_target = "A65"
     return options
@@ -132,14 +133,14 @@ def luma(sample: pyneat.Sample, stream: RtspStreamInfo) -> pyneat.Tensor:
     if not tensors:
         raise RuntimeError("decoded frame has no tensor")
     tensor = tensors[0]
+    if not tensor.is_nv12():
+        raise RuntimeError("decoded frame is not NV12")
     if (tensor.width(), tensor.height()) != (stream.width, stream.height):
         raise RuntimeError(
             f"frame size {tensor.width()}x{tensor.height()} differs from the stream's "
             f"{stream.width}x{stream.height}; the stream must keep one size"
         )
-    plane = next((plane for plane in tensor.planes if plane.role == pyneat.PlaneRole.Y), None)
-    if plane is None:
-        raise RuntimeError("decoded frame is not NV12")
+    plane = next(plane for plane in tensor.planes if plane.role == pyneat.PlaneRole.Y)
     stride = plane.strides_bytes[0] if plane.strides_bytes else tensor.width()
     y_plane = np.ndarray(
         (tensor.height(), tensor.width()),
@@ -148,8 +149,9 @@ def luma(sample: pyneat.Sample, stream: RtspStreamInfo) -> pyneat.Tensor:
         offset=plane.byte_offset,
         strides=(stride, 1),
     )
-    # A view of the bytes is read-only, and from_numpy exports it through __dlpack__() without
-    # max_version, which NumPy refuses for a read-only array (BufferError): copy the plane.
+    # Core candidate: a view of the bytes is read-only, and from_numpy exports it through
+    # __dlpack__() without max_version, which NumPy refuses for a read-only array (BufferError),
+    # so the plane is copied.
     return gray_tensor(y_plane.copy())
 
 

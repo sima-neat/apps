@@ -80,9 +80,10 @@ neat::Model::Options model_options(const sima_examples::RtspStreamInfo& stream) 
   // The default mean 0 and stddev 1, marked explicit, turn normalization on: pixels / 255.
   options.preprocess.normalize.has_explicit_stats = true;
   options.decode_type = neat::BoxDecodeType::SuperPoint;
-  // A65V1 pins the score threshold at 0.1. Auto would also give A65V1 for this package, which
-  // names no profile, but would follow a package that does. The 600-point limit is Core's
-  // default top_k for every profile.
+  // A65V1 sets the decoder's numerics and its defaults: score threshold 0.1 while
+  // score_threshold is 0, and border margin 0. Auto would also give A65V1 for this package,
+  // which names no profile, but would follow a package that does. The 600-point limit is
+  // Core's default top_k for every profile.
   options.superpoint.profile = neat::SuperPointProfile::A65V1;
   options.processcvu.post_run_target = "A65";
   return options;
@@ -156,7 +157,7 @@ neat::Tensor gray_tensor(const cv::Mat& gray) {
 neat::Tensor luma(const neat::Sample& sample, const sima_examples::RtspStreamInfo& stream) {
   // Core candidate: Preproc converts no YUV format to gray, and a VideoConvert before the model
   // drops the frame metadata Preproc needs, so the host hands the model the Y plane.
-  const auto tensors = neat::tensors_from_sample(sample);
+  const auto tensors = neat::tensors_from_sample(sample, /*require_nonempty=*/false);
   sima_examples::require(!tensors.empty(), "decoded frame has no tensor");
   const auto nv12 = tensors.front().map_nv12_read();
   sima_examples::require(nv12.has_value(), "decoded frame is not NV12");

@@ -1,6 +1,7 @@
 // Unit tests for the SuperPoint feature extractor: the checks the application leaves to its config
 // and the mapping of feature points onto the source frame. tests/python/test_unit.py runs the same
-// checks in Python.
+// checks in Python, and also the frames luma rejects: C++ luma is in main.cpp, which this test
+// does not compile.
 
 #include "../../src/cpp/utils/feature_points.h"
 #include "sima_examples/config.h"

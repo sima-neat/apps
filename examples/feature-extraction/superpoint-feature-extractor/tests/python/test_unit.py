@@ -1,6 +1,7 @@
-"""Unit tests for the SuperPoint feature extractor: the checks the application leaves to its config
-and the mapping of feature points onto the source frame. tests/cpp/test_unit.cpp runs the same
-checks in C++.
+"""Unit tests for the SuperPoint feature extractor: the checks the application leaves to its config,
+the frames luma rejects, and the mapping of feature points onto the source frame.
+tests/cpp/test_unit.cpp runs the same checks in C++, except luma's: C++ luma is in main.cpp, which
+the C++ unit test does not compile.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+import pyneat
 import pytest
 
 from tests.utils.config_cases import load_example_main
@@ -44,6 +46,29 @@ def test_shipped_config_names_the_model_and_usable_values():
     # Core sends to 127.0.0.1 when the host is empty.
     assert config.string("output.insight.host")
     assert config.boolean("input.rtsp.tcp")
+
+
+def test_luma_rejects_a_frame_without_a_tensor():
+    sample = pyneat.Sample()
+    sample.kind = pyneat.SampleKind.TensorSet
+    sample.tensors = []
+
+    with pytest.raises(RuntimeError, match="decoded frame has no tensor"):
+        main_module.luma(sample, main_module.RtspStreamInfo(*SOURCE_SIZE, 30))
+
+
+def test_luma_rejects_a_frame_that_is_not_nv12():
+    """luma checks the format, not the planes: an I420 frame has a Y plane too."""
+    sample = pyneat.Sample()
+    sample.kind = pyneat.SampleKind.Tensor
+    sample.tensor = pyneat.Tensor.from_numpy(
+        np.zeros(SOURCE_SIZE[::-1], np.uint8),
+        image_format=pyneat.PixelFormat.GRAY8,
+        memory=pyneat.TensorMemory.CPU,
+    )
+
+    with pytest.raises(RuntimeError, match="decoded frame is not NV12"):
+        main_module.luma(sample, main_module.RtspStreamInfo(*SOURCE_SIZE, 30))
 
 
 def test_source_points_scale_each_axis_onto_the_source_frame():

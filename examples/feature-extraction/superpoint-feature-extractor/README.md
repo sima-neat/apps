@@ -92,12 +92,14 @@ Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/gett
 - The `w8a8` build calibrates on HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/main/models/superpoint/model.yaml)). The `w8a16` and `w16a16` build profiles need no calibration images.
 - The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`.
 
-Copy that file to the DevKit, into `models/superpoint/w8a8/` under `prebuilt-apps/`. From `prebuilt-apps/`:
+Copy that file to the DevKit, into `models/superpoint/w8a8/` under `prebuilt-apps/`. In the commands below, `<path>` is the folder that holds `superpoint_w8a8_mpk.tar.gz`. From `prebuilt-apps/`:
 
 ```bash
 mkdir -p models/superpoint/w8a8
 cp <path>/superpoint_w8a8_mpk.tar.gz models/superpoint/w8a8/
 ```
+
+If you compiled the model on another machine, copy it to the DevKit first, for example with `scp superpoint_w8a8_mpk.tar.gz <user>@<devkit-ip>:<path>/`.
 
 The packaged `model.path` already points to it. A relative `model.path` starts at the config file. From `${APP_DIR}/src/common/`, `../../../../../models/` is `prebuilt-apps/models/`. For another build profile, set `model.path` to its package, or to the absolute path of the `.tar.gz` file.
 
@@ -135,14 +137,14 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Expected Result
 
-The application prints the source, the stream's size and frame rate, and the Insight ports on startup. When it stops, it prints the frames it processed, the average feature points per frame, the descriptor length, and the video endpoint:
+The application prints the source, the stream's size and frame rate, and the Insight host and ports on startup. When it stops, it prints the frames it processed, the average feature points per frame, the descriptor length, and the video endpoint:
 
 ```text
 source=rtsp://<rtsp-source-ip>:<port>/<stream-name> stream=1280x720@30 insight=<insight-host-ip> video=9000 metadata=9100
 frames=200 average_points=600.0 descriptor_dim=256 video_sender=<insight-host-ip>:9000
 ```
 
-The packaged config ships `inference.frames: 0`, which runs until Ctrl-C. The summary then prints when you stop it. For a run that ends by itself, set `inference.frames: 200`. `average_points` is at most 600, the decoder's limit per frame, and a textured scene reaches it. An `average_points` near zero means the model found almost no features. Investigate it, even though the run exits successfully. A line `<N> metadata messages dropped` follows the summary when the socket was full and dropped some frames' points.
+The packaged config ships `inference.frames: 0`, which runs until Ctrl-C. The summary then prints when you stop it. For a run that ends by itself, set `inference.frames: 200`. `average_points` is at most 600, the decoder's limit per frame, and a textured scene reaches it. An `average_points` near zero means the model found almost no features. Investigate it, even though the run exits successfully. A line `<N> metadata messages dropped` follows the summary when the metadata sender's socket buffer was full and dropped some frames' points.
 
 Insight shows the video with a dot on every feature point.
 

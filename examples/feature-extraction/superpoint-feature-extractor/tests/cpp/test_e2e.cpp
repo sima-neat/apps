@@ -204,11 +204,11 @@ int main(int argc, char** argv) {
   }
   std::vector<MetadataJsonMessage> messages = metadata.messages;
   messages.insert(messages.end(), rest.messages.begin(), rest.messages.end());
-  // Every frame's message arrives, but for the ones the example reports as dropped.
+  // Every frame's message arrives, except the ones the example reports as dropped.
+  const std::regex dropped_line(R"((^|\n)(\d+) metadata messages dropped\n)");
   std::smatch dropped;
-  const int dropped_count = std::regex_search(result.stdout_text, dropped,
-                                              std::regex(R"((\d+) metadata messages dropped)"))
-                                ? std::stoi(dropped[1].str())
+  const int dropped_count = std::regex_search(result.stdout_text, dropped, dropped_line)
+                                ? std::stoi(dropped[2].str())
                                 : 0;
   if (static_cast<int>(messages.size()) != kFrames - dropped_count) {
     std::cerr << "[FAIL] received " << messages.size() << " metadata messages, expected "
