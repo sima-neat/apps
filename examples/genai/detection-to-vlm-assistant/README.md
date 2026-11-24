@@ -6,7 +6,7 @@
 | --- | --- |
 | Category | genai |
 | Difficulty | Advanced |
-| Tags | object-detection, genai, yolo26, rtsp, insight, vlm |
+| Tags | object-detection, yolo26, mipi, usb, insight |
 | Languages | Python |
 | Status | stable |
 | Binary Name | detection-to-vlm-assistant |
@@ -14,9 +14,52 @@
 
 ## Concept
 
-Detects people in a live RTSP stream with YOLO26 and sends video to Insight. It can also crop the highest-confidence person and ask a configured vision-language model about them.
+Detects objects in one MIPI or USB camera stream with YOLO26 and sends synchronized video and detection metadata to Insight.
 
-The decoded frame branches inside a single graph to the detector, to the H.264 sender, and back to the application for the GenAI crop. Video and metadata therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from.
+```text
+How does a frame move through detection-to-vlm-assistant?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN, input.type mipi                                                              ┆
+┆  ┌────────────────────────────────┐                                               ┆
+┆  │ CameraInput                    │                                               ┆
+┆  └────────────────────────────────┘                                               ┆
+┆             │ NV12 frames                                                         ┆
+┆             ▼                                                                     ┆
+┆  ┌────────────────────────────────┐  NV12 frames,       ┌──────────────────────┐  ┆
+┆  │ branch                         │────────────────────►│ VideoSender          │──┼─────┐
+┆  └────────────────────────────────┘  latest, encoded    └──────────────────────┘  ┆     │
+┆             │ NV12 frames, latest                                                 ┆     │ video
+┆             ▼                                                                     ┆     │
+┆  ┌────────────────────────────────┐                                               ┆     │
+┆  │ YOLO26 Model                   │                                               ┆     │
+┆  └────────────────────────────────┘                                               ┆     │
+┆             │ BBOX tensor                                                         ┆     │
+┆             ▼                                                                     ┆     │
+┆  ┌────────────────────────────────┐                                               ┆     │
+┆  │ Output "detections"            │                                               ┆     │
+┆  └────────────────────────────────┘                                               ┆     │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯     │
+              ▼ pull, decode_bbox_tensor                                                  ▼
+   ┌────────────────────────────────┐                                                ┌─────────┐
+   │ MetadataSender                 │───────────────────────────────────────────────►│ Insight │
+   └────────────────────────────────┘   boxes as JSON                                └─────────┘
+
+With input.type usb, the camera's own JPEG goes to Insight and only the model reads a
+decoded frame:
+
+ ┌────────────────────────────────┐  camera JPEG,       ┌──────────────────────┐
+ │ UsbCameraInput                 │────────────────────►│ VideoSender          │
+ └────────────────────────────────┘  latest             └──────────────────────┘
+            │ camera JPEG
+            ▼
+ ┌────────────────────────────────┐
+ │ SimaDecode                     │
+ └────────────────────────────────┘
+            │ NV12, or NV16 from a 4:2:2 camera, to the YOLO26 Model
+```
+
+A MIPI camera delivers raw NV12, so one branch carries the frames to the model through the camera's buffer and the other encodes them for Insight. The camera stage is checked for strict zero copy before any consumer is connected, because a composed graph describes its execution plan rather than the camera pipeline. A USB camera carries MJPEG, which goes to Insight as received while the decoder feeds the model. Each detection message carries the frame's timestamp, which Insight uses to draw the boxes on the frame they came from.
 
 ## Preview
 
@@ -25,19 +68,21 @@ The decoded frame branches inside a single graph to the detector, to the H.264 s
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- An RTSP source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
-- The [LLiMa model manager](https://developer.sima.ai/software/genai-llima/runtime) available on the target when GenAI is enabled.
+- A MIPI camera module fitted to the DevKit, or a USB camera attached to it.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target.
 
 ## Install Apps
 
-Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Run the `llima` commands and the example itself on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are up to date. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Run the example itself on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are up to date. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
 sima-cli neat install apps
+```
+
+```bash
 cd prebuilt-apps
-APP_DIR=examples/genai/detection-to-vlm-assistant
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -48,6 +93,9 @@ The [model browser](https://developer.sima.ai/models/) has the YOLO26 detection 
 
 ```bash
 sima-cli models download --id yolo26m --variant w16a16
+```
+
+```bash
 unzip -o models/yolo26m/w16a16/yolo26m_w16a16_default.zip -d models/yolo26m/w16a16
 ```
 
@@ -65,33 +113,19 @@ To use another detector, replace `yolo26m` and `w16a16` in both commands and in 
 
 Set `model.path` to the unpacked `.tar.gz` package, not to the ZIP file.
 
-The default VLM is `Qwen3-VL-4B-Instruct-Autoround-a16w4`.
-
-Search the supported models:
-
-```bash
-llima search
-```
-
-Install the default model:
-
-```bash
-llima pull Qwen3-VL-4B-Instruct-Autoround-a16w4
-```
-
-LLiMa stores models under `/media/nvme/llima/models/` by default. Set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory, then update `genai_server.model.path` accordingly.
-
 ## Prepare Insight
 
-[Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
-
-In the Insight Web UI, start the required stream and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve. Verify the URL from the target before running; the application prints the resolved source and its dimensions on startup.
+[Insight](https://developer.sima.ai/software/tools/insight/) renders the video and the detection metadata. Use the host and UDP port ranges reported by `neat` for the output settings, and a host the target can reach, not `localhost`. The application prints the resolved source and its mode on startup.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set the RTSP URL, detector model path, and Insight host and ports.
+Open `examples/genai/detection-to-vlm-assistant/src/common/config.yaml`.
 
-The packaged config sets `genai.enabled` to `true`. Check the server model name and path and update the prompts before using the VLM. Set it to `false` to run only detection and Insight output.
+- `input.type`: `mipi` or `usb`.
+- `input.source`: the MIPI camera buffer name, or a USB camera ID from `pyneat.usb_camera_ids()`.
+- `input.width`, `input.height`, `input.fps`: one of the camera's modes. A camera is opened in the mode the config names, so all three are set.
+- `model.path`: the unpacked detector package.
+- `output.insight.host`, `output.insight.video_port_base`, `output.insight.metadata_port_base`: from `neat`.
 
 ## Run
 
@@ -99,66 +133,42 @@ Install the Python dependencies:
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r ${APP_DIR}/src/python/requirements.txt
 ```
-
-When GenAI is enabled, start the server in one terminal. The server uses port
-`9998` and loads the VLM on the accelerator, as GenAI Studio does. If GenAI
-Studio is running, for example after you set it up from Insight's GenAI tab,
-stop it first with `run.sh stop` in its folder
-(`~/prebuilt-apps/examples/genai/neat-genai-studio` when Insight installed it).
 
 ```bash
-APP_DIR=examples/genai/detection-to-vlm-assistant
-source ~/pyneat/bin/activate
-python3 ${APP_DIR}/src/python/genai_server.py \
-  --config ${APP_DIR}/src/common/config.yaml
+pip install -r examples/genai/detection-to-vlm-assistant/src/python/requirements.txt
 ```
 
-Start the detection pipeline in another terminal:
+Start the application:
 
 ```bash
-APP_DIR=examples/genai/detection-to-vlm-assistant
-source ~/pyneat/bin/activate
-python3 ${APP_DIR}/src/python/detector_app.py \
-  --config ${APP_DIR}/src/common/config.yaml
+python3 examples/genai/detection-to-vlm-assistant/src/python/main.py --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
 ```
 
-The GenAI path checks `/v1/models`, waits at least `genai.interval_seconds` between requests, and bounds queued and in-flight work with `genai.max_pending_requests`.
+Stop it with Ctrl-C, or with `SIGTERM`; it closes the run and reports any dropped metadata messages.
 
 ## Expected Result
 
-Both lines below come from the **detector** terminal, not the server's. The
-detector's startup banner reports the GenAI endpoint it will call, and it prints
-each vision-language response as that response arrives:
+The startup banner names the camera and the Insight destination, and the run reports the frames it processed:
 
 ```text
-[genai-server] enabled model=Qwen3-VL-4B-Instruct-Autoround-a16w4 url=http://127.0.0.1:9998 interval=5s
-[response #001] The person is seated and holding an object with both hands, appearing to rest or interact with it.
+source=camera0 type=mipi stream=1920x1080@30 insight=10.0.0.5 video=9000 metadata=9100
+frames=0
 ```
 
-The server terminal prints its own lines instead, `added model: ...` followed by
-`serving GenAI API on http://0.0.0.0:9998`; check there if the detector reports
-the endpoint as unreachable.
-
-Responses are deliberately infrequent. `genai.interval_seconds` sets the minimum
-gap between requests, so at the default of `5` a short run produces only a
-handful, and a response appears only when the detector has a person to crop. Few
-responses is not a fault; none at all, on a source containing people, is.
+Insight shows the camera's video with a box and a label on each detected object, drawn on the frame the detection came from.
 
 ## Troubleshooting
 
-- Verify the RTSP URL and Insight ports before investigating inference.
-- Verify `model.path` points to the detector package.
-- Verify the VLM server lists `genai_server.model.name` under `/v1/models`.
-- If the GenAI server cannot start on port `9998`, another server already uses
-  it, usually GenAI Studio. Stop GenAI Studio as described in [Run](#run).
-- Disable GenAI to isolate the detector and Insight path.
+- `camera input is not forwarding DMA-BUFs`: the MIPI camera stage is copying frames. Check the libcamera package and the camera bridge on the target.
+- `input.type must be one of mipi, usb`: the config names another input kind.
+- No cameras listed by `cam -l`, or an empty `pyneat.usb_camera_ids()`: no camera is attached, or its driver did not bind.
+- Video but no boxes in Insight: check `output.insight.metadata_port_base` against the ports `neat` reports.
+- Verify `model.path` points to the detector package, not the ZIP file.
 
 ## Source Files
 
-- Detector application: `src/python/detector_app.py`
-- GenAI server: `src/python/genai_server.py`
+- Application: `src/python/main.py`
 - Shared runtime files: `src/common/`
 
 ## Development From Source
