@@ -160,6 +160,11 @@ def error_of(pending: PendingResults, frame: bool, result: bool, now_s: float) -
     return ""
 
 
+def test_deadlines_are_the_ones_the_readme_names():
+    assert main_module.RESULT_DEADLINE_S == 10.0
+    assert main_module.FIRST_RESULT_DEADLINE_S == 30.0
+
+
 def test_late_result_names_the_stream_and_model():
     pending = PendingResults(2, "models/m.tar.gz", 10.0, 30.0)
     pending.observe(True, True, 100.0)
@@ -254,10 +259,10 @@ def no_decode(monkeypatch):
 
 
 def test_send_results_stops_a_model_that_stops_returning_results(no_decode):
-    # Round 1: a frame and its result. Round 2: a frame. Round 3: nothing, past the deadline.
+    # Round 1: a result and a frame. Round 2: a frame. Round 3: nothing, past the deadline.
     stop = threading.Event()
     run = StoppingRun(
-        stop, ("sample", object()), ("sample", RESULT), ("sample", object()), "timeout",
+        stop, ("sample", RESULT), ("sample", object()), "timeout", ("sample", object()),
         "timeout", "timeout",
     )
     stream = fake_stream(0.0, 60.0)
@@ -267,12 +272,12 @@ def test_send_results_stops_a_model_that_stops_returning_results(no_decode):
         "stream 0: model models/m.tar.gz returned no result for 0 s while its decoder sent frames"
     )
     assert stream.metadata_sender.sent == [("object-detection", '{"objects":[]}', 2, "7")]
-    assert run.pulls == [("frames_0", 0), ("results_0", 0)] * 3
+    assert run.pulls == [("results_0", 0), ("frames_0", 0)] * 3
 
 
 def test_send_results_stops_a_model_that_never_returns_a_result(no_decode):
     stop = threading.Event()
-    run = StoppingRun(stop, ("sample", object()), "timeout", "timeout", "timeout")
+    run = StoppingRun(stop, "timeout", ("sample", object()), "timeout", "timeout")
     with pytest.raises(RuntimeError) as error:
         main_module.send_results(run, [fake_stream(60.0, 0.0)], LABELS, 50, 0, stop)
     assert str(error.value) == (
@@ -286,6 +291,22 @@ def test_send_results_lets_a_paused_camera_wait(no_decode):
     run = StoppingRun(stop, *["timeout"] * 20)
     main_module.send_results(run, [fake_stream(0.0, 0.0)], LABELS, 50, 0, stop)
     assert len(run.pulls) == 20
+
+
+def test_send_results_below_zero_frames_runs_until_stopped(no_decode):
+    stop = threading.Event()
+    run = StoppingRun(stop, *[("sample", RESULT), "timeout"] * 3)
+    stream = fake_stream(60.0, 60.0)
+    main_module.send_results(run, [stream], LABELS, 50, -1, stop)
+    assert len(stream.metadata_sender.sent) == 3
+
+
+def test_send_results_without_a_timestamp_or_frame_id_sends_none(no_decode):
+    stop = threading.Event()
+    run = StoppingRun(stop, ("sample", SimpleNamespace(pts_ns=-1, frame_id=-1)), "timeout")
+    stream = fake_stream(60.0, 60.0)
+    main_module.send_results(run, [stream], LABELS, 50, 1, stop)
+    assert stream.metadata_sender.sent == [("object-detection", '{"objects":[]}', -1, "")]
 
 
 def run_main(tmp_path: Path, change) -> str:
@@ -306,12 +327,13 @@ def run_main(tmp_path: Path, change) -> str:
     return result.stderr.strip().splitlines()[-1]
 
 
-def test_per_stream_lists_need_one_entry_per_stream(tmp_path):
+@pytest.mark.parametrize("key", ["model_paths", "model_ids"])
+def test_per_stream_lists_need_one_entry_per_stream(tmp_path, key):
     def drop_one(config):
-        config["app"]["model_paths"] = config["app"]["model_paths"][:3]
+        config["app"][key] = config["app"][key][:3]
 
     assert run_main(tmp_path, drop_one) == (
-        "[ERR] app.model_paths has 3 entries and input.source has 4: give one per stream"
+        f"[ERR] app.{key} has 3 entries and input.source has 4: give one per stream"
     )
 
 

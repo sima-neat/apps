@@ -188,7 +188,8 @@ int run_case(const std::string& binary, const std::string& models_dir,
   for (int index = 0; index < streams; ++index) {
     const fs::path model = fs::path(models_dir) / kStreams[static_cast<std::size_t>(index)].file;
     model_paths.push_back(fs::relative(fs::absolute(model), fs::absolute(config_dir)).string());
-    // The app runs from the Apps root, so only a path joined to the config file finds a model.
+    // The app runs in this test's working directory, so only a path joined to the config file
+    // finds a model.
     if (fs::exists(model_paths.back())) {
       std::cerr << "[FAIL] " << label << " the working directory also finds "
                 << model_paths.back() << "\n";

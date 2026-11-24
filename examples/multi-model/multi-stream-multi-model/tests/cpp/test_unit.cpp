@@ -1,9 +1,9 @@
 // Unit tests for the multi-stream multi-model example: the checks the application leaves to its
 // config, the Insight metadata of each task, and the pending-result deadline.
 // tests/python/test_unit.py runs the same tests in Python. Python also runs its pull loop against a
-// fake Run and checks the MODEL_IDS table. A C++ Run cannot be faked, and kModelIds is private to
-// main.cpp, so here the deadline is tested on PendingResults.observe(), the step the loop takes
-// for each stream in each round.
+// fake Run and checks the MODEL_IDS table and the deadline values. A C++ Run cannot be faked, and
+// kModelIds and the deadlines are private to main.cpp, so here the deadline is tested on
+// PendingResults.observe(), the step the loop takes for each stream in each round.
 
 #include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/insight_metadata.h"
 #include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/pending_results.h"
@@ -41,14 +41,21 @@ std::string error_of(PendingResults& pending, bool frame, bool result, double no
   return "";
 }
 
-// The last line the example prints to stderr for the shipped config with `scalars` and `lists`
-// set. The frame size and rate are set, so no stream is probed and no source is needed.
+// One round that must not throw. A throw outside error_of would end the test binary.
+bool observes(PendingResults& pending, bool frame, bool result, double now_s) {
+  const std::string error = error_of(pending, frame, result, now_s);
+  return expect_true(error.empty(),
+                     "the round at " + std::to_string(now_s) + " s passes: " + error);
+}
+
+// The last line the example prints to stderr for the shipped config with `lists` set. The frame
+// size and rate are set, so no stream is probed and no source is needed.
 std::string run_error(const std::string& binary, const std::string& test_name,
-                      ConfigScalars scalars, const ConfigLists& lists) {
+                      const ConfigLists& lists) {
   const std::string dir = create_test_scratch_dir(kExampleName, test_name);
   const fs::path config_path = fs::path(dir) / "config.yaml";
-  scalars.insert({{"input.width", "1280"}, {"input.height", "720"}, {"input.fps", "30"}});
-  write_e2e_config(kExampleName, config_path, scalars, lists);
+  write_e2e_config(kExampleName, config_path,
+                   {{"input.width", "1280"}, {"input.height", "720"}, {"input.fps", "30"}}, lists);
   const ProcessResult result = spawn_and_wait(binary, {"--config", config_path.string()}, 60000);
   remove_dir(dir);
   std::string text = result.stderr_text;
@@ -244,8 +251,8 @@ bool test_data_json_leaves_out_the_lowest_confidence_entries() {
 
 bool test_late_result_names_the_stream_and_model() {
   PendingResults pending(2, "models/m.tar.gz", 10.0, 30.0);
-  pending.observe(true, true, 100.0);
-  bool ok = expect_true(error_of(pending, true, false, 101.0).empty(), "a frame is pending");
+  bool ok = observes(pending, true, true, 100.0);
+  ok &= expect_true(error_of(pending, true, false, 101.0).empty(), "a frame is pending");
   ok &= expect_true(error_of(pending, false, false, 111.0).empty(), "the deadline has not passed");
   const std::string error = error_of(pending, false, false, 111.5);
   ok &= expect_true(error == "stream 2: model models/m.tar.gz returned no result for 10 s while "
@@ -256,21 +263,22 @@ bool test_late_result_names_the_stream_and_model() {
 
 bool test_later_frames_keep_the_first_pending_time() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
-  pending.observe(false, true, 100.0);
-  pending.observe(true, false, 101.0);
-  pending.observe(true, false, 106.0);
-  return expect_true(!error_of(pending, true, false, 111.5).empty(),
-                     "the deadline counts from the first pending frame");
+  bool ok = observes(pending, false, true, 100.0);
+  ok &= observes(pending, true, false, 101.0);
+  ok &= observes(pending, true, false, 106.0);
+  ok &= expect_true(!error_of(pending, true, false, 111.5).empty(),
+                    "the deadline counts from the first pending frame");
+  return ok;
 }
 
 bool test_result_clears_the_pending_frame() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
-  pending.observe(false, true, 100.0);
-  pending.observe(true, false, 101.0);
-  pending.observe(false, true, 105.0);
-  bool ok = expect_true(error_of(pending, false, false, 200.0).empty(),
-                        "a result clears the pending frame");
-  pending.observe(true, false, 205.0);
+  bool ok = observes(pending, false, true, 100.0);
+  ok &= observes(pending, true, false, 101.0);
+  ok &= observes(pending, false, true, 105.0);
+  ok &= expect_true(error_of(pending, false, false, 200.0).empty(),
+                    "a result clears the pending frame");
+  ok &= observes(pending, true, false, 205.0);
   ok &= expect_true(error_of(pending, false, false, 215.0).empty(),
                     "the next frame starts a new deadline");
   ok &= expect_true(!error_of(pending, false, false, 215.5).empty(), "the new deadline passes");
@@ -279,16 +287,16 @@ bool test_result_clears_the_pending_frame() {
 
 bool test_frame_with_its_result_in_one_round_is_not_pending() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
-  pending.observe(true, true, 100.0);
-  return expect_true(error_of(pending, false, false, 1'000'000.0).empty(),
-                     "a frame with its result starts no deadline");
+  bool ok = observes(pending, true, true, 100.0);
+  ok &= expect_true(error_of(pending, false, false, 1'000'000.0).empty(),
+                    "a frame with its result starts no deadline");
+  return ok;
 }
 
 bool test_first_result_has_its_own_deadline() {
   PendingResults pending(1, "m.tar.gz", 10.0, 30.0);
-  pending.observe(true, false, 100.0);
-  bool ok = expect_true(error_of(pending, false, false, 125.0).empty(),
-                        "the first result has 30 s");
+  bool ok = observes(pending, true, false, 100.0);
+  ok &= expect_true(error_of(pending, false, false, 125.0).empty(), "the first result has 30 s");
   const std::string error = error_of(pending, false, false, 130.5);
   ok &= expect_true(
       error == "stream 1: model m.tar.gz returned no result for 30 s while its decoder sent frames",
@@ -300,24 +308,27 @@ bool test_paused_camera_waits_without_a_limit() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
   bool ok = expect_true(error_of(pending, false, false, 1'000'000.0).empty(),
                         "no frame, no deadline");
-  pending.observe(false, true, 1'000'001.0);
+  ok &= observes(pending, false, true, 1'000'001.0);
   ok &= expect_true(error_of(pending, false, false, 2'000'000.0).empty(),
                     "no frame after the last result, no deadline");
   return ok;
 }
 
 bool test_per_stream_lists_need_one_entry_per_stream(const std::string& binary) {
-  const std::string error =
-      run_error(binary, "test_per_stream_lists_need_one_entry_per_stream", {},
-                {{"app.model_paths", {"a_mpk.tar.gz", "b_mpk.tar.gz", "c_mpk.tar.gz"}}});
-  return expect_true(
-      error == "[ERR] app.model_paths has 3 entries and input.source has 4: give one per stream",
-      "a short list fails with its key: " + error);
+  bool ok = true;
+  for (const std::string key : {"app.model_paths", "app.model_ids"}) {
+    const std::string error = run_error(binary, "test_per_stream_lists_need_one_entry_per_stream",
+                                        {{key, {"yolov8", "yolo26-seg", "yolo26-pose"}}});
+    ok &= expect_true(error == "[ERR] " + key +
+                                   " has 3 entries and input.source has 4: give one per stream",
+                      "a short " + key + " fails with its key: " + error);
+  }
+  return ok;
 }
 
 bool test_unknown_model_id_names_the_choices(const std::string& binary) {
   const std::string error =
-      run_error(binary, "test_unknown_model_id_names_the_choices", {},
+      run_error(binary, "test_unknown_model_id_names_the_choices",
                 {{"app.model_ids", {"yolov8", "yolo26-obb", "yolo26-pose", "yolo26"}}});
   return expect_true(error == "[ERR] app.model_ids: unknown value 'yolo26-obb' (expected yolo26, "
                               "yolo26-pose, yolo26-seg, yolov8, yolov8-pose, yolov8-seg)",

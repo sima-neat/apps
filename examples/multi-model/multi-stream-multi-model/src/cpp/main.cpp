@@ -80,8 +80,8 @@ constexpr double kResultDeadlineS = 10.0;
 // The same for the first result, which also waits for Core to build the rest of the pipeline on
 // the first frame (EdgeRouter.cpp). Not measured on a DevKit.
 constexpr double kFirstResultDeadlineS = 30.0;
-// Decoded frames each stream's decoder keeps: the 4 its model may hold, and 8 more to decode into
-// while those are in use. 12 as before the conversion, not re-measured with this graph.
+// Decoded frames each stream's decoder keeps. 12 as before the conversion, not re-measured with
+// this graph.
 constexpr int kDecoderBuffers = 12;
 // The pull loop polls every output without waiting, and sleeps this long after a round that
 // pulled no result.
@@ -176,7 +176,7 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
     options.fallback_h264_width = stream.width;
     options.fallback_h264_height = stream.height;
     if (options.source_fps > 0) {
-      // H.264 caps from input.fps and the probed size, instead of the stream's own.
+      // H.264 caps from input.fps and the stream's size, instead of the stream's own.
       options.auto_caps_from_stream = false;
     } else {
       // The rate the stream's caps fall back to; with input.fps set it has no effect.
@@ -215,8 +215,9 @@ neat::Graph frames_graph(std::size_t index) {
 
 // Pass on the newest frame, so a slow consumer cannot hold back the stream.
 //
-// Into a model, Core lets a stream hold 4 decoded frames at once, and caps the frames on one link
-// at min(4 * streams, 8), which is 4 for the one stream per model (EdgeRouter.cpp).
+// Core caps the decoded frames in flight on one link at min(4 * streams, 8), which is 4 for the one
+// stream per model (EdgeRouter.cpp). Not verified on a DevKit: the frames output receives the same
+// decoded frames, and Core counts one credit per frame, so the model may hold more.
 neat::GraphLinkOptions realtime_link() {
   neat::GraphLinkOptions link;
   link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
@@ -363,12 +364,13 @@ void send_results(neat::Run& run, std::vector<Stream>& streams,
       }
       neat::Sample sample;
       neat::PullError error;
-      const std::string frames_name = frames_output(index);
-      const bool frame_arrived = sima_examples::pull_status_has_sample(
-          run.pull(frames_name, 0, sample, &error), frames_name, error, run.last_error());
       const std::string results_name = results_output(index);
       const bool result_arrived = sima_examples::pull_status_has_sample(
           run.pull(results_name, 0, sample, &error), results_name, error, run.last_error());
+      neat::Sample frame;
+      const std::string frames_name = frames_output(index);
+      const bool frame_arrived = sima_examples::pull_status_has_sample(
+          run.pull(frames_name, 0, frame, &error), frames_name, error, run.last_error());
       stream.pending.observe(frame_arrived, result_arrived, now);
       if (!result_arrived) {
         continue;
@@ -398,14 +400,14 @@ void send_results(neat::Run& run, std::vector<Stream>& streams,
 int run_app(const fs::path& config_path) {
   const auto config = sima_examples::Config::load(config_path);
   const auto sources = config.string_list("input.source");
-  const auto infos = stream_info(config, sources);
   const auto model_paths = per_stream(config, "app.model_paths", sources.size());
   const auto model_ids = per_stream(config, "app.model_ids", sources.size());
-  // Each stream's BoxDecode type and metadata type, read before any model loads.
+  // Each stream's BoxDecode type and metadata type, read before the probe and any model load.
   std::vector<std::pair<neat::BoxDecodeType, std::string>> model_types;
   for (const auto& model_id : model_ids) {
     model_types.push_back(sima_examples::lookup("app.model_ids", model_id, kModelIds));
   }
+  const auto infos = stream_info(config, sources);
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
   // Used by both the models and the box decode.
   const int max_detections = config.integer("inference.max_detections");
@@ -425,9 +427,9 @@ int run_app(const fs::path& config_path) {
     const neat::Graph rtsp = groups::RtspEncodedInput(rtsp_options(config, url, info));
     const neat::Graph decoder = decoder_graph(config, info);
     // A plain link keeps every encoded frame. A dropped one corrupts the decoded frames after it
-    // until the next keyframe. Core runs an RTSP input with exactly two consumers, a decoder and
-    // an encoded VideoSender, as one pipeline (ExecutionGraphCompiler.cpp), so the frames output
-    // taps the decoder instead.
+    // until the next keyframe. Core runs an RTSP input with exactly two consumers, a decoder on a
+    // plain link and a synchronous VideoSender of the same codec, as one pipeline
+    // (ExecutionGraphCompiler.cpp), so the frames output taps the decoder instead.
     graph.connect(rtsp, decoder);
     graph.connect(decoder, model_graph(models.back(), index), realtime_link());
     graph.connect(rtsp, groups::VideoSender(video_options(config, index)), realtime_link());

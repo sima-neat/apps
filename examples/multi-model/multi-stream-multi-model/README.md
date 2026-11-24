@@ -53,7 +53,7 @@ How does a frame move through multi-stream-multi-model?
 
 - One graph and one `Run` hold every stream. Each stream has its own `SimaDecode`, its own model, and its own `Output "results_i"`.
 - `RtspEncodedInput` sends each stream's encoded video to Insight unchanged. Insight draws every overlay from the metadata.
-- The link into each model keeps the newest decoded frames. Core lets each model hold 4 frames of its stream at once.
+- The link into each model keeps the newest decoded frames. Core is meant to let each model hold 4 frames of its stream at once. That is not yet verified on a DevKit with `Output "frames_i"` on the same decoder.
 - `Output "frames_i"` keeps only the newest decoded frame. The pull loop reads it to know that the decoder is sending. The RTSP input feeds only the decoder and the video sender, so Core runs the three as one pipeline.
 - One pull loop reads every output in turn. It turns each result into Insight metadata and sends it on the stream's channel.
 - Decoded frames that arrive with no result for 10 seconds stop the application with an error. The first result may take 30 seconds, because Core builds the rest of the pipeline on the first frame. A camera that pauses sends no frames, so it may wait without a limit.
@@ -122,7 +122,7 @@ Open `${APP_DIR}/src/common/config.yaml` and set:
 - `app.model_paths` and `app.model_ids`: one entry per stream, in `input.source` order. To run fewer streams, remove the same entries from all three lists.
 - `output.insight.host`. Stream i sends video to `video_port_base` + i and results to `metadata_port_base` + i.
 
-Keep `inference.frames` at `0` to run until you stop the application. 0 or less runs until stopped.
+`inference.frames` at 0 or less runs until you stop the application.
 
 ## Run
 
@@ -172,12 +172,12 @@ The metadata sender does not wait for a full network buffer. It drops the messag
 
 ## Troubleshooting
 
-- `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config. In C++, a number of the wrong type prints `stoi` without the key until #793 merges.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config.
 - `app.model_paths has 3 entries and input.source has 4`: give every list one entry per stream.
 - `app.model_ids: unknown value` lists the values the application takes. Pick the one for the package's task and family.
 - `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: a value left at 0 could not be read. Check that the URL is reachable from the DevKit. For a reachable stream, set the value the message names.
 - `stream <i>: model <path> returned no result for 10 s while its decoder sent frames`: that stream's model stopped. Check its package and its `app.model_ids` entry, then start the application again. The same message with `30 s` means the model never returned its first result.
-- One stream falls far behind while the others hold the source rate: the MLA is oversubscribed. The slowdown lands on one stream instead of spreading. Use lighter packages or fewer streams.
+- Streams fall below the source rate: the MLA is oversubscribed. Use lighter packages or fewer streams.
 - Boxes appear in about the right places but at the wrong sizes: the `app.model_ids` entry does not match the package's heads. Check it against the table above.
 - A positive `left_out` at exit: a frame's results did not fit one message. Lower `inference.max_detections` or raise `inference.min_score`.
 - No video or results in Insight: check the Insight host and the UDP ports. Make sure no other application sends to the same ports.

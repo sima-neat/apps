@@ -56,8 +56,8 @@ RESULT_DEADLINE_S = 10.0
 # The same for the first result, which also waits for Core to build the rest of the pipeline on
 # the first frame (EdgeRouter.cpp). Not measured on a DevKit.
 FIRST_RESULT_DEADLINE_S = 30.0
-# Decoded frames each stream's decoder keeps: the 4 its model may hold, and 8 more to decode
-# into while those are in use. 12 as before the conversion, not re-measured with this graph.
+# Decoded frames each stream's decoder keeps. 12 as before the conversion, not re-measured with
+# this graph.
 DECODER_BUFFERS = 12
 # The pull loop polls every output without waiting, and sleeps this long after a round that
 # pulled no result.
@@ -146,7 +146,7 @@ def rtsp_options(
         options.fallback_h264_width = stream.width
         options.fallback_h264_height = stream.height
         if options.source_fps > 0:
-            # H.264 caps from input.fps and the probed size, instead of the stream's own.
+            # H.264 caps from input.fps and the stream's size, instead of the stream's own.
             options.auto_caps_from_stream = False
         else:
             # The rate the stream's caps fall back to; with input.fps set it has no effect.
@@ -185,8 +185,9 @@ def frames_graph(index: int) -> pyneat.Graph:
 def realtime_link() -> pyneat.GraphLinkOptions:
     """Pass on the newest frame, so a slow consumer cannot hold back the stream.
 
-    Into a model, Core lets a stream hold 4 decoded frames at once, and caps the frames on one
-    link at min(4 * streams, 8), which is 4 for the one stream per model (EdgeRouter.cpp).
+    Core caps the decoded frames in flight on one link at min(4 * streams, 8), which is 4 for the
+    one stream per model (EdgeRouter.cpp). Not verified on a DevKit: the frames output receives
+    the same decoded frames, and Core counts one credit per frame, so the model may hold more.
     """
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
@@ -296,7 +297,6 @@ def send_results(
         for index, stream in enumerate(streams):
             if frames > 0 and stream.processed >= frames:
                 continue
-            frame_arrived = run.pull(frames_output(index), 0) is not None
             sample = run.pull(results_output(index), 0)
             # Core gap: Python's pull returns None both on a timeout and on a closed output, so
             # an output that closed shows only once the run stopped. A source that ends cleanly
@@ -308,6 +308,7 @@ def send_results(
                     f"{results_output(index)} output closed unexpectedly"
                     + (f": {error}" if error else "")
                 )
+            frame_arrived = run.pull(frames_output(index), 0) is not None
             stream.pending.observe(frame_arrived, sample is not None, now_s)
             if sample is None:
                 continue
@@ -335,11 +336,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.load(args.config)
     sources = config.string_list("input.source")
-    infos = stream_info(config, sources)
     model_paths = per_stream(config, "app.model_paths", len(sources))
     model_ids = per_stream(config, "app.model_ids", len(sources))
-    # Each stream's BoxDecode type and metadata type, read before any model loads.
+    # Each stream's BoxDecode type and metadata type, read before the probe and any model load.
     model_types = [lookup("app.model_ids", model_id, MODEL_IDS) for model_id in model_ids]
+    infos = stream_info(config, sources)
     labels = load_labels(Path(config.string("model.labels")))
     # Used by both the models and the box decode.
     max_detections = config.integer("inference.max_detections")
@@ -360,8 +361,8 @@ def main(argv: list[str] | None = None) -> int:
         decoder = decoder_graph(config, info)
         # A plain link keeps every encoded frame. A dropped one corrupts the decoded frames
         # after it until the next keyframe. Core runs an RTSP input with exactly two consumers,
-        # a decoder and an encoded VideoSender, as one pipeline (ExecutionGraphCompiler.cpp),
-        # so the frames output taps the decoder instead.
+        # a decoder on a plain link and a synchronous VideoSender of the same codec, as one
+        # pipeline (ExecutionGraphCompiler.cpp), so the frames output taps the decoder instead.
         graph.connect(rtsp, decoder)
         graph.connect(decoder, model_graph(models[-1], index), realtime_link())
         graph.connect(
