@@ -274,7 +274,9 @@ use `input_specs()` to know what to send.
   with `preset = ImageNet` and otherwise the same options). SuperPoint without
   statistics kept only 20 % to 50 % of its keypoints. Fix: set a
   preset or explicit statistics, and check
-  `preprocess_plan().effective.normalize.enable` is `On`.
+  `preprocess_plan().effective.normalize.enable` is `On`. Since Core 7e5317be,
+  `resolved_preprocess_plan().warnings` then holds
+  `preprocess.normalize=Auto resolved Off: ...` for an image route.
 - **Mean and stddev alone do not turn normalization on.** With
   `normalize.enable` at `Auto`, the planner turns normalization on only when
   `normalize.has_explicit_stats` is true or a preset is set. Setting only

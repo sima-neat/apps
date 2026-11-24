@@ -121,7 +121,7 @@ value.
 | From numpy | not available | `Tensor.from_numpy(array, copy=False, layout=None, image_format=None, memory=None, byte_format=None)` | `copy=False` | Builds a tensor from an array. | The idiomatic Python push path. `copy=True` when the array is transient. `copy` matters only for `CPU` and `A65`: `EV74`, the default for `memory=None`, and `MLA` always copy. |
 | From torch | not available | `Tensor.from_torch(...)` / `from_pytorch(...)`, `to_torch(...)` | `copy=False` | PyTorch interop through DLPack; a non-CPU torch tensor is moved to CPU first. | Feeding a model from an existing torch pipeline. |
 | From a Python list | not available | `Tensor.from_list(data, shape=None, dtype=None, ...)` | copies | Builds from a sequence, routed through `from_numpy`. Int lists become `int32`, since `int64` is not a device dtype. | Small hand-written inputs and tests. |
-| From a `cv::Mat` | `Tensor::from_cv_mat(mat, fmt, memory)` | not available | — | Wraps an OpenCV matrix. | The C++ push path in the shipped examples. |
+| From a `cv::Mat` | `Tensor::from_cv_mat(mat, fmt, memory)` | not available | `fmt = BGR`, `memory = EV74` | Copies the matrix into `memory`. `from_cv_mat_view(mat, fmt)` wraps it on the CPU without a copy. | The C++ push path in the shipped examples. |
 | `cv::Mat` views | `map_cv_mat_view(fmt)`, `to_cv_mat_copy(fmt)` | not available | — | Mapping bundled with a non-owning `cv::Mat`, or a copy. | C++ post-processing with OpenCV. |
 | Move across devices | `to(Device)`, `cpu()`, `cvu()`, `mla(force)`, `to_cpu_if_needed()` | `cpu()`, `cvu()`, `mla(force=False)`, `to_cpu_if_needed()` | `force=False` | Returns the tensor on another device. | `cpu()` is the explicit conversion out of device storage. `to(Device)` is C++ only. |
 | Normalise layout | `contiguous()`, `clone()` | `contiguous()`, `clone()` | — | Compact copy, or an independent copy. | `contiguous()` before handing bytes to code that assumes row-major; `clone()` to break a loan. |
@@ -210,6 +210,12 @@ fails on a tensor that looks fine.
 **Mapping a non-contiguous tensor and treating it as a flat block is wrong.**
 Both examples check `is_contiguous()` first and fall back to a copy otherwise.
 `contiguous()` gives you a compact copy when you need one.
+
+**`Tensor.from_numpy` rejects a read-only array.** A NumPy view over
+`bytes`, such as one over `copy_payload_bytes()`, fails with
+`BufferError: Cannot export readonly array ...`, because pyneat exports
+through `__dlpack__()` without `max_version`. Fix: pass a writable array, for
+example a `.copy()` of only the plane you need.
 
 **`int64` numpy arrays are not a device dtype.** `from_list` maps Python int
 lists to `int32` for you, but `from_numpy` on an explicitly `int64` array does
