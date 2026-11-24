@@ -66,6 +66,15 @@ setup belongs to the Insight documentation or the installed Insight skill.
   within 1 ms. A negative or missing `timestamp` sends the boxes without pairing.
 - `frame_id` is the `Sample`'s `frame_id` as a string. Insight reports it in its statistics.
 
+### Track overlay payload
+
+When the application follows objects across frames, send `type` `tracking` with the entries
+in `data.tracks` instead of `data.objects`. Each entry has the box entry's fields, and its `id`
+is the track ID, such as `"7"`. Insight colors a track by its `id`, separately on each channel,
+and draws its trail. Entries without an `id` draw in one color. `timestamp` and `frame_id` work
+as for boxes. See "Metadata colors" in
+[Insight: the video viewer](https://github.com/sima-neat/insight/blob/main/docs/user-interface.md).
+
 ## Oriented boxes
 
 Oriented-box decoders emit `BBOX_OBB_V1`, which the axis-aligned `SimaRender` rejects. Draw
