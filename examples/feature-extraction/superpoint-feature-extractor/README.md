@@ -46,6 +46,19 @@ Run the remaining commands from `prebuilt-apps/`.
 
 SuperPoint is licensed by Magic Leap under the [SuperPoint Software License Agreement](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE), which restricts the software to noncommercial research use and prohibits its distribution to third parties. Redistribution of a compiled SuperPoint model package is therefore prohibited, and the model browser does not offer one for download. To run this example, compile the model from its recipe in the [models repository](https://github.com/sima-neat/models/tree/d0b3f921b29be11a8ca80859f0805ba143a2e975/models/superpoint) on a machine with the Model Compiler, such as the Neat SDK. Review the license terms to confirm that they permit your intended use.
 
+Every models repository link on this page points at commit `d0b3f921`, the revision these
+steps were checked against. Check it out in your clone before you start, so the recipe,
+the scripts and the step numbering match what is written here:
+
+```bash
+git clone https://github.com/sima-neat/models.git
+cd models
+git checkout d0b3f921b29be11a8ca80859f0805ba143a2e975
+```
+
+A later revision may renumber the steps or change the recipe, in which case the
+substitutions below no longer apply. Move to `main` once you have a build that works.
+
 Follow steps 1 to 5 of [Getting started](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/docs/getting-started.md) in the models repository, replacing `yolo26n` with `superpoint`. Steps 4 and 5 convert the checkpoint to ONNX and compile it into a model package; the later performance and accuracy steps are optional. Choose one build profile:
 
 - **`w16a16`, the packaged default.** It needs no calibration images, so skip step 3, replace `w8a8` with `w16a16` in the step 5 commands, and drop `--dataset` from the compile command. The whole build needs only the public Hugging Face checkpoint the recipe pins; no SiMa.ai dataset or credential takes part in it. The compile writes `build/superpoint/w16a16/model/superpoint_w16a16_mpk.tar.gz`. Copy that file to the DevKit, into `models/superpoint/w16a16/` under `prebuilt-apps/`, where the packaged config already points.
