@@ -20,6 +20,7 @@ import pytest
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_APPS = APPS_ROOT / "scripts/ci/package-apps.sh"
+ARTIFACT_REFS = APPS_ROOT / "scripts/artifact-refs.sh"
 APPS_SHA = "0123456789abcdef0123456789abcdef01234567"
 RUNTIME_ARCHIVE = "neat-apps-contract-0123456.tar.gz"
 TESTS_ARCHIVE = "neat-apps-tests.tar.gz"
@@ -35,6 +36,7 @@ def _write(path: Path, text: str = "fixture\n", executable: bool = False) -> Non
 def _fake_repo(root: Path) -> None:
     (root / "scripts/ci").mkdir(parents=True)
     shutil.copy2(PACKAGE_APPS, root / "scripts/ci/package-apps.sh")
+    shutil.copy2(ARTIFACT_REFS, root / "scripts/artifact-refs.sh")
     _write(root / "deps/manifest.json", json.dumps({"neat-core": ""}) + "\n")
     _write(root / "deps/neat-core.json", json.dumps({"neat-core": {"ref": "r", "spec": "s"}}))
     _write(root / "scripts/download_models.sh", executable=True)
@@ -175,3 +177,13 @@ def test_package_apps_output_does_not_depend_on_git(
     extra_env = {"GIT_DIR": str(tmp_path / "missing.git")} if git_state != "repository" else {}
 
     assert _package(root, extra_env) == packaged_without_git
+
+
+@pytest.mark.parametrize("script", ["build.sh", "scripts/ci/package-apps.sh"])
+def test_branch_key_and_tag_live_only_in_artifact_refs(script):
+    # build.sh resolves Core and package-apps.sh versions the archive with the
+    # same two functions, so both must source the one definition.
+    text = (APPS_ROOT / script).read_text(encoding="utf-8")
+    assert 'source "${ROOT_DIR}/scripts/artifact-refs.sh"' in text
+    for function in ("sanitize_branch_key", "current_dependency_tag"):
+        assert f"{function}() {{" not in text, f"{script} redefines {function}"

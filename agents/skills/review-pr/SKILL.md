@@ -60,8 +60,8 @@ each finding cites the owning file and section.
   a format parsed by hand, a value Core should provide, or a comment describing a runtime
   limitation. Name the Core API that would replace it and the lines it would save. These
   findings are proposals for the maintainer, not blockers.
-- **Code owners:** flag changes to dependency pins, `build.sh`, `scripts/ci/package-apps.sh`,
-  or `.github/workflows/vulcan-ci.yml` for code owner review.
+- **Code owners:** flag changes to dependency pins, `build.sh`, `scripts/artifact-refs.sh`,
+  `scripts/ci/package-apps.sh`, or `.github/workflows/vulcan-ci.yml` for code owner review.
 
 ## Evidence
 
