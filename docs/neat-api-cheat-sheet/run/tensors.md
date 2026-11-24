@@ -118,7 +118,7 @@ value.
 | Copy payload bytes | `copy_payload_bytes()` | `copy_payload_bytes()` | — | Copies the payload including composite planes. | NV12 or I420 output you want as one block. |
 | Copy into your buffer | `copy_dense_bytes_tight_to(dst, n)`, `copy_payload_bytes_to(dst, n)` | not available | — | Same, into memory you own. | Avoiding an allocation per frame in C++. |
 | To numpy | not available | `to_numpy(copy=False)` | `copy=False` | Views the tensor as a numpy array through DLPack. | The idiomatic Python read. Pass `copy=True` when the array must outlive the tensor. |
-| From numpy | not available | `Tensor.from_numpy(array, copy=False, layout=None, image_format=None, memory=None, byte_format=None)` | `copy=False` | Builds a tensor from an array. | The idiomatic Python push path. `copy=True` when the array is transient. |
+| From numpy | not available | `Tensor.from_numpy(array, copy=False, layout=None, image_format=None, memory=None, byte_format=None)` | `copy=False` | Builds a tensor from an array. | The idiomatic Python push path. `copy=True` when the array is transient. `copy` matters only for `CPU` and `A65`: `EV74`, the default for `memory=None`, and `MLA` always copy. |
 | From torch | not available | `Tensor.from_torch(...)` / `from_pytorch(...)`, `to_torch(...)` | `copy=False` | PyTorch interop through DLPack; a non-CPU torch tensor is moved to CPU first. | Feeding a model from an existing torch pipeline. |
 | From a Python list | not available | `Tensor.from_list(data, shape=None, dtype=None, ...)` | copies | Builds from a sequence, routed through `from_numpy`. Int lists become `int32`, since `int64` is not a device dtype. | Small hand-written inputs and tests. |
 | From a `cv::Mat` | `Tensor::from_cv_mat(mat, fmt, memory)` | not available | — | Wraps an OpenCV matrix. | The C++ push path in the shipped examples. |
@@ -219,7 +219,7 @@ not. Cast before pushing.
 
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) — `map_read()` guarded by `is_contiguous()` and `dense_bytes_tight()`, loan released before drawing
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — `map_read()` with a copy fallback, `ZeroCopy` output
-- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — the Y plane of a pulled NV12 frame (C++ `copy_nv12_contiguous`, Python `planes` and `copy_payload_bytes`) as a `GRAY8` tensor in `TensorMemory::EV74`
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — the Y plane of a pulled NV12 frame (C++ a `cv::Mat` view over `map_nv12_read()`, Python `planes` and `copy_payload_bytes`) as a `GRAY8` tensor in the default `TensorMemory::EV74`
 - [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — Python `copy_payload_bytes()` into numpy, `TensorMemory.EV74`
 - [image-classification-explorer](../../../examples/classification/image-classification-explorer/) — Python `copy_dense_bytes_tight()` with an explicit dtype
 
@@ -234,4 +234,4 @@ not. Cast before pushing.
   `nb::enum_<TensorMemory>`, `nb::enum_<OutputMemory>`;
   `python/pyneat/_wrappers.py` for `from_numpy`, `to_numpy`, `from_torch`,
   `to_torch`, `from_dlpack`, `from_list`
-- Core commit: `c68a5241`
+- Core commit: `7e5317be`

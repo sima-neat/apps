@@ -300,8 +300,9 @@ use `input_specs()` to know what to send.
   `resize` left at `Auto`, the image is still fitted to the model, but with
   pad `0`, not the `pad_value` default of 114. On ResNet-50 the scores matched
   an explicit `Letterbox` with `pad_value = 0` exactly, and differed from
-  `Stretch` and from `Letterbox` with pad 114. Setting only `mode` does not
-  apply it, though the plan's `effective.resize.mode` shows it. Fix: set
+  `Stretch` and from `Letterbox` with pad 114. Setting only `mode = Stretch`
+  does not apply it, though the plan's `effective.resize.mode` shows it. `Crop`,
+  a target size or an `interpolation` turns resize on by itself. Fix: set
   `resize.enable = On` with the `mode` and `pad_value` your model was trained
   with.
 - **A gray model does not take NV12.** The run fails to start with `Gray
@@ -337,7 +338,7 @@ use `input_specs()` to know what to send.
 - [FastFlow Anomaly Detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/): explicit mean and stddev
 - [Image Classification Explorer](../../../examples/classification/image-classification-explorer/): `ImageNet` preset with input capacity per model
 - [MIPI Multi-Model](../../../examples/benchmarking/mipi-multi-model/) (Python): NV12 camera input; `Letterbox` for YOLO26, `Stretch` with mean and stddev 0.5 for SSD
-- [SuperPoint Feature Extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `GRAY8` input from the decoder's Y plane, `Stretch` with mean 0 and stddev 1
+- [SuperPoint Feature Extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `GRAY8` input from the decoder's Y plane, `Stretch`, and the default statistics marked explicit
 - Other detection, pose, segmentation and tracking examples set `preprocess` too; list them with `git grep -n "preprocess\." -- examples`.
 
 ## Source

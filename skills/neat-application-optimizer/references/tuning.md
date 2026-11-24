@@ -16,8 +16,8 @@ Use them for live views, and keep every-frame paths where every frame must be pr
 
 - Feed decoder or camera output to the model as NV12 frames with the model's NV12
   preprocessing, as the builder's model reference ("Construct and configure") sets it up. That
-  moves color conversion and resizing from the CPU to the EV74. A gray-input model takes no NV12;
-  give it each frame's Y plane as `GRAY8` instead of a CPU conversion to BGR.
+  moves color conversion and resizing from the CPU to the EV74. A gray-input model is the
+  exception that reference names.
 - Send video to Insight with `VideoSenderOptions::Passthrough(codec)` from the encoded stream,
   which skips decoding and re-encoding for the display path. The builder's application output
   reference owns the sender's link.

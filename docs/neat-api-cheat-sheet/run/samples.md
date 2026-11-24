@@ -183,7 +183,7 @@ arithmetic.
 ## Used in
 
 - [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — walks `fields` by `stream_label == "frame"`, then `tensors_from_sample`
-- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — copies the Y plane out of each pulled NV12 frame: `tensors_from_sample` in C++, `kind` and `tensor` in Python
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — reads the Y plane of each pulled NV12 frame: `tensors_from_sample` and a `map_nv12_read()` view in C++, `kind` and `tensor` and a copy in Python
 - [single-stream-instance-segmenter](../../../examples/segmentation/single-stream-instance-segmenter/) — resolves the `"segments"` field out of a Bundle in both languages
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) — uses the sample's stream identity to route results per camera
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — derives a stream index from the pulled sample
