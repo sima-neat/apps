@@ -42,6 +42,32 @@ def probe_rtsp_stream_info(
     return info
 
 
+def probe_rtsp_streams(
+    urls: list[str], tcp: bool, configured: RtspStreamInfo = RtspStreamInfo(0, 0, 0)
+) -> list[RtspStreamInfo]:
+    """Each stream's frame size and rate, in the order of `urls`, from `probe_rtsp_stream_info`.
+
+    A URL listed more than once is probed once. Every stream must have the same frame size,
+    because the streams share one model.
+    """
+    by_url: dict[str, RtspStreamInfo] = {}
+    for url in urls:
+        if url in by_url:
+            continue
+        stream = probe_rtsp_stream_info(url, tcp, configured)
+        by_url[url] = stream
+        first_url, first = next(iter(by_url.items()))
+        # Core gap: a model shared by several streams accepts one input size, and a stream of
+        # another size fails the build with "input spec mismatch".
+        if (stream.width, stream.height) != (first.width, first.height):
+            raise ValueError(
+                "every input.source stream needs the same frame size, because the streams "
+                f"share one model: {first_url} is {first.width}x{first.height}, "
+                f"{url} is {stream.width}x{stream.height}"
+            )
+    return [by_url[url] for url in urls]
+
+
 def _read_stream_info(url: str, tcp: bool) -> RtspStreamInfo:
     # The FFmpeg backend reads its RTSP options from this variable when it opens the URL.
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (

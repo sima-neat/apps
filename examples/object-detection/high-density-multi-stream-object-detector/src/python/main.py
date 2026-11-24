@@ -25,7 +25,7 @@ else:
 from sima_examples import detection_egress
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
-from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
+from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_streams
 from sima_examples.stop_signals import stop_on_signals
 
 RTSP_CODECS = {"h264": pyneat.RtspCodec.H264, "h265": pyneat.RtspCodec.H265}
@@ -168,31 +168,6 @@ def run_options(config: Config) -> pyneat.RunOptions:
     return options
 
 
-def stream_info(config: Config, sources: list[str]) -> list[RtspStreamInfo]:
-    """Each stream's frame size and rate: the configured values, and a probe's for each 0.
-
-    Every stream has the same size, because the streams share one model input.
-    """
-    configured = RtspStreamInfo(
-        config.integer("input.width"),
-        config.integer("input.height"),
-        config.integer("input.fps"),
-    )
-    tcp = config.boolean("input.rtsp.tcp")
-    by_url = {url: probe_rtsp_stream_info(url, tcp, configured) for url in set(sources)}
-    # Core gap: a model shared by several streams accepts one input size, and a stream of
-    # another size fails the build with "input spec mismatch".
-    (first_url, first), *others = by_url.items()
-    for url, stream in others:
-        if (stream.width, stream.height) != (first.width, first.height):
-            raise ValueError(
-                "every input.source stream needs the same frame size, because the streams "
-                f"share one model: {first_url} is {first.width}x{first.height}, "
-                f"{url} is {stream.width}x{stream.height}"
-            )
-    return [by_url[url] for url in sources]
-
-
 def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, max_detections: int) -> list:
     """The boxes in a detections sample, whose first tensor is the BBOX payload."""
     if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
@@ -244,7 +219,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.load(args.config)
     sources = config.string_list("input.source")
-    streams = stream_info(config, sources)
+    # Each stream's frame size and rate: the configured values, and a probe's for each 0.
+    streams = probe_rtsp_streams(
+        sources,
+        config.boolean("input.rtsp.tcp"),
+        RtspStreamInfo(
+            config.integer("input.width"),
+            config.integer("input.height"),
+            config.integer("input.fps"),
+        ),
+    )
     labels = load_labels(Path(config.string("model.labels")))
     model_path = args.config.resolve().parent / config.string("model.path")
     # Used by both the model and the box decode.

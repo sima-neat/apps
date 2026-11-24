@@ -1,5 +1,6 @@
 #include "sima_examples/config.h"
 #include "sima_examples/detection_egress.h"
+#include "sima_examples/rtsp_probe.h"
 #include "sima_examples/testing/test_checks.h"
 
 #include <nlohmann/json.hpp>
@@ -98,6 +99,20 @@ bool test_frame_metadata_copies_the_sample_identity() {
                      "frame_metadata copies the sample identity and sets no RTP timestamp");
 }
 
+// tests/scripts/test_rtsp_probe.py covers the probe and the frame-size check, which need a stream.
+bool test_configured_streams_need_no_probe() {
+  const sima_examples::RtspStreamInfo configured{1280, 720, 30};
+  // Fully configured streams are not probed, so these URLs are never opened.
+  const auto streams = sima_examples::probe_rtsp_streams(
+      {"rtsp://unused/a", "rtsp://unused/b", "rtsp://unused/a"}, true, configured);
+  bool ok = expect_true(streams.size() == 3, "probe_rtsp_streams returns one entry per URL");
+  for (const auto& stream : streams) {
+    ok &= expect_true(stream.width == 1280 && stream.height == 720 && stream.fps == 30,
+                      "probe_rtsp_streams keeps the configured size and rate");
+  }
+  return ok;
+}
+
 // The checks the application leaves to its config: the values it reads are usable.
 bool test_shipped_profiles_load() {
   const fs::path common_dir =
@@ -127,6 +142,7 @@ int main() {
   bool ok = true;
   ok &= test_serialize_builds_insight_payload();
   ok &= test_frame_metadata_copies_the_sample_identity();
+  ok &= test_configured_streams_need_no_probe();
   ok &= test_shipped_profiles_load();
   return ok ? 0 : 1;
 }

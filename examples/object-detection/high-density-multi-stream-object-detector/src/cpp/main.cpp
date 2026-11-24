@@ -29,7 +29,6 @@
 #include <filesystem>
 #include <iostream>
 #include <map>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -189,37 +188,6 @@ neat::RunOptions run_options(const sima_examples::Config& config) {
   return options;
 }
 
-// Each stream's frame size and rate: the configured values, and a probe's for each 0. Every
-// stream has the same size, because the streams share one model input.
-std::vector<sima_examples::RtspStreamInfo> stream_info(const sima_examples::Config& config,
-                                                       const std::vector<std::string>& sources) {
-  const sima_examples::RtspStreamInfo configured{
-      config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")};
-  const bool tcp = config.boolean("input.rtsp.tcp");
-  std::map<std::string, sima_examples::RtspStreamInfo> by_url;
-  for (const auto& url : std::set<std::string>(sources.begin(), sources.end())) {
-    by_url[url] = sima_examples::probe_rtsp_stream_info(url, tcp, configured);
-  }
-  // Core gap: a model shared by several streams accepts one input size, and a stream of another
-  // size fails the build with "input spec mismatch".
-  const auto& first = by_url.begin()->second;
-  for (const auto& [url, stream] : by_url) {
-    if (stream.width != first.width || stream.height != first.height) {
-      throw std::runtime_error(
-          "every input.source stream needs the same frame size, because the streams share one "
-          "model: " +
-          by_url.begin()->first + " is " + std::to_string(first.width) + "x" +
-          std::to_string(first.height) + ", " + url + " is " + std::to_string(stream.width) + "x" +
-          std::to_string(stream.height));
-    }
-  }
-  std::vector<sima_examples::RtspStreamInfo> streams;
-  for (const auto& url : sources) {
-    streams.push_back(by_url.at(url));
-  }
-  return streams;
-}
-
 // The boxes in a detections sample, whose first tensor is the BBOX payload.
 std::vector<neat::Box> decode_boxes(const neat::Sample& sample,
                                     const sima_examples::RtspStreamInfo& stream,
@@ -272,7 +240,10 @@ void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata
 int run_app(const fs::path& config_path) {
   const auto config = sima_examples::Config::load(config_path);
   const auto sources = config.string_list("input.source");
-  const auto streams = stream_info(config, sources);
+  // Each stream's frame size and rate: the configured values, and a probe's for each 0.
+  const auto streams = sima_examples::probe_rtsp_streams(
+      sources, config.boolean("input.rtsp.tcp"),
+      {config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")});
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
   // Used by both the model and the box decode.
