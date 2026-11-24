@@ -48,7 +48,22 @@ When the user names a model, look for a compiled package in the
 - `decode_type_option` (`BoxDecodeTypeOption` in `pipeline/BoxDecodeType.h`) sets how the head
   tensors are arranged and whether class scores are logits or probabilities. The default,
   `Auto`, decides the score form only when the package's tensor names or score activation
-  declare it. When neither does, the scores can be read in the wrong form.
+  declare it. When neither does, the scores can be read in the wrong form. The values (Python:
+  `pyneat.BoxDecodeTypeOption.<name>`):
+
+  | Value | Head layout and score form it forces |
+  |---|---|
+  | `Auto` | Taken from the package's tensor contract (default) |
+  | `PackedPerHead` | One tensor per head holds box, objectness, and classes |
+  | `InterleavedByHead` | Tensors alternate by head: box and class of head 1, then head 2 |
+  | `GroupedByRole` | All box tensors, then all class tensors |
+  | `Split3Interleaved` | Three split tensors, alternating by head |
+  | `Split3Grouped` | Three split tensors, grouped by role |
+  | `InterleavedByHeadProbability` | `InterleavedByHead`, class scores already probabilities |
+  | `InterleavedByHeadLogit` | `InterleavedByHead`, class scores as logits (before sigmoid) |
+  | `GroupedByRoleProbability` | `GroupedByRole`, class scores already probabilities |
+  | `GroupedByRoleLogit` | `GroupedByRole`, class scores as logits (before sigmoid) |
+
   - A decoded score above 1 means the decoder read logits as probabilities. Set the matching
     `...Logit` option, for example `GroupedByRoleLogit` for a YOLOv8 pose package with separate
     box, score, and keypoint heads.
