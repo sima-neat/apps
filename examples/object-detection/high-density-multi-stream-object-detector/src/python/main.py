@@ -110,7 +110,6 @@ def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
             stream.width,
             stream.height,
             config.integer("input.fps"),
-            pyneat.CapsMemory.Any,
         )
     )
     graph.add(pyneat.nodes.output("detector_frame"))

@@ -131,8 +131,7 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
   decode.memory_opt = true;
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
-  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, config.integer("input.fps"),
-                                 neat::CapsMemory::Any));
+  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, config.integer("input.fps")));
   graph.add(neat::nodes::Output("detector_frame"));
   return graph;
 }
