@@ -67,8 +67,9 @@ GStreamer element that Neat has no node for.
 
 ## Minimal example
 
-A model graph with one named input and one named output. The `Input` sits alone
-in its own graph, and `connect()` joins it to the model's stages.
+A model graph with one named input and one named output. `model` is a
+`Model`. The `Input` sits alone in its own graph, and `connect()` joins it to
+the model's stages.
 
 C++
 
@@ -76,7 +77,7 @@ C++
 simaai::neat::Graph frames;
 frames.add(simaai::neat::nodes::Input("model_frame", model.input_appsrc_options(false)));
 simaai::neat::Graph results;
-results.add(simaai::neat::nodes::Output(results_output(index)));
+results.add(simaai::neat::nodes::Output("results_0"));
 simaai::neat::Graph stages = model.graph();
 simaai::neat::Graph graph;
 graph.connect(frames, stages);
@@ -89,7 +90,7 @@ Python
 frames = pyneat.Graph()
 frames.add(pyneat.nodes.input("model_frame", model.input_appsrc_options(False)))
 results = pyneat.Graph()
-results.add(pyneat.nodes.output(results_output(index)))
+results.add(pyneat.nodes.output("results_0"))
 stages = model.graph()
 graph = pyneat.Graph()
 graph.connect(frames, stages)
