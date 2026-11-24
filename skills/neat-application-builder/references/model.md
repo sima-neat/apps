@@ -86,7 +86,8 @@ When the user names a model, look for a compiled package in the
   threshold. The `object-detection/multi-stream-obb-detector` example picks the decoder from its
   model family and sets the threshold only for `YoloV8Obb`.
 - Oriented boxes need one scale on both axes. They work when the stream, scaled to the model
-  input, has whole-pixel sides, as 16:9 sizes do. 640x512 scales to 1024x819.2 and fails with
+  input, has whole-pixel sides, as 16:9 sizes do. With a 1024x1024 model input, such as
+  yolo26n_obb's, a 640x512 stream scales to 1024x819.2 and fails with
   `oriented boxes require equal authoritative affine scales`.
 - `BoxDecodeType::Ssd` selects the supported prepared SSD recipes. It does not infer a decoder
   from tensor shapes.

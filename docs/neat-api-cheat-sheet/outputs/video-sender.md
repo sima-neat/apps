@@ -149,10 +149,10 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 
 - **MJPEG sides must be multiples of 8, up to 2040.** RTP/JPEG carries each
   side in 8-pixel units. With MJPEG, `Passthrough` and `FromRaw` fail on other
-  sizes. When the size is known at build, the build fails with `VideoSender
-  MJPEG: RTP/JPEG carries widths and heights in multiples of 8 up to 2040`.
-  Fix: use a camera mode such as 1280 × 720 or 1920 × 1080.
-
+  sizes. When the size is known at build and the Scheduler provides
+  `neatjpegudpsink`, the build fails with `VideoSender MJPEG: RTP/JPEG carries
+  widths and heights in multiples of 8 up to 2040`. Fix: use a camera mode such
+  as 1280 × 720 or 1920 × 1080.
 - **Encoder settings on MJPEG.** `FromRaw` throws `SimaEncode: MJPEG does not
   accept bitrate, rate control, profile, level, GOP or IDR settings` when one
   of them is set. Changing `encoder.*` after `FromRaw` with MJPEG throws
