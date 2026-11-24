@@ -6,7 +6,10 @@ different facts from target runtime execution. State which evidence was obtained
 
 ## C++ Build Check
 
-For standalone C++ apps, use the installed package:
+For standalone C++ apps, use the installed package. The `SYSROOT` block lets
+the same file cross-build in the Neat Development Environment, where Neat is
+installed in the target sysroot, and build natively on a DevKit, where
+`SYSROOT` is unset:
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -16,18 +19,54 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(DEFINED ENV{SYSROOT} AND NOT "$ENV{SYSROOT}" STREQUAL "")
+  list(APPEND CMAKE_PREFIX_PATH
+    "$ENV{SYSROOT}/usr"
+    "$ENV{SYSROOT}/usr/lib"
+    "$ENV{SYSROOT}/usr/lib/aarch64-linux-gnu"
+  )
+endif()
+
 find_package(SimaNeat REQUIRED CONFIG)
 
 add_executable(neat_app main.cpp)
 target_link_libraries(neat_app PRIVATE SimaNeat::sima_neat)
 ```
 
-Build in the Neat Development Environment or target-appropriate environment. A
-laptop host compile is not proof of Modalix runtime behavior unless it uses the
-correct Neat Development Environment toolchain and runtime target. Build against
-the Core the target runs: the `libsima_neat.so.<abi>` that
-`readelf -d <app> | grep NEEDED` shows must match the target's installed
-library.
+Without the `SYSROOT` block, `find_package(SimaNeat)` fails in the Neat
+Development Environment.
+
+Configure and build from the application directory:
+
+```bash
+printenv SYSROOT CXX   # Neat Development Environment: /opt/toolchain/aarch64/modalix, aarch64-linux-gnu-g++
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+No `CMAKE_TOOLCHAIN_FILE` is needed. A login shell in the Neat Development
+Environment exports the cross compiler, sysroot flags, and pkg-config settings
+(`CC`, `CXX`, `CXXFLAGS`, `LDFLAGS`, `PKG_CONFIG_EXECUTABLE`,
+`PKG_CONFIG_SYSROOT_DIR`, `PKG_CONFIG_LIBDIR`), and CMake reads them on the
+first configure. If `SYSROOT` is empty, the shell is not a login shell: run the
+commands through `bash -lc '...'` and configure a new build directory, because
+CMake keeps the compiler from the first configure. Do not borrow the Neat Apps
+repository's toolchain file (for example from `/neat-resources/apps-src`):
+standalone apps do not need it and only some images include it. Core's Hello
+Neat page (`docs/develop-apps/hello-neat/minimal.md` in Core source) is the
+reference recipe.
+
+Confirm the binary targets the DevKit and the Core it runs:
+
+```bash
+file build/neat_app                       # ELF 64-bit LSB ... ARM aarch64
+readelf -d build/neat_app | grep NEEDED   # libsima_neat.so.<abi>
+```
+
+Any architecture other than `ARM aarch64` means the cross compiler was not used;
+reconfigure a new build directory from a login shell. A laptop host compile is not
+proof of Modalix runtime behavior. The `libsima_neat.so.<abi>` in the `NEEDED`
+list must match the target's installed library.
 
 ## Python Import Check
 
