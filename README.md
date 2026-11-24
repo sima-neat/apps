@@ -184,10 +184,18 @@ cd apps
 ./build.sh --clean
 ```
 
-The first configure downloads the yaml-cpp 0.8.0 source from github.com. To
-build without network access, set `YAML_CPP_SOURCE_URL` to a local copy of
-that tarball, or `FETCHCONTENT_SOURCE_DIR_YAML_CPP` to its unpacked sources,
-before you run `./build.sh`.
+Each new build directory, including every `./build.sh --clean`, downloads the
+yaml-cpp 0.8.0 source from github.com. Without network access, copy
+`https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz` to the
+machine first. Only this file passes the SHA-256 check:
+
+```bash
+YAML_CPP_SOURCE_URL=/absolute/path/0.8.0.tar.gz ./build.sh --clean
+```
+
+`FETCHCONTENT_SOURCE_DIR_YAML_CPP` takes the unpacked folder (absolute path)
+instead. Set both as environment variables, because `build.sh` rejects `-D`
+options.
 
 `build.sh` does not run tests. To fetch one example without cloning the
 repository:

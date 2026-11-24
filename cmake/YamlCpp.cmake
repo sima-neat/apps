@@ -6,9 +6,12 @@
 # One yaml-cpp in the process, and no change to the sysroot.
 #
 # Offline builds: point FETCHCONTENT_SOURCE_DIR_YAML_CPP at an unpacked yaml-cpp-0.8.0,
-# or YAML_CPP_SOURCE_URL at a local copy of the tarball, as a -D option or an environment
-# variable, so `YAML_CPP_SOURCE_URL=<tarball> ./build.sh` works. A non-empty environment
-# variable replaces the cached value on every configure.
+# or YAML_CPP_SOURCE_URL at a local copy of the tarball, both absolute paths, as a -D
+# option or an environment variable, so `YAML_CPP_SOURCE_URL=<tarball> ./build.sh` works.
+# A non-empty environment variable replaces the cached value on every configure.
+# The SHA-256 check covers only the tarball; a source directory is checked only for
+# include/yaml-cpp/yaml.h. A source directory stays cached: clear it with
+# -DFETCHCONTENT_SOURCE_DIR_YAML_CPP= or a new build directory (./build.sh --clean).
 include_guard(GLOBAL)
 
 # The function below records these policy settings where it is defined.
@@ -39,11 +42,21 @@ function(sima_neat_apps_ensure_yaml_cpp)
     set(FETCHCONTENT_SOURCE_DIR_YAML_CPP "$ENV{FETCHCONTENT_SOURCE_DIR_YAML_CPP}"
       CACHE PATH "Unpacked yaml-cpp 0.8.0 sources" FORCE)
   endif()
+  if (NOT "${FETCHCONTENT_SOURCE_DIR_YAML_CPP}" STREQUAL ""
+      AND NOT IS_ABSOLUTE "${FETCHCONTENT_SOURCE_DIR_YAML_CPP}")
+    message(FATAL_ERROR "FETCHCONTENT_SOURCE_DIR_YAML_CPP must be an absolute path: "
+      "${FETCHCONTENT_SOURCE_DIR_YAML_CPP}")
+  endif()
   set(YAML_CPP_SOURCE_URL "https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz"
     CACHE STRING "yaml-cpp 0.8.0 source tarball")
   if (NOT "$ENV{YAML_CPP_SOURCE_URL}" STREQUAL "")
     set(YAML_CPP_SOURCE_URL "$ENV{YAML_CPP_SOURCE_URL}" CACHE STRING
       "yaml-cpp 0.8.0 source tarball" FORCE)
+  endif()
+  if (NOT YAML_CPP_SOURCE_URL MATCHES "^[A-Za-z][A-Za-z0-9+.-]*://"
+      AND NOT IS_ABSOLUTE "${YAML_CPP_SOURCE_URL}")
+    message(FATAL_ERROR "YAML_CPP_SOURCE_URL must be a URL or an absolute path: "
+      "${YAML_CPP_SOURCE_URL}")
   endif()
 
   include(FetchContent)
@@ -54,6 +67,10 @@ function(sima_neat_apps_ensure_yaml_cpp)
   FetchContent_GetProperties(yaml_cpp)
   if (NOT yaml_cpp_POPULATED)
     FetchContent_Populate(yaml_cpp)
+  endif()
+  if (NOT EXISTS "${yaml_cpp_SOURCE_DIR}/include/yaml-cpp/yaml.h")
+    message(FATAL_ERROR "${yaml_cpp_SOURCE_DIR} has no include/yaml-cpp/yaml.h: "
+      "FETCHCONTENT_SOURCE_DIR_YAML_CPP must name an unpacked yaml-cpp-0.8.0")
   endif()
 
   add_library(SimaNeatApps::yaml_cpp SHARED IMPORTED GLOBAL)
