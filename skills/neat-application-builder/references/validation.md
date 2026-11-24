@@ -48,9 +48,11 @@ No `CMAKE_TOOLCHAIN_FILE` is needed. A login shell in the Neat Development
 Environment exports the cross compiler, sysroot flags, and pkg-config settings
 (`CC`, `CXX`, `CXXFLAGS`, `LDFLAGS`, `PKG_CONFIG_EXECUTABLE`,
 `PKG_CONFIG_SYSROOT_DIR`, `PKG_CONFIG_LIBDIR`), and CMake reads them on the
-first configure. If `SYSROOT` is empty, the shell is not a login shell: run the
-commands through `bash -lc '...'` and configure a new build directory, because
-CMake keeps the compiler from the first configure. Do not borrow the Neat Apps
+first configure. In the Neat Development Environment, an empty `SYSROOT` means
+the shell is not a login shell: run `rm -rf build`, then run the commands
+through `bash -lc '...'`. A `build` directory first configured without the
+environment keeps failing, for example with `Could not find a package
+configuration file provided by "SimaScheduler"`. Do not borrow the Neat Apps
 repository's toolchain file (for example from `/neat-resources/apps-src`):
 standalone apps do not need it and only some images include it. Core's Hello
 Neat page (`docs/develop-apps/hello-neat/minimal.md` in Core source) is the
@@ -64,8 +66,8 @@ readelf -d build/neat_app | grep NEEDED   # libsima_neat.so.<abi>
 ```
 
 Any architecture other than `ARM aarch64` means the cross compiler was not used;
-reconfigure a new build directory from a login shell. A laptop host compile is not
-proof of Modalix runtime behavior. The `libsima_neat.so.<abi>` in the `NEEDED`
+run `rm -rf build` and configure again from a login shell. A laptop host
+compile is not proof of Modalix runtime behavior. The `libsima_neat.so.<abi>` in the `NEEDED`
 list must match the target's installed library.
 
 ## Python Import Check

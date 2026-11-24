@@ -48,8 +48,9 @@ start with the existing application and consult other examples as needed.
 
 Within the approved scope, continue through implementation, the supported
 build/run workflow, output inspection, and fixes to failures caused by the
-change. Use [validation](references/validation.md) to select checks for the
-changed behavior and rerun affected checks after fixes. Return runnable commands,
+change. Use [validation](references/validation.md) for the C++ configure and
+build commands and to select checks for the changed behavior, and rerun
+affected checks after fixes. Return runnable commands,
 observed results, and explicit gaps when required evidence is unavailable.
 
 ## Related work
