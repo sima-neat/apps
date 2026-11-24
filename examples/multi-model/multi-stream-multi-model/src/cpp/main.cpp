@@ -343,8 +343,8 @@ double now_s() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// Send every stream's results to its Insight channel until each stream sent `frames` (0: no limit)
-// or a stop signal. A stream whose decoded frames arrive with no result for its deadline
+// Send every stream's results to its Insight channel until each stream sent `frames` (0 or less: no
+// limit) or a stop signal. A stream whose decoded frames arrive with no result for its deadline
 // throws with its model.
 void send_results(neat::Run& run, std::vector<Stream>& streams,
                   const std::vector<std::string>& labels, int max_detections, int frames,
@@ -409,11 +409,8 @@ int run_app(const fs::path& config_path) {
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
   // Used by both the models and the box decode.
   const int max_detections = config.integer("inference.max_detections");
-  // Results each stream sends before the app stops. 0 runs until stopped.
+  // Results each stream sends before the app stops. 0 or less runs until stopped.
   const int frames = config.integer("inference.frames");
-  if (frames < 0) {
-    throw std::runtime_error("inference.frames must be 0 or more");
-  }
 
   neat::Graph graph;
   std::deque<neat::Model> models;

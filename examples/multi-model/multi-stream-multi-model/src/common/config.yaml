@@ -21,8 +21,8 @@ input:
     latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0                     # Results each stream sends before the app stops. 0 runs until
-                                # stopped.
+  frames: 0                     # Results each stream sends before the app stops. 0 or less
+                                # runs until stopped.
   min_score: 0.30               # Lowest score a detection, segment, or pose needs.
   nms_iou: 0.60                 # Overlap at which NMS drops the weaker result.
   max_detections: 50            # Objects, segments, or poses kept per frame.

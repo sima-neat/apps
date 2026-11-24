@@ -324,13 +324,6 @@ bool test_unknown_model_id_names_the_choices(const std::string& binary) {
                      "an unknown model ID fails with the choices: " + error);
 }
 
-bool test_negative_frame_limit_names_its_key(const std::string& binary) {
-  const std::string error = run_error(binary, "test_negative_frame_limit_names_its_key",
-                                      {{"inference.frames", "-1"}}, {});
-  return expect_true(error == "[ERR] inference.frames must be 0 or more",
-                     "a negative frame limit fails with its key: " + error);
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -354,6 +347,5 @@ int main(int argc, char** argv) {
   ok &= test_paused_camera_waits_without_a_limit();
   ok &= test_per_stream_lists_need_one_entry_per_stream(binary);
   ok &= test_unknown_model_id_names_the_choices(binary);
-  ok &= test_negative_frame_limit_names_its_key(binary);
   return ok ? 0 : 1;
 }

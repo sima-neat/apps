@@ -122,7 +122,7 @@ Open `${APP_DIR}/src/common/config.yaml` and set:
 - `app.model_paths` and `app.model_ids`: one entry per stream, in `input.source` order. To run fewer streams, remove the same entries from all three lists.
 - `output.insight.host`. Stream i sends video to `video_port_base` + i and results to `metadata_port_base` + i.
 
-Keep `inference.frames` at `0` to run until you stop the application.
+Keep `inference.frames` at `0` to run until you stop the application. 0 or less runs until stopped.
 
 ## Run
 
