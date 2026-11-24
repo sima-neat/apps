@@ -325,6 +325,13 @@ def test_unknown_model_id_names_the_choices(tmp_path):
     )
 
 
+def test_negative_frame_limit_names_its_key(tmp_path):
+    def negative(config):
+        config["inference"]["frames"] = -1
+
+    assert run_main(tmp_path, negative) == "[ERR] inference.frames must be 0 or more"
+
+
 def test_model_ids_select_the_decoder_and_metadata_type():
     decode = main_module.pyneat.BoxDecodeType
     assert main_module.MODEL_IDS == {

@@ -288,9 +288,9 @@ def send_results(
     stop: threading.Event,
 ) -> None:
     """Send every stream's results to its Insight channel until each stream sent `frames`
-    (0 or less: no limit) or a stop signal. A stream whose decoded frames arrive with no result
+    (0: no limit) or a stop signal. A stream whose decoded frames arrive with no result
     for its deadline raises with its model."""
-    while not stop.is_set() and (frames <= 0 or min(s.processed for s in streams) < frames):
+    while not stop.is_set() and (frames == 0 or min(s.processed for s in streams) < frames):
         pulled = False
         now_s = time.monotonic()
         for index, stream in enumerate(streams):
@@ -343,6 +343,10 @@ def main(argv: list[str] | None = None) -> int:
     labels = load_labels(Path(config.string("model.labels")))
     # Used by both the models and the box decode.
     max_detections = config.integer("inference.max_detections")
+    # Results each stream sends before the app stops. 0 runs until stopped.
+    frames = config.integer("inference.frames")
+    if frames < 0:
+        raise ValueError("inference.frames must be 0 or more")
 
     graph = pyneat.Graph()
     models = []
@@ -387,9 +391,7 @@ def main(argv: list[str] | None = None) -> int:
     stop = stop_on_signals()
     run = graph.build(run_options())
     try:
-        send_results(
-            run, streams, labels, max_detections, config.integer("inference.frames"), stop
-        )
+        send_results(run, streams, labels, max_detections, frames, stop)
     finally:
         run.close()
 

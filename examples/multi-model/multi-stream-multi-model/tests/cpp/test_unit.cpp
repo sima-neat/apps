@@ -41,15 +41,14 @@ std::string error_of(PendingResults& pending, bool frame, bool result, double no
   return "";
 }
 
-// The last line the example prints to stderr for the shipped config with the list `key` set to
-// `values`. The frame size and rate are set, so no stream is probed and no source is needed.
+// The last line the example prints to stderr for the shipped config with `scalars` and `lists`
+// set. The frame size and rate are set, so no stream is probed and no source is needed.
 std::string run_error(const std::string& binary, const std::string& test_name,
-                      const std::string& key, const std::vector<std::string>& values) {
+                      ConfigScalars scalars, const ConfigLists& lists) {
   const std::string dir = create_test_scratch_dir(kExampleName, test_name);
   const fs::path config_path = fs::path(dir) / "config.yaml";
-  write_e2e_config(kExampleName, config_path,
-                   {{"input.width", "1280"}, {"input.height", "720"}, {"input.fps", "30"}},
-                   {{key, values}});
+  scalars.insert({{"input.width", "1280"}, {"input.height", "720"}, {"input.fps", "30"}});
+  write_e2e_config(kExampleName, config_path, scalars, lists);
   const ProcessResult result = spawn_and_wait(binary, {"--config", config_path.string()}, 60000);
   remove_dir(dir);
   std::string text = result.stderr_text;
@@ -309,8 +308,8 @@ bool test_paused_camera_waits_without_a_limit() {
 
 bool test_per_stream_lists_need_one_entry_per_stream(const std::string& binary) {
   const std::string error =
-      run_error(binary, "test_per_stream_lists_need_one_entry_per_stream", "app.model_paths",
-                {"a_mpk.tar.gz", "b_mpk.tar.gz", "c_mpk.tar.gz"});
+      run_error(binary, "test_per_stream_lists_need_one_entry_per_stream", {},
+                {{"app.model_paths", {"a_mpk.tar.gz", "b_mpk.tar.gz", "c_mpk.tar.gz"}}});
   return expect_true(
       error == "[ERR] app.model_paths has 3 entries and input.source has 4: give one per stream",
       "a short list fails with its key: " + error);
@@ -318,11 +317,18 @@ bool test_per_stream_lists_need_one_entry_per_stream(const std::string& binary) 
 
 bool test_unknown_model_id_names_the_choices(const std::string& binary) {
   const std::string error =
-      run_error(binary, "test_unknown_model_id_names_the_choices", "app.model_ids",
-                {"yolov8", "yolo26-obb", "yolo26-pose", "yolo26"});
+      run_error(binary, "test_unknown_model_id_names_the_choices", {},
+                {{"app.model_ids", {"yolov8", "yolo26-obb", "yolo26-pose", "yolo26"}}});
   return expect_true(error == "[ERR] app.model_ids: unknown value 'yolo26-obb' (expected yolo26, "
                               "yolo26-pose, yolo26-seg, yolov8, yolov8-pose, yolov8-seg)",
                      "an unknown model ID fails with the choices: " + error);
+}
+
+bool test_negative_frame_limit_names_its_key(const std::string& binary) {
+  const std::string error = run_error(binary, "test_negative_frame_limit_names_its_key",
+                                      {{"inference.frames", "-1"}}, {});
+  return expect_true(error == "[ERR] inference.frames must be 0 or more",
+                     "a negative frame limit fails with its key: " + error);
 }
 
 } // namespace
@@ -348,5 +354,6 @@ int main(int argc, char** argv) {
   ok &= test_paused_camera_waits_without_a_limit();
   ok &= test_per_stream_lists_need_one_entry_per_stream(binary);
   ok &= test_unknown_model_id_names_the_choices(binary);
+  ok &= test_negative_frame_limit_names_its_key(binary);
   return ok ? 0 : 1;
 }

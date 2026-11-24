@@ -129,4 +129,4 @@ None. Python has every field and both policy values.
 
 - C++ header: `include/pipeline/GraphOptions.h` (`GraphLinkPolicy`, `GraphLinkOptions`), `include/pipeline/Graph.h` (`Graph::connect`)
 - Python binding: `python/src/module.cpp`, `GraphLinkPolicy`, `GraphLinkOptions`, `Graph.connect`
-- Core commit: `7e5317be`
+- Core commit: `c68a5241`
