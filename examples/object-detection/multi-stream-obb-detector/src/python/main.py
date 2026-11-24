@@ -112,11 +112,7 @@ def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
     decode.dec_fps = stream.fps
     graph = pyneat.Graph("decoder")
     graph.add(pyneat.nodes.sima_decode(decode))
-    graph.add(
-        pyneat.nodes.caps_raw(
-            "NV12", stream.width, stream.height, stream.fps, pyneat.CapsMemory.Any
-        )
-    )
+    graph.add(pyneat.nodes.caps_raw("NV12", stream.width, stream.height, stream.fps))
     graph.add(pyneat.nodes.output("detector_frame"))
     return graph
 
@@ -164,7 +160,8 @@ def metadata_options(config: Config, index: int) -> pyneat.MetadataSenderOptions
 def run_options() -> pyneat.RunOptions:
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Realtime
-    # Auto copies a frame when the sink queue backs up (Core RunCoreGraphStart.cpp:275-281).
+    # Auto copies a result that waits in the output queue unless it is in DMA-BUF or framework
+    # memory. ZeroCopy never copies.
     options.output_memory = pyneat.OutputMemory.ZeroCopy
     return options
 

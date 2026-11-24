@@ -22,7 +22,8 @@ EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 LABELS = set((EXAMPLE_DIR / "src" / "common" / "dota_label.txt").read_text().splitlines())
 FRAMES = 150
-# Above the shipped 0.30, so the boxes show that the example applies inference.min_score.
+# Above the shipped 0.30, so the boxes, when the streams show any, show that the example applies
+# inference.min_score.
 MIN_SCORE = 0.4
 # The suite's model must keep up with each 30 FPS test stream. Larger variants run slower.
 DEFAULT_MODEL = "yolo26n_obb_w8a8_mpk.tar.gz"
@@ -67,7 +68,7 @@ def _object_problem(obj: dict) -> str:
     if obj["label"] not in LABELS:
         return "label is not a DOTA class"
     if not MIN_SCORE <= obj["confidence"] <= 1.0:
-        return "confidence below inference.min_score"
+        return "confidence outside [min_score, 1]"
     cx, cy, width, height, angle = obj["oriented_bbox"]
     if width <= 0 or height <= 0 or not math.isfinite(angle):
         return "degenerate oriented box"

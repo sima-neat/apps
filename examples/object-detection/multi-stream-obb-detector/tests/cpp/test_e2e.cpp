@@ -35,7 +35,8 @@ namespace {
 
 constexpr const char* kExampleName = "multi-stream-obb-detector";
 constexpr int kFrames = 150;
-// Above the shipped 0.30, so the boxes show that the example applies inference.min_score.
+// Above the shipped 0.30, so the boxes, when the streams show any, show that the example applies
+// inference.min_score.
 constexpr double kMinScore = 0.4;
 // The suite's model must keep up with each 30 FPS test stream. Larger variants run slower.
 constexpr const char* kDefaultModel = "yolo26n_obb_w8a8_mpk.tar.gz";
@@ -137,7 +138,7 @@ std::string object_problem(const nlohmann::json& obj, const std::set<std::string
   }
   const double confidence = obj["confidence"].get<double>();
   if (confidence < kMinScore || confidence > 1.0) {
-    return "confidence below inference.min_score";
+    return "confidence outside [min_score, 1]";
   }
   const auto& oriented = obj["oriented_bbox"];
   const auto& bbox = obj["bbox"];
@@ -208,8 +209,8 @@ int run_case(const std::string& binary, const std::string& model_path,
   std::map<int, std::vector<Clock::time_point>> arrivals;
   const auto read_metadata = [&] {
     const std::size_t before = metadata.messages.size();
-    // Once a message has arrived, poll_messages returns after each datagram, so read until the
-    // sockets are empty.
+    // Once the first message has arrived, poll_messages returns after each datagram, so read until
+    // the sockets are empty.
     listener.poll_messages(metadata, 100);
     while (listener.poll_messages(metadata, 0)) {
     }

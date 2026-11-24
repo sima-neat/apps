@@ -139,8 +139,7 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
   decode.dec_fps = stream.fps;
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
-  graph.add(
-      neat::nodes::CapsRaw("NV12", stream.width, stream.height, stream.fps, neat::CapsMemory::Any));
+  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, stream.fps));
   graph.add(neat::nodes::Output("detector_frame"));
   return graph;
 }
@@ -188,7 +187,8 @@ neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config
 neat::RunOptions run_options() {
   neat::RunOptions options;
   options.preset = neat::RunPreset::Realtime;
-  // Auto copies a frame when the sink queue backs up (Core RunCoreGraphStart.cpp:275-281).
+  // Auto copies a result that waits in the output queue unless it is in DMA-BUF or framework
+  // memory. ZeroCopy never copies.
   options.output_memory = neat::OutputMemory::ZeroCopy;
   return options;
 }

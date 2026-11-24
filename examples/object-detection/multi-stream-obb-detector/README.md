@@ -145,7 +145,7 @@ The application prints one line per stream with its source, frame size, and Insi
 
 Insight shows each stream on its own channel, with a rotated box and a label around each detected object.
 
-When it stops, the application prints how many frames each stream processed. A positive `inference.frames` stops it after that many frames per stream:
+When it stops, the application prints how many frames each stream processed. A positive `inference.frames` stops it after that many frames per stream. With `inference.frames: 300`:
 
 ```text
 [stream 0] processed=300
@@ -163,7 +163,7 @@ The metadata sender does not wait for a full network buffer. It drops the messag
 - Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are missed, and raise it if boxes appear on background.
 - Boxes missing on dense scenes: raise `inference.max_detections`. Each box adds about 150 bytes, up to 160, so about 400 boxes fit in one message. A message over 65507 bytes stops the application with `MetadataSender payload exceeds 65507 bytes`.
 - Insight shows upright boxes: the installed Insight does not draw `oriented_bbox`. Update Insight.
-- MJPEG frames reach Insight as RTP/JPEG. Each side must be a multiple of 8, at most 2040 pixels, such as 1280x720 or 1920x1080.
+- `VideoSender MJPEG: RTP/JPEG carries widths and heights in multiples of 8 up to 2040`: MJPEG frames reach Insight as RTP/JPEG. Use a stream whose sides are multiples of 8, such as 1280x720 or 1920x1080.
 - No video or boxes in Insight: check the Insight host and the UDP ports.
 
 ## Source Files
