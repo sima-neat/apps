@@ -52,8 +52,8 @@ const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
 };
 // The model's one class.
 const std::vector<std::string> kLabels = {"drone"};
-// Frames of one stream the shared model holds at once: Core's default, set so that the cap of all
-// streams follows from it (skills/neat-application-optimizer/references/tuning.md).
+// Frames of one stream the shared model holds at once: Core's per-stream default
+// (RealtimeLinkOptions.h), used for the total in detector_link.
 constexpr int kMaxInflightPerStream = 4;
 
 fs::path parse_args(int argc, char** argv) {
@@ -72,16 +72,12 @@ fs::path parse_args(int argc, char** argv) {
   return config_path;
 }
 
-// YOLO26 on the decoded NV12 frames of every stream, which all have the size of `stream`.
-neat::Model::Options model_options(const sima_examples::Config& config,
-                                   const sima_examples::RtspStreamInfo& stream,
-                                   int max_detections) {
+// YOLO26 on the decoded NV12 frames of every stream.
+neat::Model::Options model_options(const sima_examples::Config& config, int max_detections) {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Image;
   options.preprocess.enable = neat::AutoFlag::On;
   options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
-  options.preprocess.input_max_width = stream.width;
-  options.preprocess.input_max_height = stream.height;
   options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
   options.decode_type = neat::BoxDecodeType::YoloV26;
   // The split heads of a single-class YOLO may not give Core the class count, so
@@ -120,6 +116,7 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
   // from the probed values alone failed to negotiate in some runs. The H.265 path does not read
   // auto_caps_from_stream (RtspEncodedInput.cpp).
   options.auto_caps_from_stream = config.integer("input.fps") == 0;
+  // The probed rate, or input.fps when set: the rate the tracker counts frames at.
   options.source_fps = stream.fps;
   if (options.codec == groups::RtspCodec::H264) {
     options.fallback_h264_width = stream.width;
@@ -155,9 +152,8 @@ neat::GraphLinkOptions detector_link(int index, int streams) {
   neat::GraphLinkOptions link;
   link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
   link.stream_id = stream_id(index);
-  link.max_inflight_per_stream = kMaxInflightPerStream;
-  // Core's default cap of all streams is min(4 * streams, 8), which would hold back three or four
-  // streams.
+  // Core's default total, min(4 * streams, 8), is below 4 per stream from three streams on
+  // (RealtimeLinkOptions.h, EdgeRouter.cpp).
   link.max_inflight_total = kMaxInflightPerStream * streams;
   return link;
 }
@@ -206,8 +202,8 @@ drone_tracker::TrackerSettings tracker_settings(const sima_examples::Config& con
 // stream has the same size, because the streams share one model input.
 std::vector<sima_examples::RtspStreamInfo> stream_info(const sima_examples::Config& config,
                                                        const std::vector<std::string>& sources) {
-  // A copy of the high-density example's stream_info, until #793 moves it into
-  // sima_examples/rtsp_probe as probe_rtsp_streams.
+  // Behaves as probe_rtsp_streams, which #793 adds to sima_examples/rtsp_probe. Whichever of #785
+  // and #793 merges second calls that instead.
   const sima_examples::RtspStreamInfo configured{
       config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")};
   const bool tcp = config.boolean("input.rtsp.tcp");
@@ -306,7 +302,7 @@ int run_app(const fs::path& config_path) {
   // Used by both the model and the box decode.
   const int max_detections = config.integer("inference.max_detections");
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
-  neat::Model model(model_path.string(), model_options(config, streams.front(), max_detections));
+  neat::Model model(model_path.string(), model_options(config, max_detections));
   const neat::Graph detector = detector_graph(model);
 
   neat::Graph graph;

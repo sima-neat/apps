@@ -138,7 +138,12 @@ int run_case(const std::string& binary, const std::string& model_path,
               << "\n";
     return 1;
   }
-  const std::vector<std::string> urls(source_case.urls.begin(), source_case.urls.begin() + streams);
+  // Four streams repeat the first URL: the README's most, and the first count past Core's default
+  // in-flight total of 8.
+  const std::vector<std::string> urls =
+      streams == 4
+          ? std::vector<std::string>(4, source_case.urls.front())
+          : std::vector<std::string>(source_case.urls.begin(), source_case.urls.begin() + streams);
   write_e2e_config(kExampleName, config_path,
                    {// Relative to the generated config, so the test runs the app's path join.
                     {"model.path", relative_model},
@@ -174,7 +179,8 @@ int run_case(const std::string& binary, const std::string& model_path,
     }
   }
 
-  // Read during the run, so no message waits long enough to overflow the socket buffer.
+  // Read during the run and at exit, so no message waits long enough to overflow the socket
+  // buffer.
   MetadataJsonListenerResult metadata;
   std::map<int, std::vector<Clock::time_point>> arrivals;
   const auto read_metadata = [&] {
@@ -275,7 +281,9 @@ int run_case(const std::string& binary, const std::string& model_path,
       problems.push_back(stream + ": " + std::to_string(messages) + " of " +
                          std::to_string(kFrames) + " messages arrived");
     }
-    if (!unpaired.empty()) {
+    // A frame the video link dropped leaves its message unpaired, so allow as few as for the
+    // count.
+    if (static_cast<int>(unpaired.size()) > messages * 5 / 100) {
       problems.push_back(stream + ": " + std::to_string(unpaired.size()) +
                          " timestamps with no video frame, first " +
                          std::to_string(unpaired.front()));
@@ -325,10 +333,13 @@ int main(int argc, char** argv) {
   const MultiStreamSourceCase h265{"h265", rtsp_h265_urls_from_env()};
   // With one source, Core names the samples after the decoder instead of the stream.
   const std::vector<std::tuple<MultiStreamSourceCase, int, std::string>> cases = {
-      {h264, 2, "h264"}, {h265, 2, "h265"}, {h264, 1, "h264-one-stream"}};
+      {h264, 2, "h264"},
+      {h265, 2, "h265"},
+      {h264, 1, "h264-one-stream"},
+      {h264, 4, "h264-four-streams"}};
   int cases_run = 0;
   for (const auto& [source_case, streams, label] : cases) {
-    if (source_case.urls.size() < static_cast<std::size_t>(streams)) {
+    if (source_case.urls.size() < static_cast<std::size_t>(streams == 4 ? 1 : streams)) {
       record_unavailable_case("SIMANEAT_TEST_RTSP_" +
                                   std::string(source_case.codec == "h264" ? "H264" : "H265") +
                                   "_URLS needs " + std::to_string(streams) + " URLs for " + label,

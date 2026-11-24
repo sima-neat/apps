@@ -193,12 +193,68 @@ bool test_velocity_takes_a_quarter_of_the_measured_motion() {
   return ok;
 }
 
+bool test_predicted_motion_spans_dropped_frames() {
+  ObjectTracker object_tracker(settings(), kFps);
+  object_tracker.update({box(0, 0, 10, 10)}, pts(0));
+  object_tracker.update({box(40, 0, 50, 10)}, pts(1));
+  // Frames 2 and 3 were dropped. Three frames at 10 px put the predicted box at x 70..80, 40 px
+  // from this one. The box is 70 px from the last one, outside the 42.4 px gate.
+  return expect_true(ids(object_tracker.update({box(110, 0, 120, 10)}, pts(4))) == std::vector{1},
+                     "the predicted motion spans the dropped frames");
+}
+
+bool test_velocity_is_measured_per_frame() {
+  ObjectTracker object_tracker(settings(), kFps);
+  object_tracker.update({box(0, 0, 10, 10)}, pts(0));
+  // Frame 1 was dropped, so the 40 px move is 20 px per frame, and the velocity 5 px.
+  object_tracker.update({box(40, 0, 50, 10)}, pts(2));
+  // The box is 40 px from the predicted x 45..55, within the gate. A velocity of 10 px would put
+  // it 45 px away, outside.
+  return expect_true(ids(object_tracker.update({box(5, 0, 15, 10)}, pts(3))) == std::vector{1},
+                     "the velocity is measured per frame");
+}
+
+bool test_score_at_high_score_threshold_confirms_a_track() {
+  TrackerSettings values = settings();
+  values.min_confirmed_hits = 2;
+  ObjectTracker object_tracker(values, kFps);
+  bool ok = expect_true(object_tracker.update({box(0, 0, 10, 10, 0.9f)}, pts(0)).empty(),
+                        "one hit reports no track");
+  ok &= expect_true(ids(object_tracker.update({box(0, 0, 10, 10, 0.5f)}, pts(1))) == std::vector{1},
+                    "a score at high_score_threshold confirms track 1");
+  return ok;
+}
+
+bool test_frame_without_timestamp_counts_as_the_next_frame() {
+  TrackerSettings values = settings();
+  values.max_missing_frames = 1;
+  ObjectTracker object_tracker(values, kFps);
+  object_tracker.update({box(10, 10, 50, 80)}, pts(0));
+  object_tracker.update({}, -1);
+  object_tracker.update({}, -1);
+  // Frame 3 is 2 frames past the track's last match, beyond max_missing_frames.
+  return expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, -1)) == std::vector{2},
+                     "frames without a timestamp age the track");
+}
+
+bool test_timestamp_before_the_last_counts_as_the_next_frame() {
+  TrackerSettings values = settings();
+  values.max_missing_frames = 1;
+  ObjectTracker object_tracker(values, kFps);
+  object_tracker.update({box(10, 10, 50, 80)}, pts(10));
+  // The source restarted, and its timestamps start over.
+  object_tracker.update({}, pts(0));
+  object_tracker.update({}, pts(1));
+  return expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, pts(2))) == std::vector{2},
+                     "frames after a timestamp restart age the track");
+}
+
 bool test_box_beyond_the_distance_gate_starts_a_new_track() {
   ObjectTracker object_tracker(settings(), kFps);
   object_tracker.update({box(0, 0, 10, 10)}, pts(0));
-  // 50 px is 3.5 box diagonals from the predicted box, outside the 3-diagonal gate.
-  return expect_true(ids(object_tracker.update({box(50, 0, 60, 10)}, pts(1))) == std::vector{2},
-                     "a box 50 px away starts track 2");
+  // 44 px is 3.1 box diagonals from the predicted box, just outside the 3-diagonal gate.
+  return expect_true(ids(object_tracker.update({box(44, 0, 54, 10)}, pts(1))) == std::vector{2},
+                     "a box 44 px away starts track 2");
 }
 
 bool test_track_is_reported_from_its_min_confirmed_hits_th_detection() {
@@ -299,6 +355,11 @@ int main() {
   ok &= test_dropped_frames_age_a_track();
   ok &= test_predicted_motion_keeps_a_fast_box_on_its_track();
   ok &= test_velocity_takes_a_quarter_of_the_measured_motion();
+  ok &= test_predicted_motion_spans_dropped_frames();
+  ok &= test_velocity_is_measured_per_frame();
+  ok &= test_score_at_high_score_threshold_confirms_a_track();
+  ok &= test_frame_without_timestamp_counts_as_the_next_frame();
+  ok &= test_timestamp_before_the_last_counts_as_the_next_frame();
   ok &= test_box_beyond_the_distance_gate_starts_a_new_track();
   ok &= test_track_is_reported_from_its_min_confirmed_hits_th_detection();
   ok &= test_low_score_detection_continues_only_a_confirmed_track();

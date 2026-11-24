@@ -153,11 +153,54 @@ def test_velocity_takes_a_quarter_of_the_measured_motion(third_box):
     assert ids(object_tracker.update([third_box], pts(2))) == [1]
 
 
+def test_predicted_motion_spans_dropped_frames():
+    object_tracker = tracker.ObjectTracker(settings(), FPS)
+    object_tracker.update([Box(0, 0, 10, 10)], pts(0))
+    object_tracker.update([Box(40, 0, 50, 10)], pts(1))
+    # Frames 2 and 3 were dropped. Three frames at 10 px put the predicted box at x 70..80, 40 px
+    # from this one. The box is 70 px from the last one, outside the 42.4 px gate.
+    assert ids(object_tracker.update([Box(110, 0, 120, 10)], pts(4))) == [1]
+
+
+def test_velocity_is_measured_per_frame():
+    object_tracker = tracker.ObjectTracker(settings(), FPS)
+    object_tracker.update([Box(0, 0, 10, 10)], pts(0))
+    # Frame 1 was dropped, so the 40 px move is 20 px per frame, and the velocity 5 px.
+    object_tracker.update([Box(40, 0, 50, 10)], pts(2))
+    # The box is 40 px from the predicted x 45..55, within the gate. A velocity of 10 px would
+    # put it 45 px away, outside.
+    assert ids(object_tracker.update([Box(5, 0, 15, 10)], pts(3))) == [1]
+
+
+def test_score_at_high_score_threshold_confirms_a_track():
+    object_tracker = tracker.ObjectTracker(settings(min_confirmed_hits=2), FPS)
+    assert object_tracker.update([Box(0, 0, 10, 10, 0.9)], pts(0)) == []
+    assert ids(object_tracker.update([Box(0, 0, 10, 10, 0.5)], pts(1))) == [1]
+
+
+def test_frame_without_timestamp_counts_as_the_next_frame():
+    object_tracker = tracker.ObjectTracker(settings(max_missing_frames=1), FPS)
+    object_tracker.update([Box(10, 10, 50, 80)], pts(0))
+    object_tracker.update([], -1)
+    object_tracker.update([], -1)
+    # Frame 3 is 2 frames past the track's last match, beyond max_missing_frames.
+    assert ids(object_tracker.update([Box(10, 10, 50, 80)], -1)) == [2]
+
+
+def test_timestamp_before_the_last_counts_as_the_next_frame():
+    object_tracker = tracker.ObjectTracker(settings(max_missing_frames=1), FPS)
+    object_tracker.update([Box(10, 10, 50, 80)], pts(10))
+    # The source restarted, and its timestamps start over.
+    object_tracker.update([], pts(0))
+    object_tracker.update([], pts(1))
+    assert ids(object_tracker.update([Box(10, 10, 50, 80)], pts(2))) == [2]
+
+
 def test_box_beyond_the_distance_gate_starts_a_new_track():
     object_tracker = tracker.ObjectTracker(settings(), FPS)
     object_tracker.update([Box(0, 0, 10, 10)], pts(0))
-    # 50 px is 3.5 box diagonals from the predicted box, outside the 3-diagonal gate.
-    assert ids(object_tracker.update([Box(50, 0, 60, 10)], pts(1))) == [2]
+    # 44 px is 3.1 box diagonals from the predicted box, just outside the 3-diagonal gate.
+    assert ids(object_tracker.update([Box(44, 0, 54, 10)], pts(1))) == [2]
 
 
 def test_track_is_reported_from_its_min_confirmed_hits_th_detection():

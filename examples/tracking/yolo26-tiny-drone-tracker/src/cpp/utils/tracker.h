@@ -69,8 +69,11 @@ private:
     int hits = 1;
   };
 
-  // The stream's frame number at `pts_ns`, counted from its first frame at `fps`. A realtime link
-  // drops frames, so the frames this tracker sees are not consecutive.
+  // The stream's frame number at `pts_ns`, counted at `fps` from an earlier frame. A realtime link
+  // drops frames, so the frames this tracker sees are not consecutive. A frame without a timestamp
+  // (`pts_ns` below 0) counts as the next frame. A timestamp before the last frame's, as after the
+  // source restarts, counts as the next frame and numbers the frames after it. A timestamp within
+  // half a frame of the last one counts as the same frame.
   int frame_index_at(std::int64_t pts_ns);
 
   void associate(const std::vector<BBox>& boxes, const std::vector<int>& detection_indices,
@@ -79,8 +82,10 @@ private:
   TrackerSettings settings_;
   int fps_ = 0;
   int next_track_id_ = 1;
-  std::optional<std::int64_t> first_pts_ns_;
-  int frame_index_ = 0;
+  // The timestamp of the frame that numbers the ones after it, and that frame's number.
+  std::optional<std::int64_t> origin_pts_ns_;
+  int origin_frame_index_ = 0;
+  int frame_index_ = -1;
   // Ordered by track ID, as Python's insertion-ordered dict is, so ties resolve alike.
   std::map<int, Track> tracks_;
 };

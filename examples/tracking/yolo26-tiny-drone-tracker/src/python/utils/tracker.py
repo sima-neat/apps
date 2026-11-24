@@ -90,8 +90,10 @@ class ObjectTracker:
         self.fps = fps
         self._next_track_id = 1
         self._tracks: dict[int, _Track] = {}
-        self._first_pts_ns: int | None = None
-        self._frame_index = 0
+        # The timestamp of the frame that numbers the ones after it, and that frame's number.
+        self._origin_pts_ns: int | None = None
+        self._origin_frame_index = 0
+        self._frame_index = -1
 
     def tracks_started(self) -> int:
         return self._next_track_id - 1
@@ -161,13 +163,27 @@ class ObjectTracker:
         return tracked
 
     def _frame_index_at(self, pts_ns: int) -> int:
-        """The stream's frame number at `pts_ns`, counted from its first frame at `fps`. A
-        realtime link drops frames, so the frames this tracker sees are not consecutive."""
-        if self._first_pts_ns is None:
-            self._first_pts_ns = pts_ns
-        frames = math.floor((pts_ns - self._first_pts_ns) * self.fps / 1e9 + 0.5)
-        # A frame that arrives at or before the last one's time counts as the same frame.
-        self._frame_index = max(self._frame_index, frames)
+        """The stream's frame number at `pts_ns`, counted at `fps` from an earlier frame. A
+        realtime link drops frames, so the frames this tracker sees are not consecutive.
+
+        A frame without a timestamp (`pts_ns` below 0) counts as the next frame. A timestamp
+        before the last frame's, as after the source restarts, counts as the next frame and
+        numbers the frames after it. A timestamp within half a frame of the last one counts as
+        the same frame.
+        """
+        if pts_ns < 0:
+            self._frame_index += 1
+            return self._frame_index
+        if self._origin_pts_ns is not None:
+            frames = self._origin_frame_index + math.floor(
+                (pts_ns - self._origin_pts_ns) * self.fps / 1e9 + 0.5
+            )
+            if frames >= self._frame_index:
+                self._frame_index = frames
+                return self._frame_index
+        self._frame_index += 1
+        self._origin_pts_ns = pts_ns
+        self._origin_frame_index = self._frame_index
         return self._frame_index
 
     def _associate(

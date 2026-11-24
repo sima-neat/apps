@@ -123,7 +123,7 @@ None. Python has every field and both policy values.
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) (`stream_id`, `max_inflight_per_stream`, `max_inflight_total`)
 - [multi-stream-blazepose3d](../../../examples/pose-estimation/multi-stream-blazepose3d/)
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`stream_id`)
-- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/) (`stream_id`, `max_inflight_per_stream`, `max_inflight_total`)
+- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/) (`stream_id`, `max_inflight_total`)
 
 ## Source
 

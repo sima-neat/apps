@@ -53,13 +53,21 @@ int ObjectTracker::tracks_started() const {
 }
 
 int ObjectTracker::frame_index_at(std::int64_t pts_ns) {
-  if (!first_pts_ns_) {
-    first_pts_ns_ = pts_ns;
+  if (pts_ns < 0) {
+    return ++frame_index_;
   }
-  const int frames =
-      static_cast<int>(std::floor(static_cast<double>(pts_ns - *first_pts_ns_) * fps_ / 1e9 + 0.5));
-  // A frame that arrives at or before the last one's time counts as the same frame.
-  frame_index_ = std::max(frame_index_, frames);
+  if (origin_pts_ns_) {
+    const int frames = origin_frame_index_ +
+                       static_cast<int>(std::floor(
+                           static_cast<double>(pts_ns - *origin_pts_ns_) * fps_ / 1e9 + 0.5));
+    if (frames >= frame_index_) {
+      frame_index_ = frames;
+      return frame_index_;
+    }
+  }
+  ++frame_index_;
+  origin_pts_ns_ = pts_ns;
+  origin_frame_index_ = frame_index_;
   return frame_index_;
 }
 

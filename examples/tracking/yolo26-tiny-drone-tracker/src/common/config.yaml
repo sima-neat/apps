@@ -4,7 +4,8 @@ model:
   path: ../../../../../models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
 
 input:
-  source:                       # One to four RTSP URLs. Stream i goes to Insight channel i.
+  source:                       # One to four RTSP URLs, the most the example is tested with.
+                                # Stream i goes to Insight channel i.
     - <rtsp-url-1>
     - <rtsp-url-2>
   codec: h264                   # h264 or h265, for every stream.
@@ -35,5 +36,6 @@ app:
     high_score_threshold: 0.20  # Score that lets a detection continue any track. A lower score
                                 # only continues a confirmed track.
     new_track_threshold: 0.30   # Score an unmatched detection needs to start a track.
-    max_missing_frames: 30      # Frames a track survives without a match.
+    max_missing_frames: 30      # Frames a track survives without a match, counted at input.fps,
+                                # or at the probed rate when it is 0.
     min_confirmed_hits: 2       # Detections, counting the first, before a track goes to Insight.

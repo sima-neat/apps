@@ -123,13 +123,15 @@ The application prints each source and its frame size on startup.
 
 Open `${APP_DIR}/src/common/config.yaml` and set:
 
-- `input.source`: one to four RTSP URLs, one per line. Stream `i` goes to Insight channel `i`.
+- `input.source`: one to four RTSP URLs, one per line. Stream `i` goes to Insight channel `i`. The example is tested with up to four streams.
 - `input.codec`: `h264` or `h265`, for every stream.
 - `output.insight.host`, and the Insight ports of stream 0, `output.insight.video_port_base` and `output.insight.metadata_port_base`. Stream `i` uses each port plus `i`.
 
 Leave `input.width`, `input.height`, and `input.fps` at 0 to read them from each stream.
 Keep `inference.frames` at `0` to run until you stop the application.
 The `app.tracking` keys tune the tracker, as Concept describes.
+`app.tracking.max_missing_frames` counts frames at `input.fps`, or at the probed rate when `input.fps` is 0.
+A wrong rate changes how fast tracks age.
 
 ## Run
 
@@ -151,8 +153,7 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Expected Result
 
-The application prints each source on startup.
-When it stops, it prints the frames each stream processed and the number of tracks it started:
+When it stops, the application prints the frames each stream processed and the tracks it started:
 
 ```text
 [stream 0] rtsp=rtsp://<rtsp-source-ip>:<port>/<stream-name> stream=640x512@30 insight=<insight-host-ip> video=9000 metadata=9100
@@ -163,14 +164,18 @@ When it stops, it prints the frames each stream processed and the number of trac
 
 The packaged config runs until Ctrl-C, and the `processed=` lines print when you stop it.
 For a run that ends by itself, set `inference.frames` to a positive number, such as `200`.
-When the network buffer was full, a stream's last line counts the tracking messages that did not go out, such as `[stream 0] 3 metadata messages dropped`.
+A full network buffer drops tracking messages.
+A stream's last line then counts them, such as `[stream 0] 3 metadata messages dropped`.
 
 Insight shows each stream on its own channel, with a box, an ID, and a trail on every confirmed drone.
 
 ## Troubleshooting
 
-- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: the stream is unreachable from the board, or it does not report that value. Verify the URL from the board. For a reachable stream, set the value the message names.
-- `every input.source stream needs the same frame size, because the streams share one model: ...`: use streams of one size, or run one application per size.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: the board cannot read that value.
+  The stream is unreachable from the board, or it does not report the value.
+  Verify the URL from the board. For a reachable stream, set the value the message names.
+- `every input.source stream needs the same frame size, because the streams share one model: ...`: the streams differ in size.
+  Use streams of one size, or run one application per size.
 - `input.codec: unknown value '<value>' (expected h264, h265)`: set `input.codec` to the streams' codec.
 - `<config> is missing <key>` or `<key> must be <type>`: the config lacks a key or has a value of the wrong type. Compare it with the packaged config.
 - Video without tracks: the model finds only small drones in the sky. Check that the video shows them, and check `inference.min_score`.

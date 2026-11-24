@@ -33,8 +33,8 @@ RTSP_CODECS = {"h264": pyneat.RtspCodec.H264, "h265": pyneat.RtspCodec.H265}
 DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeType.H265}
 # The model's one class.
 LABELS = ["drone"]
-# Frames of one stream the shared model holds at once: Core's default, set so that the cap of
-# all streams follows from it (skills/neat-application-optimizer/references/tuning.md).
+# Frames of one stream the shared model holds at once: Core's per-stream default
+# (RealtimeLinkOptions.h), used for the total in detector_link.
 MAX_INFLIGHT_PER_STREAM = 4
 PULL_TIMEOUT_MS = 100
 
@@ -45,16 +45,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def model_options(
-    config: Config, stream: RtspStreamInfo, max_detections: int
-) -> pyneat.ModelOptions:
-    """YOLO26 on the decoded NV12 frames of every stream, which all have the size of `stream`."""
+def model_options(config: Config, max_detections: int) -> pyneat.ModelOptions:
+    """YOLO26 on the decoded NV12 frames of every stream."""
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
     options.preprocess.enable = pyneat.AutoFlag.On
     options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
-    options.preprocess.input_max_width = stream.width
-    options.preprocess.input_max_height = stream.height
     options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     options.decode_type = pyneat.BoxDecodeType.YoloV26
     # The split heads of a single-class YOLO may not give Core the class count, so
@@ -93,6 +89,7 @@ def rtsp_options(
     # from the probed values alone failed to negotiate in some runs. The H.265 path does not read
     # auto_caps_from_stream (RtspEncodedInput.cpp).
     options.auto_caps_from_stream = config.integer("input.fps") == 0
+    # The probed rate, or input.fps when set: the rate the tracker counts frames at.
     options.source_fps = stream.fps
     if options.codec == pyneat.RtspCodec.H264:
         options.fallback_h264_width = stream.width
@@ -129,9 +126,8 @@ def detector_link(index: int, streams: int) -> pyneat.GraphLinkOptions:
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     link.stream_id = stream_id(index)
-    link.max_inflight_per_stream = MAX_INFLIGHT_PER_STREAM
-    # Core's default cap of all streams is min(4 * streams, 8), which would hold back three or
-    # four streams.
+    # Core's default total, min(4 * streams, 8), is below 4 per stream from three streams on
+    # (RealtimeLinkOptions.h, EdgeRouter.cpp).
     link.max_inflight_total = MAX_INFLIGHT_PER_STREAM * streams
     return link
 
@@ -181,8 +177,8 @@ def stream_info(config: Config, sources: list[str]) -> list[RtspStreamInfo]:
 
     Every stream has the same size, because the streams share one model input.
     """
-    # A copy of the high-density example's stream_info, until #793 moves it into
-    # sima_examples.rtsp_probe as probe_rtsp_streams.
+    # Behaves as probe_rtsp_streams, which #793 adds to sima_examples.rtsp_probe. Whichever of
+    # #785 and #793 merges second calls that instead.
     configured = RtspStreamInfo(
         config.integer("input.width"),
         config.integer("input.height"),
@@ -270,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     # Used by both the model and the box decode.
     max_detections = config.integer("inference.max_detections")
     model_path = args.config.absolute().parent / config.string("model.path")
-    model = pyneat.Model(str(model_path), model_options(config, streams[0], max_detections))
+    model = pyneat.Model(str(model_path), model_options(config, max_detections))
     detector = detector_graph(model)
 
     graph = pyneat.Graph()
