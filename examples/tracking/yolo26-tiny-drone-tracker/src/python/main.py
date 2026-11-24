@@ -1,7 +1,7 @@
-"""Track tiny drones in one RTSP stream with YOLO26, shown in Insight.
+"""Track tiny drones in up to four RTSP streams with one shared YOLO26 model, shown in Insight.
 
-The decoded frames feed the model. The tracker gives each drone an ID, and Insight draws every
-frame's tracks over the video.
+Each stream's decoded frames feed the model. Each stream's tracker gives every drone an ID, and
+Insight draws each frame's tracks over that stream's video, one channel per stream.
 """
 
 from __future__ import annotations
@@ -33,6 +33,9 @@ RTSP_CODECS = {"h264": pyneat.RtspCodec.H264, "h265": pyneat.RtspCodec.H265}
 DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeType.H265}
 # The model's one class.
 LABELS = ["drone"]
+# Frames of one stream the shared model holds at once: Core's default, set so that the cap of
+# all streams follows from it (skills/neat-application-optimizer/references/tuning.md).
+MAX_INFLIGHT_PER_STREAM = 4
 PULL_TIMEOUT_MS = 100
 
 
@@ -45,7 +48,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def model_options(
     config: Config, stream: RtspStreamInfo, max_detections: int
 ) -> pyneat.ModelOptions:
-    """YOLO26 on the decoded NV12 frames."""
+    """YOLO26 on the decoded NV12 frames of every stream, which all have the size of `stream`."""
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
     options.preprocess.enable = pyneat.AutoFlag.On
@@ -63,9 +66,26 @@ def model_options(
     return options
 
 
-def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedInputOptions:
+def detector_graph(model: pyneat.Model) -> pyneat.Graph:
+    """The model every stream shares: "detector_frame" input -> model -> "detections" output."""
+    frames = pyneat.Graph()
+    frames.add(pyneat.nodes.input("detector_frame", model.input_appsrc_options(False)))
+
+    detections = pyneat.Graph()
+    detections.add(pyneat.nodes.output("detections"))
+
+    model_graph = model.graph()
+    graph = pyneat.Graph()
+    graph.connect(frames, model_graph)
+    graph.connect(model_graph, detections)
+    return graph
+
+
+def rtsp_options(
+    config: Config, url: str, stream: RtspStreamInfo
+) -> pyneat.RtspEncodedInputOptions:
     options = pyneat.RtspEncodedInputOptions()
-    options.url = config.string("input.source")
+    options.url = url
     options.codec = config.choice("input.codec", RTSP_CODECS)
     options.tcp = config.boolean("input.rtsp.tcp")
     options.latency_ms = config.integer("input.rtsp.latency_ms")
@@ -81,36 +101,61 @@ def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedIn
 
 
 def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
-    """Hardware decode of the RTSP stream to NV12 frames."""
+    """Hardware decode to NV12 frames at the stream's size, ending at "detector_frame"."""
     decode = pyneat.SimaDecodeOptions()
     decode.type = config.choice("input.codec", DECODE_TYPES)
+    # Names the output buffer "decoder", the default Model::Options::upstream_name.
+    decode.decoder_name = "decoder"
     decode.dec_width = stream.width
     decode.dec_height = stream.height
     decode.dec_fps = stream.fps
     graph = pyneat.Graph("decoder")
     graph.add(pyneat.nodes.sima_decode(decode))
+    graph.add(
+        pyneat.nodes.caps_raw(
+            "NV12", stream.width, stream.height, stream.fps, pyneat.CapsMemory.Any
+        )
+    )
+    graph.add(pyneat.nodes.output("detector_frame"))
     return graph
 
 
-def detector_graph(model: pyneat.Model) -> pyneat.Graph:
-    """Decoded frames -> model -> "detections" output."""
-    graph = pyneat.Graph("detector")
-    graph.add(model.graph())
-    graph.add(pyneat.nodes.output("detections"))
-    return graph
+def stream_id(index: int) -> str:
+    return f"stream{index}"
 
 
-def video_options(config: Config) -> pyneat.VideoSenderOptions:
-    """Send the encoded stream to Insight unchanged."""
+def detector_link(index: int, streams: int) -> pyneat.GraphLinkOptions:
+    """Feed the shared model the latest frames of each stream, tagged with the stream's ID."""
+    link = pyneat.GraphLinkOptions()
+    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    link.stream_id = stream_id(index)
+    link.max_inflight_per_stream = MAX_INFLIGHT_PER_STREAM
+    # Core's default cap of all streams is min(4 * streams, 8), which would hold back three or
+    # four streams.
+    link.max_inflight_total = MAX_INFLIGHT_PER_STREAM * streams
+    return link
+
+
+def video_link() -> pyneat.GraphLinkOptions:
+    """Send the newest encoded frame, so a slow video sender cannot hold back the decoder."""
+    link = pyneat.GraphLinkOptions()
+    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    return link
+
+
+def video_options(config: Config, index: int) -> pyneat.VideoSenderOptions:
+    """Send the encoded stream to Insight unchanged, on video port base + index."""
     options = pyneat.VideoSenderOptions.passthrough(config.choice("input.codec", RTSP_CODECS))
     options.host = config.string("output.insight.host")
+    options.channel = index
     options.video_port_base = config.integer("output.insight.video_port_base")
     return options
 
 
-def metadata_options(config: Config) -> pyneat.MetadataSenderOptions:
+def metadata_options(config: Config, index: int) -> pyneat.MetadataSenderOptions:
     options = pyneat.MetadataSenderOptions()
     options.host = config.string("output.insight.host")
+    options.channel = index
     options.metadata_port_base = config.integer("output.insight.metadata_port_base")
     return options
 
@@ -131,6 +176,33 @@ def tracker_settings(config: Config) -> tracker.TrackerSettings:
     )
 
 
+def stream_info(config: Config, sources: list[str]) -> list[RtspStreamInfo]:
+    """Each stream's frame size and rate: the configured values, and a probe's for each 0.
+
+    Every stream has the same size, because the streams share one model input.
+    """
+    # A copy of the high-density example's stream_info, until #793 moves it into
+    # sima_examples.rtsp_probe as probe_rtsp_streams.
+    configured = RtspStreamInfo(
+        config.integer("input.width"),
+        config.integer("input.height"),
+        config.integer("input.fps"),
+    )
+    tcp = config.boolean("input.rtsp.tcp")
+    by_url = {url: probe_rtsp_stream_info(url, tcp, configured) for url in dict.fromkeys(sources)}
+    # Core gap: a model shared by several streams accepts one input size, and a stream of
+    # another size fails the build with "input spec mismatch".
+    (first_url, first), *others = by_url.items()
+    for url, stream in others:
+        if (stream.width, stream.height) != (first.width, first.height):
+            raise ValueError(
+                "every input.source stream needs the same frame size, because the streams "
+                f"share one model: {first_url} is {first.width}x{first.height}, "
+                f"{url} is {stream.width}x{stream.height}"
+            )
+    return [by_url[url] for url in sources]
+
+
 def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, max_detections: int) -> list:
     """The boxes in a detections sample, whose first tensor is the BBOX payload."""
     # Core candidate: decode_bbox_tensor takes a Tensor, so each example picks the BBOX tensor
@@ -149,79 +221,87 @@ def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, max_detections: 
 
 def send_tracks(
     run: pyneat.Run,
-    metadata_sender: pyneat.MetadataSender,
-    object_tracker: tracker.ObjectTracker,
-    stream: RtspStreamInfo,
+    metadata_senders: list[pyneat.MetadataSender],
+    trackers: list[tracker.ObjectTracker],
+    streams: list[RtspStreamInfo],
     max_detections: int,
     frames: int,
     stop: threading.Event,
-) -> int:
-    """Track every frame's boxes and send the tracks to Insight until `frames` (0: no limit) or a
-    stop signal; return the count."""
-    processed = 0
-    while not stop.is_set() and (frames == 0 or processed < frames):
+) -> list[int]:
+    """Track every frame's boxes and send the tracks to its stream's Insight channel until each
+    stream sent `frames` (0: no limit) or a stop signal; return each stream's count."""
+    processed = [0] * len(metadata_senders)
+    while not stop.is_set() and (frames == 0 or min(processed) < frames):
         sample = run.pull("detections", PULL_TIMEOUT_MS)
         if sample is None:
             if run.last_error() or not run.running():
                 raise RuntimeError(f"detections output closed: {run.last_error()}")
             continue
-        tracks = object_tracker.update(
-            decode_boxes(sample, stream, max_detections), processed
+
+        # With one source, Core names the sample after the decoder instead of the stream.
+        index = 0
+        if len(metadata_senders) > 1:
+            index = int(sample.stream_id.removeprefix("stream"))
+        if frames and processed[index] >= frames:
+            continue
+        stream = streams[index]
+        tracks = trackers[index].update(
+            decode_boxes(sample, stream, max_detections), sample.pts_ns
         )
         payload = detection_egress.serialize_tracks(
-            tracks, LABELS, stream.width, stream.height, detection_egress.frame_metadata(sample, 0)
+            tracks,
+            LABELS,
+            stream.width,
+            stream.height,
+            detection_egress.frame_metadata(sample, index),
         )
         # A nonblocking send drops the message while the socket buffer is full; the drops are
         # counted in the sender's stats and reported when the run ends. Any other failure raises.
-        metadata_sender.send_raw_json(payload)
-        processed += 1
+        metadata_senders[index].send_raw_json(payload)
+        processed[index] += 1
     return processed
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.load(args.config)
-    # The stream's size and rate come from the probe for each value the config leaves at 0.
-    stream = probe_rtsp_stream_info(
-        config.string("input.source"),
-        config.boolean("input.rtsp.tcp"),
-        RtspStreamInfo(
-            config.integer("input.width"),
-            config.integer("input.height"),
-            config.integer("input.fps"),
-        ),
-    )
+    sources = config.string_list("input.source")
+    streams = stream_info(config, sources)
     # Used by both the model and the box decode.
     max_detections = config.integer("inference.max_detections")
     model_path = args.config.absolute().parent / config.string("model.path")
-    model = pyneat.Model(str(model_path), model_options(config, stream, max_detections))
+    model = pyneat.Model(str(model_path), model_options(config, streams[0], max_detections))
     detector = detector_graph(model)
 
     graph = pyneat.Graph()
-    source = pyneat.groups.rtsp_encoded_input(rtsp_options(config, stream))
-    decoder = decoder_graph(config, stream)
-    graph.connect(source, decoder)
-    graph.connect(decoder, detector)
-    # A plain link lets Core tee the encoded stream to the decoder and the video sender.
-    graph.connect(source, pyneat.groups.video_sender(video_options(config)))
+    metadata_senders = []
+    trackers = []
+    for index, url in enumerate(sources):
+        stream = streams[index]
+        rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(config, url, stream))
+        decoder = decoder_graph(config, stream)
+        # A plain link keeps every encoded frame. A dropped one corrupts the decoded frames
+        # after it until the next keyframe.
+        graph.connect(rtsp, decoder)
+        graph.connect(decoder, detector, detector_link(index, len(sources)))
+        graph.connect(rtsp, pyneat.groups.video_sender(video_options(config, index)), video_link())
+        metadata_senders.append(pyneat.MetadataSender(metadata_options(config, index)))
+        trackers.append(tracker.ObjectTracker(tracker_settings(config), stream.fps))
+        print(
+            f"[stream {index}] rtsp={url} stream={stream.width}x{stream.height}@{stream.fps} "
+            f"insight={config.string('output.insight.host')} "
+            f"video={config.integer('output.insight.video_port_base') + index} "
+            f"metadata={metadata_senders[index].metadata_port()}"
+        )
 
-    metadata_sender = pyneat.MetadataSender(metadata_options(config))
-    object_tracker = tracker.ObjectTracker(tracker_settings(config))
     stop = stop_on_signals()
     run = graph.build(run_options())
-    host = config.string("output.insight.host")
-    print(
-        f"source={config.string('input.source')} codec={config.string('input.codec')} "
-        f"stream={stream.width}x{stream.height}@{stream.fps} insight={host} "
-        f"video={config.integer('output.insight.video_port_base')} "
-        f"metadata={config.integer('output.insight.metadata_port_base')}"
-    )
     try:
         processed = send_tracks(
             run,
-            metadata_sender,
-            object_tracker,
-            stream,
+            metadata_senders,
+            trackers,
+            streams,
             max_detections,
             config.integer("inference.frames"),
             stop,
@@ -229,9 +309,13 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         run.close()
 
-    print(f"processed={processed} tracks_started={object_tracker.tracks_started()}")
-    if metadata_sender.stats().send_failures:
-        print(f"{metadata_sender.stats().send_failures} metadata messages dropped")
+    for index, sender in enumerate(metadata_senders):
+        print(
+            f"[stream {index}] processed={processed[index]} "
+            f"tracks_started={trackers[index].tracks_started()}"
+        )
+        if sender.stats().send_failures:
+            print(f"[stream {index}] {sender.stats().send_failures} metadata messages dropped")
     return 0
 
 

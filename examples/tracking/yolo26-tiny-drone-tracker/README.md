@@ -14,45 +14,47 @@
 
 ## Concept
 
-Tracks tiny drones in one RTSP stream with YOLO26 and sends the video and each drone's track to Insight.
+Tracks tiny drones in up to four RTSP streams with one shared YOLO26 model, and sends each stream's video and drone tracks to Insight.
 
 ```text
 How does a frame move through yolo26-tiny-drone-tracker?
 
-╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
-┆ RUN                                                                 ┆
-┆  ┌──────────────────────┐  H.264 or H.265    ┌──────────────────┐   ┆
-┆  │ RtspEncodedInput     │───────────────────►│ VideoSender      │───┼─────┐
-┆  └──────────────────────┘  as received       └──────────────────┘   ┆     │
-┆             │ encoded frames                                        ┆     │ video
-┆             ▼                                                       ┆     │
-┆  ┌──────────────────────┐                                           ┆     │
-┆  │ SimaDecode           │                                           ┆     │
-┆  └──────────────────────┘                                           ┆     │
-┆             │ NV12 frames                                           ┆     │
-┆             ▼                                                       ┆     │
-┆  ┌──────────────────────┐                                           ┆     │
-┆  │ YOLO26 Model         │                                           ┆     │
-┆  └──────────────────────┘                                           ┆     │
-┆             │ BBOX tensor                                           ┆     │
-┆             ▼                                                       ┆     │
-┆  ┌──────────────────────┐                                           ┆     │
-┆  │ Output "detections"  │                                           ┆     │
-┆  └──────────────────────┘                                           ┆     │
-╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯     │
-              ▼ pull, decode_bbox_tensor                                    │
-   ┌──────────────────────┐                                                 │
-   │ ObjectTracker        │                                                 │
-   └──────────────────────┘                                                 │
-              │ boxes with track IDs                                        │
-              ▼                                                             ▼
-   ┌──────────────────────┐   tracks as JSON                          ┌───────────┐
-   │ MetadataSender       │──────────────────────────────────────────►│ Insight   │
-   └──────────────────────┘                                           └───────────┘
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                                       ┆
+┆  ┌──────────────────────────┐  encoded frames     ┌──────────────────┐    ┆
+┆  │ RtspEncodedInput × N     │────────────────────►│ VideoSender × N  │────┼─────┐
+┆  └──────────────────────────┘  latest/stream      └──────────────────┘    ┆     │
+┆             │ encoded frames                                              ┆     │ video
+┆             ▼                                                             ┆     │
+┆  ┌──────────────────────────┐                                             ┆     │
+┆  │ SimaDecode × N           │                                             ┆     │
+┆  └──────────────────────────┘                                             ┆     │
+┆             │ NV12, latest/stream                                         ┆     │
+┆             ▼                                                             ┆     │
+┆  ┌──────────────────────────┐                                             ┆     │
+┆  │ YOLO26 Model (shared)    │                                             ┆     │
+┆  └──────────────────────────┘                                             ┆     │
+┆             │ BBOX tensor                                                 ┆     │
+┆             ▼                                                             ┆     │
+┆  ┌──────────────────────────┐                                             ┆     │
+┆  │ Output "detections"      │                                             ┆     │
+┆  └──────────────────────────┘                                             ┆     │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯     │
+              ▼ pull, decode_bbox_tensor, route by stream_id                      │
+   ┌──────────────────────────┐                                                   │
+   │ ObjectTracker × N        │                                                   │
+   └──────────────────────────┘                                                   │
+              │ boxes with track IDs                                              │
+              ▼                                                                   ▼
+   ┌──────────────────────────┐   tracks as JSON                            ┌───────────┐
+   │ MetadataSender × N       │────────────────────────────────────────────►│ Insight   │
+   └──────────────────────────┘                                             └───────────┘
 ```
 
-The encoded stream goes to Insight as received, while the decoder feeds the model.
-The application pulls each frame's boxes, and `ObjectTracker` gives every drone an ID that lasts across frames.
+Each stream's encoded video goes to Insight as received, on its own channel, while its decoder feeds the shared model.
+The link to the model keeps the latest frames of each stream.
+When the model falls behind, a stream drops frames instead of slowing the others.
+The application pulls each frame's boxes, and the stream's `ObjectTracker` gives every drone an ID that lasts across frames.
 Each tracking message carries the frame's timestamp, so Insight draws the tracks on the frame they came from.
 Insight colors each track by its ID and draws its trail.
 
@@ -61,8 +63,9 @@ Then a box with a lower score can continue only a confirmed track.
 An unmatched box at or above both thresholds starts a new track.
 A track is confirmed at its `app.tracking.min_confirmed_hits`-th detection, counting the one that started it.
 Only confirmed tracks go to Insight.
-A tiny box rarely overlaps its previous position, so the tracker also matches by the distance to the position its velocity predicts.
-Track IDs start at 1.
+A tiny box rarely overlaps its previous position, so the tracker matches by the distance to the position its velocity predicts.
+It counts frames by their timestamps, so frames the model's link dropped still age a track.
+Each stream's track IDs start at 1.
 
 ## Preview
 
@@ -71,8 +74,9 @@ Track IDs start at 1.
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- An H.264 or H.265 RTSP stream that shows small drones against the sky, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- One to four H.264 or H.265 RTSP streams of one frame size that show small drones in the sky.
   The Insight video catalog has no drone video, so you provide one.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 - For H.265, a computer whose browser decodes HEVC in hardware to view Insight. Chromium has no software decoder for WebRTC H.265.
 
 ## Install Apps
@@ -110,19 +114,20 @@ The packaged `model.path` already points to it: a relative `model.path` starts a
 
 In the Insight Web UI, open Media Sources and upload a drone video.
 Insight's YouTube import also works.
-Under Streaming Sources, assign the video to a source slot, start it, and copy its URL into `input.source`.
+Under Streaming Sources, assign the video to a source slot for each stream, start them, and copy their URLs into `input.source`.
+Several slots may play the same video.
 Use a host and port that the target can reach, not `localhost`.
-The application prints the source and its frame size on startup.
+The application prints each source and its frame size on startup.
 
 ## Configure
 
 Open `${APP_DIR}/src/common/config.yaml` and set:
 
-- `input.source`: the RTSP URL.
-- `input.codec`: `h264` or `h265`.
-- `output.insight.host`, and the Insight ports `output.insight.video_port_base` and `output.insight.metadata_port_base`.
+- `input.source`: one to four RTSP URLs, one per line. Stream `i` goes to Insight channel `i`.
+- `input.codec`: `h264` or `h265`, for every stream.
+- `output.insight.host`, and the Insight ports of stream 0, `output.insight.video_port_base` and `output.insight.metadata_port_base`. Stream `i` uses each port plus `i`.
 
-Leave `input.width`, `input.height`, and `input.fps` at 0 to read them from the stream.
+Leave `input.width`, `input.height`, and `input.fps` at 0 to read them from each stream.
 Keep `inference.frames` at `0` to run until you stop the application.
 The `app.tracking` keys tune the tracker, as Concept describes.
 
@@ -146,27 +151,30 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Expected Result
 
-The application prints the source on startup.
-When it stops, it prints the frames it processed and the number of tracks it started:
+The application prints each source on startup.
+When it stops, it prints the frames each stream processed and the number of tracks it started:
 
 ```text
-source=rtsp://<rtsp-source-ip>:<port>/<stream-name> codec=h264 stream=1280x720@30 insight=<insight-host-ip> video=9000 metadata=9100
-processed=200 tracks_started=14
+[stream 0] rtsp=rtsp://<rtsp-source-ip>:<port>/<stream-name> stream=640x512@30 insight=<insight-host-ip> video=9000 metadata=9100
+[stream 1] rtsp=rtsp://<rtsp-source-ip>:<port>/<stream-name> stream=640x512@30 insight=<insight-host-ip> video=9001 metadata=9101
+[stream 0] processed=<frames> tracks_started=<tracks>
+[stream 1] processed=<frames> tracks_started=<tracks>
 ```
 
-The packaged config runs until Ctrl-C, and the `processed=` line prints when you stop it.
+The packaged config runs until Ctrl-C, and the `processed=` lines print when you stop it.
 For a run that ends by itself, set `inference.frames` to a positive number, such as `200`.
-When the network buffer was full, a last line counts the tracking messages that did not go out, such as `3 metadata messages dropped`.
+When the network buffer was full, a stream's last line counts the tracking messages that did not go out, such as `[stream 0] 3 metadata messages dropped`.
 
-Insight shows the video with a box, an ID, and a trail on every confirmed drone.
+Insight shows each stream on its own channel, with a box, an ID, and a trail on every confirmed drone.
 
 ## Troubleshooting
 
 - `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: the stream is unreachable from the board, or it does not report that value. Verify the URL from the board. For a reachable stream, set the value the message names.
-- `input.codec: unknown value '<value>' (expected h264, h265)`: set `input.codec` to the stream's codec.
+- `every input.source stream needs the same frame size, because the streams share one model: ...`: use streams of one size, or run one application per size.
+- `input.codec: unknown value '<value>' (expected h264, h265)`: set `input.codec` to the streams' codec.
 - `<config> is missing <key>` or `<key> must be <type>`: the config lacks a key or has a value of the wrong type. Compare it with the packaged config.
 - Video without tracks: the model finds only small drones in the sky. Check that the video shows them, and check `inference.min_score`.
-- No video or tracks in Insight: verify `output.insight.host` and the two ports.
+- No video or tracks on a channel: verify `output.insight.host` and the ports of that stream.
 
 ## Source Files
 

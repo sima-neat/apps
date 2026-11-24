@@ -1,5 +1,5 @@
-"""End-to-end tests: one RTSP stream reaches Insight as video and tracking metadata.
-tests/cpp/test_e2e.cpp runs the same checks in C++."""
+"""End-to-end tests: RTSP streams reach Insight as video and tracking metadata, each on its own
+channel. tests/cpp/test_e2e.cpp runs the same checks in C++."""
 
 from __future__ import annotations
 
@@ -23,10 +23,17 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 FRAMES = 150
 # Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 MIN_SCORE = 0.1
-# The model must keep up with the 30 FPS test stream.
-MIN_RESULTS_PER_S = 20.0
+# Each stream's results per second. Not verified on a DevKit yet.
+MIN_STREAM_RESULTS_PER_S = 20.0
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
+
+CASES = [
+    pytest.param("h264", 2, id="h264"),
+    pytest.param("h265", 2, id="h265"),
+    # With one source, Core names the samples after the decoder instead of the stream.
+    pytest.param("h264", 1, id="h264-one-stream"),
+]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -36,6 +43,7 @@ def _env_int(name: str, default: int) -> int:
 
 def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
     """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
+    # A copy of single-stream's helper. #823 moves it into tests/utils/rtp_video.py.
     sock.settimeout(0.2)
     while True:
         try:
@@ -53,11 +61,21 @@ def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize("codec", ["h264", "h265"])
-def test_stream_reaches_insight_as_video_and_tracks(
-    request, codec, e2e_model_path, tmp_output_dir, test_timeout_ms, e2e_config_writer
+@pytest.mark.parametrize(("codec", "streams"), CASES)
+def test_streams_reach_their_insight_channels_as_video_and_tracks(
+    request,
+    codec,
+    streams,
+    e2e_model_path,
+    tmp_output_dir,
+    test_timeout_ms,
+    e2e_config_writer,
+    skip_unless_e2e_ready,
 ):
-    url = request.getfixturevalue(f"rtsp_{codec}_url")
+    urls = request.getfixturevalue(f"rtsp_{codec}_urls")
+    skip_unless_e2e_ready(
+        len(urls) >= streams, f"SIMANEAT_TEST_RTSP_{codec.upper()}_URLS needs {streams} URLs"
+    )
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
     video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
     config_dir = tmp_output_dir.parent
@@ -68,7 +86,7 @@ def test_stream_reaches_insight_as_video_and_tracks(
         {
             # Relative to the generated config, so the test runs the app's path join.
             "model": {"path": model_path},
-            "input": {"source": url, "codec": codec},
+            "input": {"source": urls[:streams], "codec": codec},
             "inference": {"frames": FRAMES, "min_score": MIN_SCORE},
             # This test is the Insight receiver, so the example sends to loopback.
             "output": {
@@ -83,23 +101,33 @@ def test_stream_reaches_insight_as_video_and_tracks(
     assert config_path.parent == config_dir
 
     messages = []
-    arrivals = []
+    arrivals = {index: [] for index in range(streams)}
     errors = []
-    headers: list[bytes] = []
+    headers: list[list[bytes]] = [[] for _ in range(streams)]
     stop = threading.Event()
+    video_sockets = []
+    drains = []
     process = None
     stdout = stderr = ""
-    with (
-        MetadataJsonListener(
-            "127.0.0.1", metadata_port, num_ports=1, metadata_type="tracking",
-            data_array_key="tracks",
-        ) as listener,
-        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video,
-    ):
-        video.bind(("127.0.0.1", video_port))
-        drain = threading.Thread(target=_drain_video, args=(video, stop, headers), daemon=True)
-        drain.start()
+    with MetadataJsonListener(
+        "127.0.0.1",
+        metadata_port,
+        num_ports=streams,
+        metadata_type="tracking",
+        data_array_key="tracks",
+    ) as listener:
         try:
+            for index in range(streams):
+                video_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                video_sockets[-1].bind(("127.0.0.1", video_port + index))
+                drains.append(
+                    threading.Thread(
+                        target=_drain_video,
+                        args=(video_sockets[-1], stop, headers[index]),
+                        daemon=True,
+                    )
+                )
+                drains[-1].start()
             process = subprocess.Popen(
                 [sys.executable, str(MAIN_PY), "--config", str(config_path)],
                 stdout=subprocess.PIPE,
@@ -113,8 +141,9 @@ def test_stream_reaches_insight_as_video_and_tracks(
                 result = listener.wait_for_messages(0.2)
                 if result.error and not result.timed_out:
                     errors.append(result.error)
-                messages.extend(result.messages)
-                arrivals.extend(time.monotonic() for _ in result.messages)
+                for message in result.messages:
+                    messages.append(message)
+                    arrivals[message.port - metadata_port].append(time.monotonic())
         finally:
             if process is not None:
                 if process.poll() is None:
@@ -127,40 +156,58 @@ def test_stream_reaches_insight_as_video_and_tracks(
                 if rest.error:
                     errors.append(rest.error)
             stop.set()
-            drain.join()
+            for drain in drains:
+                drain.join()
+            for sock in video_sockets:
+                sock.close()
 
     assert process.returncode == 0, (
         f"exit {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     )
     assert not errors, errors
-    assert re.search(
-        rf"^source={re.escape(url)} codec={codec} stream=\d+x\d+@\d+ insight=127\.0\.0\.1 "
-        rf"video={video_port} metadata={metadata_port}$",
-        stdout,
-        re.MULTILINE,
-    ), stdout
-    summary = re.search(rf"^processed={FRAMES} tracks_started=(\d+)$", stdout, re.MULTILINE)
-    assert summary, stdout
-    tracks_started = int(summary.group(1))
+    for index in range(streams):
+        assert re.search(
+            rf"^\[stream {index}\] rtsp={re.escape(urls[index])} stream=\d+x\d+@\d+ "
+            rf"insight=127\.0\.0\.1 video={video_port + index} metadata={metadata_port + index}$",
+            stdout,
+            re.MULTILINE,
+        ), stdout
+        summary = re.search(
+            rf"^\[stream {index}\] processed={FRAMES} tracks_started=(\d+)$", stdout, re.MULTILINE
+        )
+        assert summary, stdout
+        tracks_started = int(summary.group(1))
+        assert {header[1] & 0x7F for header in headers[index]} == {PAYLOAD_TYPES[codec]}, (
+            f"stream {index} video payload types"
+        )
 
-    assert headers and {header[1] & 0x7F for header in headers} == {PAYLOAD_TYPES[codec]}
-    # UDP on loopback may drop a message under load, so allow a few to go missing.
-    assert len(messages) >= FRAMES * 95 // 100, f"{len(messages)} of {FRAMES} messages arrived"
-    frame_ids = [int(message.frame_id) for message in messages]
-    assert frame_ids == sorted(set(frame_ids)), "frame IDs do not strictly increase"
-    tracks = [track for m in messages for track in json.loads(m.payload)["data"]["tracks"]]
-    for track in tracks:
-        assert track["label"] == "drone", track
-        assert MIN_SCORE <= track["confidence"] <= 1.0, track
-        assert 1 <= int(track["id"]) <= tracks_started, track
-    # Insight draws each message's tracks on the video frame its timestamp names.
-    rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers}
-    unpaired = [m.timestamp_ms for m in messages if not _pairs(m.timestamp_ms, rtp_timestamps)]
-    assert not unpaired, f"metadata timestamps with no video frame: {unpaired[:5]}"
-    times = arrivals[len(arrivals) // 10:]
-    assert len(times) > 10, f"{len(times)} messages arrived during the run"
-    results_per_s = (len(times) - 1) / (times[-1] - times[0])
-    # The test streams show no drones, so the track count is printed, not asserted.
-    print(f"{codec}: {len(messages)} messages, {results_per_s:.1f} results/s, "
-          f"{len(tracks)} tracks in {tracks_started} track IDs")
-    assert results_per_s >= MIN_RESULTS_PER_S, f"{results_per_s:.1f} results/s"
+        stream_messages = [m for m in messages if m.port == metadata_port + index]
+        # UDP on loopback may drop a message under load, so allow a few to go missing.
+        assert len(stream_messages) >= FRAMES * 95 // 100, (
+            f"stream {index}: {len(stream_messages)} of {FRAMES} messages arrived"
+        )
+        frame_ids = [int(message.frame_id) for message in stream_messages]
+        assert frame_ids == sorted(set(frame_ids)), f"stream {index}: frame IDs out of order"
+        # These checks cover the tracks the run sent. A stream without drones sends none, and the
+        # count printed below shows how many there were.
+        tracks = [t for m in stream_messages for t in json.loads(m.payload)["data"]["tracks"]]
+        for track in tracks:
+            assert track["label"] == "drone", track
+            assert MIN_SCORE <= track["confidence"] <= 1.0, track
+            assert 1 <= int(track["id"]) <= tracks_started, track
+        # Insight draws each message's tracks on the video frame its timestamp names.
+        rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers[index]}
+        unpaired = [
+            m.timestamp_ms for m in stream_messages if not _pairs(m.timestamp_ms, rtp_timestamps)
+        ]
+        assert not unpaired, f"stream {index}: timestamps with no video frame: {unpaired[:5]}"
+        times = arrivals[index][len(arrivals[index]) // 10:]
+        assert len(times) > 10, f"stream {index}: {len(times)} messages arrived during the run"
+        results_per_s = (len(times) - 1) / (times[-1] - times[0])
+        print(
+            f"{codec} stream {index}: {len(stream_messages)} messages, "
+            f"{results_per_s:.1f} results/s, {len(tracks)} tracks in {tracks_started} track IDs"
+        )
+        assert results_per_s >= MIN_STREAM_RESULTS_PER_S, (
+            f"stream {index}: {results_per_s:.1f} results/s"
+        )

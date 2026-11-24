@@ -7,6 +7,7 @@ track, but it cannot start or confirm one.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -82,20 +83,31 @@ class _Track:
 
 
 class ObjectTracker:
-    """Give each detection of a stream the ID of the track it continues, frame by frame."""
+    """Give each detection of one stream the ID of the track it continues, frame by frame."""
 
-    def __init__(self, settings: TrackerSettings) -> None:
+    def __init__(self, settings: TrackerSettings, fps: int) -> None:
         self.settings = settings
+        self.fps = fps
         self._next_track_id = 1
         self._tracks: dict[int, _Track] = {}
+        self._first_pts_ns: int | None = None
+        self._frame_index = 0
 
     def tracks_started(self) -> int:
         return self._next_track_id - 1
 
-    def update(self, detections: list[Box], frame_index: int) -> list[TrackedDetection]:
-        """Match this frame's detections to the tracks, and return those of confirmed tracks in
-        detection order. `frame_index` counts the processed frames: 0, 1, 2, and so on."""
+    def update(self, detections: list[Box], pts_ns: int) -> list[TrackedDetection]:
+        """Match the detections of the frame at `pts_ns` to the tracks, and return those of
+        confirmed tracks in detection order."""
+        frame_index = self._frame_index_at(pts_ns)
         settings = self.settings
+        # Frames the shared model's link dropped still age the tracks, so a track unmatched for
+        # more than max_missing_frames ends before it can match again.
+        self._tracks = {
+            track_id: track
+            for track_id, track in self._tracks.items()
+            if frame_index - track.last_frame_index - 1 <= settings.max_missing_frames
+        }
         boxes = np.array([_bbox(detection) for detection in detections], dtype=np.float64)
         boxes = boxes.reshape(-1, 4)
         high = []
@@ -147,6 +159,16 @@ class ObjectTracker:
                 )
             )
         return tracked
+
+    def _frame_index_at(self, pts_ns: int) -> int:
+        """The stream's frame number at `pts_ns`, counted from its first frame at `fps`. A
+        realtime link drops frames, so the frames this tracker sees are not consecutive."""
+        if self._first_pts_ns is None:
+            self._first_pts_ns = pts_ns
+        frames = math.floor((pts_ns - self._first_pts_ns) * self.fps / 1e9 + 0.5)
+        # A frame that arrives at or before the last one's time counts as the same frame.
+        self._frame_index = max(self._frame_index, frames)
+        return self._frame_index
 
     def _associate(
         self,

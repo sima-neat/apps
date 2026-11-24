@@ -91,7 +91,8 @@ class GreedyCvCandidate:
             max_missing_frames=15,
             min_confirmed_hits=1,
         )
-        self.trackers = {cid: module.ObjectTracker(settings) for cid in class_ids}
+        # One frame per second, so a frame's number in nanoseconds is its timestamp.
+        self.trackers = {cid: module.ObjectTracker(settings, 1) for cid in class_ids}
         self._offset = {cid: i * 1_000_000 for i, cid in enumerate(class_ids)}
 
     def update(self, dets: list[dict], frame: int):
@@ -101,7 +102,7 @@ class GreedyCvCandidate:
             own = [
                 SimpleNamespace(**d) for d in dets if d["class_id"] == cid and d["score"] >= 0.10
             ]
-            for t in tracker.update(own, frame):
+            for t in tracker.update(own, frame * 1_000_000_000):
                 out.append(((t.x1, t.y1, t.x2, t.y2), t.track_id + self._offset[cid], cid))
         return out
 

@@ -46,14 +46,31 @@ double center_distance(const BBox& a, const BBox& b) {
 
 } // namespace
 
-ObjectTracker::ObjectTracker(TrackerSettings settings) : settings_(settings) {}
+ObjectTracker::ObjectTracker(TrackerSettings settings, int fps) : settings_(settings), fps_(fps) {}
 
 int ObjectTracker::tracks_started() const {
   return next_track_id_ - 1;
 }
 
+int ObjectTracker::frame_index_at(std::int64_t pts_ns) {
+  if (!first_pts_ns_) {
+    first_pts_ns_ = pts_ns;
+  }
+  const int frames =
+      static_cast<int>(std::floor(static_cast<double>(pts_ns - *first_pts_ns_) * fps_ / 1e9 + 0.5));
+  // A frame that arrives at or before the last one's time counts as the same frame.
+  frame_index_ = std::max(frame_index_, frames);
+  return frame_index_;
+}
+
 std::vector<TrackedDetection>
-ObjectTracker::update(const std::vector<simaai::neat::Box>& detections, int frame_index) {
+ObjectTracker::update(const std::vector<simaai::neat::Box>& detections, std::int64_t pts_ns) {
+  const int frame_index = frame_index_at(pts_ns);
+  // Frames the shared model's link dropped still age the tracks, so a track unmatched for more
+  // than max_missing_frames ends before it can match again.
+  std::erase_if(tracks_, [&](const auto& item) {
+    return frame_index - item.second.last_frame_index - 1 > settings_.max_missing_frames;
+  });
   std::vector<BBox> boxes;
   std::vector<int> high;
   std::vector<int> low;

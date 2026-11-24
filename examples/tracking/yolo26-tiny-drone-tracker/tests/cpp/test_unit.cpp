@@ -10,6 +10,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -25,6 +26,14 @@ namespace {
 
 simaai::neat::Box box(float x1, float y1, float x2, float y2, float score = 0.9f) {
   return {x1, y1, x2, y2, score, 0};
+}
+
+constexpr int kFps = 30;
+constexpr std::int64_t kFrameNs = 33'333'333;
+
+// The presentation time of a 30 FPS stream's frame, from an origin that is not 0.
+std::int64_t pts(int frame) {
+  return 5'000'000'000 + frame * kFrameNs;
 }
 
 TrackerSettings settings() {
@@ -49,7 +58,10 @@ bool test_shipped_config_is_usable() {
   const fs::path common_dir = "examples/tracking/yolo26-tiny-drone-tracker/src/common";
   const auto config = sima_examples::Config::load(common_dir / "config.yaml");
   const std::string codec = config.string("input.codec");
-  bool ok = expect_true(codec == "h264" || codec == "h265", "the shipped codec is supported");
+  const auto sources = config.string_list("input.source");
+  bool ok = expect_true(!sources.empty() && sources.size() <= 4U,
+                        "the shipped config lists one to four streams");
+  ok &= expect_true(codec == "h264" || codec == "h265", "the shipped codec is supported");
   const fs::path model_path = common_dir / config.string("model.path");
   ok &= expect_true(model_path.filename() == "yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz",
                     "model.path names the tiny-drone package");
@@ -88,32 +100,33 @@ bool test_shipped_config_is_usable() {
 }
 
 bool test_nearby_detection_keeps_its_track_id() {
-  ObjectTracker object_tracker(settings());
-  bool ok = expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, 0)) == std::vector{1},
+  ObjectTracker object_tracker(settings(), kFps);
+  bool ok = expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, pts(0))) == std::vector{1},
                         "the first box starts track 1");
-  ok &= expect_true(ids(object_tracker.update({box(12, 11, 52, 81, 0.8f)}, 1)) == std::vector{1},
-                    "a box 2 px away continues track 1");
+  ok &=
+      expect_true(ids(object_tracker.update({box(12, 11, 52, 81, 0.8f)}, pts(1))) == std::vector{1},
+                  "a box 2 px away continues track 1");
   return ok;
 }
 
 bool test_higher_affinity_wins_then_lower_track_id() {
   const auto two_tracks = [](simaai::neat::Box first, simaai::neat::Box second) {
-    ObjectTracker object_tracker(settings());
-    object_tracker.update({first, second}, 0);
+    ObjectTracker object_tracker(settings(), kFps);
+    object_tracker.update({first, second}, pts(0));
     return object_tracker;
   };
   // Affinity is IoU plus 1 / (1 + center distance). Track 1 overlaps the box with IoU 0.64 at
   // 0.11 diagonals, track 2 with IoU 0.04 at 0.08 diagonals: track 1 scores 1.54, track 2 0.96.
   auto big_and_near = two_tracks(box(0, 0, 25, 25), box(9, 9, 13, 13));
-  bool ok = expect_true(ids(big_and_near.update({box(0, 0, 20, 20)}, 1)) == std::vector{1},
+  bool ok = expect_true(ids(big_and_near.update({box(0, 0, 20, 20)}, pts(1))) == std::vector{1},
                         "the track with the higher affinity wins");
   // No overlap with either track: the closer one wins, at 0.85 diagonals against 1.27.
   auto apart = two_tracks(box(0, 0, 10, 10), box(30, 0, 40, 10));
-  ok &= expect_true(ids(apart.update({box(18, 0, 28, 10)}, 1)) == std::vector{2},
+  ok &= expect_true(ids(apart.update({box(18, 0, 28, 10)}, pts(1))) == std::vector{2},
                     "with no overlap, the closer track wins");
   // The same IoU (0.54) and center distance with both tracks: the lower ID wins.
   auto side_by_side = two_tracks(box(0, 0, 10, 10), box(6, 0, 16, 10));
-  ok &= expect_true(ids(side_by_side.update({box(3, 0, 13, 10)}, 1)) == std::vector{1},
+  ok &= expect_true(ids(side_by_side.update({box(3, 0, 13, 10)}, pts(1))) == std::vector{1},
                     "on equal affinity, the lower track ID wins");
   return ok;
 }
@@ -123,27 +136,43 @@ bool test_track_ends_after_max_missing_frames() {
   for (const auto& [max_missing_frames, track_id] : {std::pair{2, 1}, std::pair{1, 2}}) {
     TrackerSettings values = settings();
     values.max_missing_frames = max_missing_frames;
-    ObjectTracker object_tracker(values);
-    object_tracker.update({box(10, 10, 50, 80)}, 0);
-    object_tracker.update({}, 1);
-    object_tracker.update({}, 2);
-    ok &= expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, 3)) == std::vector{track_id},
-                      "after 2 missed frames with max_missing_frames " +
-                          std::to_string(max_missing_frames) + ", the box gets track " +
-                          std::to_string(track_id));
+    ObjectTracker object_tracker(values, kFps);
+    object_tracker.update({box(10, 10, 50, 80)}, pts(0));
+    object_tracker.update({}, pts(1));
+    object_tracker.update({}, pts(2));
+    ok &= expect_true(
+        ids(object_tracker.update({box(10, 10, 50, 80)}, pts(3))) == std::vector{track_id},
+        "after 2 missed frames with max_missing_frames " + std::to_string(max_missing_frames) +
+            ", the box gets track " + std::to_string(track_id));
+  }
+  return ok;
+}
+
+// The shared model's link drops frames 1 and 2, so the tracker sees frames 0 and 3.
+bool test_dropped_frames_age_a_track() {
+  bool ok = true;
+  for (const auto& [max_missing_frames, track_id] : {std::pair{2, 1}, std::pair{1, 2}}) {
+    TrackerSettings values = settings();
+    values.max_missing_frames = max_missing_frames;
+    ObjectTracker object_tracker(values, kFps);
+    object_tracker.update({box(10, 10, 50, 80)}, pts(0));
+    ok &= expect_true(
+        ids(object_tracker.update({box(10, 10, 50, 80)}, pts(3))) == std::vector{track_id},
+        "after 2 dropped frames with max_missing_frames " + std::to_string(max_missing_frames) +
+            ", the box gets track " + std::to_string(track_id));
   }
   return ok;
 }
 
 bool test_predicted_motion_keeps_a_fast_box_on_its_track() {
-  ObjectTracker object_tracker(settings());
-  object_tracker.update({box(0, 0, 10, 10)}, 0);
+  ObjectTracker object_tracker(settings(), kFps);
+  object_tracker.update({box(0, 0, 10, 10)}, pts(0));
   // 40 px is 2.8 box diagonals, within the 3-diagonal gate, and sets a velocity of 10 px.
-  bool ok = expect_true(ids(object_tracker.update({box(40, 0, 50, 10)}, 1)) == std::vector{1},
+  bool ok = expect_true(ids(object_tracker.update({box(40, 0, 50, 10)}, pts(1))) == std::vector{1},
                         "a box 40 px away continues track 1");
   // 44 px from the last box is 3.1 diagonals, outside the gate. The predicted box is 34 px away,
   // 2.4 diagonals, so the track continues.
-  ok &= expect_true(ids(object_tracker.update({box(84, 0, 94, 10)}, 2)) == std::vector{1},
+  ok &= expect_true(ids(object_tracker.update({box(84, 0, 94, 10)}, pts(2))) == std::vector{1},
                     "the predicted motion keeps the box on track 1");
   return ok;
 }
@@ -151,13 +180,13 @@ bool test_predicted_motion_keeps_a_fast_box_on_its_track() {
 bool test_velocity_takes_a_quarter_of_the_measured_motion() {
   bool ok = true;
   for (const auto& third_box : {box(90, 0, 100, 10), box(10, 0, 20, 10)}) {
-    ObjectTracker object_tracker(settings());
-    object_tracker.update({box(0, 0, 10, 10)}, 0);
-    object_tracker.update({box(40, 0, 50, 10)}, 1);
+    ObjectTracker object_tracker(settings(), kFps);
+    object_tracker.update({box(0, 0, 10, 10)}, pts(0));
+    object_tracker.update({box(40, 0, 50, 10)}, pts(1));
     // The 40 px move sets a velocity of 10 px, so the box is predicted at x 50..60. Both third
     // boxes are 40 px from there, within the 42.4 px gate. A velocity below 7.6 px loses the
     // first, and one above 12.4 px loses the second.
-    ok &= expect_true(ids(object_tracker.update({third_box}, 2)) == std::vector{1},
+    ok &= expect_true(ids(object_tracker.update({third_box}, pts(2))) == std::vector{1},
                       "a box 40 px from the predicted box at x " +
                           std::to_string(static_cast<int>(third_box.x1)) + " continues track 1");
   }
@@ -165,21 +194,21 @@ bool test_velocity_takes_a_quarter_of_the_measured_motion() {
 }
 
 bool test_box_beyond_the_distance_gate_starts_a_new_track() {
-  ObjectTracker object_tracker(settings());
-  object_tracker.update({box(0, 0, 10, 10)}, 0);
+  ObjectTracker object_tracker(settings(), kFps);
+  object_tracker.update({box(0, 0, 10, 10)}, pts(0));
   // 50 px is 3.5 box diagonals from the predicted box, outside the 3-diagonal gate.
-  return expect_true(ids(object_tracker.update({box(50, 0, 60, 10)}, 1)) == std::vector{2},
+  return expect_true(ids(object_tracker.update({box(50, 0, 60, 10)}, pts(1))) == std::vector{2},
                      "a box 50 px away starts track 2");
 }
 
 bool test_track_is_reported_from_its_min_confirmed_hits_th_detection() {
   TrackerSettings values = settings();
   values.min_confirmed_hits = 3;
-  ObjectTracker object_tracker(values);
-  bool ok = expect_true(object_tracker.update({box(0, 0, 10, 10)}, 0).empty() &&
-                            object_tracker.update({box(0, 0, 10, 10)}, 1).empty(),
+  ObjectTracker object_tracker(values, kFps);
+  bool ok = expect_true(object_tracker.update({box(0, 0, 10, 10)}, pts(0)).empty() &&
+                            object_tracker.update({box(0, 0, 10, 10)}, pts(1)).empty(),
                         "the first two detections report no track");
-  ok &= expect_true(ids(object_tracker.update({box(0, 0, 10, 10)}, 2)) == std::vector{1},
+  ok &= expect_true(ids(object_tracker.update({box(0, 0, 10, 10)}, pts(2))) == std::vector{1},
                     "the third detection reports track 1");
   return ok;
 }
@@ -187,15 +216,15 @@ bool test_track_is_reported_from_its_min_confirmed_hits_th_detection() {
 bool test_low_score_detection_continues_only_a_confirmed_track() {
   TrackerSettings values = settings();
   values.min_confirmed_hits = 2;
-  ObjectTracker object_tracker(values);
+  ObjectTracker object_tracker(values, kFps);
   const auto high = box(0, 0, 10, 10, 0.9f);
   const auto low = box(0, 0, 10, 10, 0.2f);
-  bool ok = expect_true(object_tracker.update({high}, 0).empty(), "one hit reports no track");
-  ok &= expect_true(object_tracker.update({low}, 1).empty(),
+  bool ok = expect_true(object_tracker.update({high}, pts(0)).empty(), "one hit reports no track");
+  ok &= expect_true(object_tracker.update({low}, pts(1)).empty(),
                     "a low score cannot confirm the new track");
-  ok &= expect_true(ids(object_tracker.update({high}, 2)) == std::vector{1},
+  ok &= expect_true(ids(object_tracker.update({high}, pts(2))) == std::vector{1},
                     "a second high score confirms track 1");
-  ok &= expect_true(ids(object_tracker.update({low}, 3)) == std::vector{1},
+  ok &= expect_true(ids(object_tracker.update({low}, pts(3))) == std::vector{1},
                     "a confirmed track continues on a low score");
   ok &= expect_true(object_tracker.tracks_started() == 1, "one track started");
   return ok;
@@ -205,22 +234,22 @@ bool test_new_track_needs_new_track_threshold() {
   TrackerSettings values = settings();
   values.high_score_threshold = 0.2;
   values.new_track_threshold = 0.3;
-  ObjectTracker object_tracker(values);
-  bool ok = expect_true(object_tracker.update({box(0, 0, 10, 10, 0.25f)}, 0).empty() &&
+  ObjectTracker object_tracker(values, kFps);
+  bool ok = expect_true(object_tracker.update({box(0, 0, 10, 10, 0.25f)}, pts(0)).empty() &&
                             object_tracker.tracks_started() == 0,
                         "a score below new_track_threshold starts no track");
-  ok &= expect_true(ids(object_tracker.update({box(0, 0, 10, 10, 0.3f)}, 1)) == std::vector{1},
+  ok &= expect_true(ids(object_tracker.update({box(0, 0, 10, 10, 0.3f)}, pts(1))) == std::vector{1},
                     "a score at new_track_threshold starts track 1");
   return ok;
 }
 
 bool test_tracks_stop_at_max_active_tracks() {
-  ObjectTracker object_tracker(settings());
+  ObjectTracker object_tracker(settings(), kFps);
   std::vector<simaai::neat::Box> boxes;
   for (int index = 0; index < 300; ++index) {
     boxes.push_back(box(20.0f * index, 0, 20.0f * index + 10, 10));
   }
-  return expect_true(object_tracker.update(boxes, 0).size() == 256U &&
+  return expect_true(object_tracker.update(boxes, pts(0)).size() == 256U &&
                          drone_tracker::kMaxActiveTracks == 256 &&
                          object_tracker.tracks_started() == 256,
                      "300 boxes start 256 tracks");
@@ -267,6 +296,7 @@ int main() {
   ok &= test_nearby_detection_keeps_its_track_id();
   ok &= test_higher_affinity_wins_then_lower_track_id();
   ok &= test_track_ends_after_max_missing_frames();
+  ok &= test_dropped_frames_age_a_track();
   ok &= test_predicted_motion_keeps_a_fast_box_on_its_track();
   ok &= test_velocity_takes_a_quarter_of_the_measured_motion();
   ok &= test_box_beyond_the_distance_gate_starts_a_new_track();

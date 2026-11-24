@@ -1,20 +1,24 @@
-# YOLO26 tiny-drone tracking of one RTSP stream, shown in Insight.
+# YOLO26 tiny-drone tracking of up to four RTSP streams with one shared model, shown in Insight.
 model:
   # Compiled model package. A relative path starts at this file.
   path: ../../../../../models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
 
 input:
-  source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # The RTSP URL.
-  codec: h264                   # h264 or h265.
-  width: 0                      # 0 reads the stream's frame size and rate with a probe.
-  height: 0                     # Set them only for a stream that does not report them.
+  source:                       # One to four RTSP URLs. Stream i goes to Insight channel i.
+    - <rtsp-url-1>
+    - <rtsp-url-2>
+  codec: h264                   # h264 or h265, for every stream.
+  width: 0                      # 0 reads each stream's frame size and rate with a probe. Every
+  height: 0                     # stream needs the same size. Set them only for a stream that
+                                # does not report them.
   fps: 0
   rtsp:
     tcp: true                   # Receive RTSP over TCP.
     latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0                     # Frames to process before stopping. 0 runs until stopped.
+  frames: 0                     # Frames each stream sends before the app stops. 0 runs until
+                                # stopped.
   min_score: 0.05               # Lowest score a detection needs. Low, so faint drones reach
                                 # the tracker, which needs higher scores to start tracks.
   nms_iou: 0.60                 # Overlap at which NMS drops the weaker box.
@@ -23,8 +27,8 @@ inference:
 output:
   insight:
     host: <insight-host-ip>     # Machine running Insight.
-    video_port_base: 9000       # Insight video port.
-    metadata_port_base: 9100    # Insight metadata port.
+    video_port_base: 9000       # Stream i sends video to this port + i.
+    metadata_port_base: 9100    # Stream i sends tracks to this port + i.
 
 app:
   tracking:
