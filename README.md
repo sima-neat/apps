@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml"><img src="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg" alt="Vulcan CI"></a>
-  <img src="https://img.shields.io/badge/Neat%20Development%20Environment-3.0.1-green" alt="Neat Development Environment 3.0.1">
+  <img src="https://img.shields.io/badge/Palette%20SDK-3.0.1-green" alt="Palette SDK 3.0.1">
   <img src="https://img.shields.io/badge/C%2B%2B-20-informational" alt="C++ 20">
   <img src="https://img.shields.io/badge/Python-3-informational" alt="Python 3">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License Apache 2.0"></a>
@@ -176,7 +176,7 @@ it needs, such as HTTP MJPEG. The DevKit must be able to reach each URL.
 
 ## Build From Source
 
-Build inside the Neat Development Environment:
+Build inside the Palette SDK:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
