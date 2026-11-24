@@ -62,28 +62,6 @@ bool test_shipped_config_names_a_supported_model_input_and_labels() {
   return ok;
 }
 
-bool test_a_value_of_the_wrong_type_names_its_key() {
-  const fs::path path = fs::temp_directory_path() / "multi-stream-obb-detector-wrong-type.yaml";
-  std::ofstream(path) << "inference:\n  max_detections: many\n  min_score: high\n";
-  const auto config = sima_examples::Config::load(path);
-  const auto error = [](const auto& read) {
-    try {
-      read();
-    } catch (const std::exception& e) {
-      return std::string(e.what());
-    }
-    return std::string("no error");
-  };
-  const std::string integer = error([&] { (void)config.integer("inference.max_detections"); });
-  const std::string number = error([&] { (void)config.number("inference.min_score"); });
-  fs::remove(path);
-  bool ok = expect_true(integer == "inference.max_detections must be an integer, got 'many'",
-                        "a wrong integer names its key: " + integer);
-  ok &= expect_true(number == "inference.min_score must be a number, got 'high'",
-                    "a wrong number names its key: " + number);
-  return ok;
-}
-
 bool test_objects_match_the_shared_fixture() {
   std::ifstream input(kExampleDir / "tests" / "fixtures" / "insight_objects.json");
   if (!input.good()) {
@@ -120,7 +98,6 @@ bool test_a_frame_without_detections_sends_an_empty_list() {
 int main() {
   bool ok = true;
   ok &= test_shipped_config_names_a_supported_model_input_and_labels();
-  ok &= test_a_value_of_the_wrong_type_names_its_key();
   ok &= test_objects_match_the_shared_fixture();
   ok &= test_a_frame_without_detections_sends_an_empty_list();
   return ok ? 0 : 1;

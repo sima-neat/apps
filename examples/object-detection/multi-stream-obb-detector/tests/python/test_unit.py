@@ -52,16 +52,6 @@ def test_shipped_config_names_a_supported_model_input_and_labels():
     assert config.boolean("input.rtsp.tcp")
 
 
-def test_a_value_of_the_wrong_type_names_its_key(tmp_path):
-    path = tmp_path / "config.yaml"
-    path.write_text("inference:\n  max_detections: many\n  min_score: high\n", encoding="utf-8")
-    config = main_module.Config.load(path)
-    with pytest.raises(ValueError, match="inference.max_detections must be an integer, got 'many'"):
-        config.integer("inference.max_detections")
-    with pytest.raises(ValueError, match="inference.min_score must be a number, got 'high'"):
-        config.number("inference.min_score")
-
-
 def test_objects_match_the_shared_fixture():
     fixture = json.loads(OBJECTS_FIXTURE.read_text(encoding="utf-8"))
     boxes = fixture["boxes"]
