@@ -1,4 +1,4 @@
-"""Build the object-detection metadata message that Insight draws over the video.
+"""Build the object-detection and tracking metadata messages that Insight draws over the video.
 
 Mirrors `sima_examples::detection_egress` in support/cpp/sima_examples/detection_egress.h,
 so the C++ and Python examples send the same JSON.
@@ -23,6 +23,12 @@ class Box(Protocol):
     y2: float
     score: float
     class_id: int
+
+
+class Track(Box, Protocol):
+    """A tracked detection: a box and the ID its tracker gave it."""
+
+    track_id: int
 
 
 @dataclass(frozen=True)
@@ -63,31 +69,47 @@ def serialize(
     frame_h: int,
     frame: FrameMetadata,
 ) -> str:
-    objects = []
-    for index, box in enumerate(boxes, start=1):
-        x1 = max(0, int(box.x1))
-        y1 = max(0, int(box.y1))
-        width = min(max(0, int(box.x2 - box.x1)), frame_w - x1)
-        height = min(max(0, int(box.y2 - box.y1)), frame_h - y1)
-        label = (
-            labels[box.class_id] if 0 <= box.class_id < len(labels) else UNKNOWN_LABEL
-        )
-        objects.append(
-            {
-                "id": f"obj_{index}",
-                "label": label,
-                "confidence": box.score,
-                "bbox": [
-                    float(x1),
-                    float(y1),
-                    float(max(0, width)),
-                    float(max(0, height)),
-                ],
-            }
-        )
+    """The object-detection message: each box with its label, numbered obj_1, obj_2, and so on."""
+    objects = [
+        _entry(f"obj_{index}", box, labels, frame_w, frame_h)
+        for index, box in enumerate(boxes, start=1)
+    ]
+    return _message("object-detection", {"objects": objects}, frame)
 
+
+def serialize_tracks(
+    tracks: Iterable[Track],
+    labels: list[str],
+    frame_w: int,
+    frame_h: int,
+    frame: FrameMetadata,
+) -> str:
+    """The tracking message: each box with its label and its track ID, which Insight colors and
+    draws with a trail."""
+    entries = [
+        _entry(str(track.track_id), track, labels, frame_w, frame_h) for track in tracks
+    ]
+    return _message("tracking", {"tracks": entries}, frame)
+
+
+def _entry(entry_id: str, box: Box, labels: list[str], frame_w: int, frame_h: int) -> dict:
+    """One box as Insight reads it: [x, y, width, height] in frame pixels, clamped to the frame."""
+    x1 = max(0, int(box.x1))
+    y1 = max(0, int(box.y1))
+    width = min(max(0, int(box.x2 - box.x1)), frame_w - x1)
+    height = min(max(0, int(box.y2 - box.y1)), frame_h - y1)
+    label = labels[box.class_id] if 0 <= box.class_id < len(labels) else UNKNOWN_LABEL
+    return {
+        "id": entry_id,
+        "label": label,
+        "confidence": box.score,
+        "bbox": [float(x1), float(y1), float(max(0, width)), float(max(0, height))],
+    }
+
+
+def _message(metadata_type: str, data: dict, frame: FrameMetadata) -> str:
     payload = {
-        "type": "object-detection",
+        "type": metadata_type,
         "timestamp": frame.pts_ns // 1_000_000 if frame.pts_ns >= 0 else -1,
         "frame_id": str(frame.frame_id) if frame.frame_id >= 0 else "",
         "stream_id": frame.stream_id,
@@ -97,7 +119,7 @@ def serialize(
         "duration_ns": frame.duration_ns,
         "input_seq": frame.input_seq,
         "orig_input_seq": frame.orig_input_seq,
-        "data": {"objects": objects},
+        "data": data,
     }
     if frame.rtp_timestamp is not None:
         payload["rtp_timestamp"] = frame.rtp_timestamp
