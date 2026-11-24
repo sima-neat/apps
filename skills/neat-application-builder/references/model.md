@@ -45,10 +45,14 @@ When the user names a model, look for a compiled package in the
     carries none, `YoloV26` skips NMS and the other decoders suppress every overlapping box. The
     high-density example sets `0.60` for `YoloV26` explicitly. Set an explicit value, such as
     `0.45`, for any decoder that runs NMS.
-- Oriented boxes: `YoloV26Obb` requires `nms_iou_threshold = 0` and a positive `top_k`.
+- Oriented boxes: `YoloV26Obb` requires `nms_iou_threshold = 0` and a positive `top_k`. A
+  nonzero threshold fails the build with `YOLO26-OBB does not support per-tile NMS`.
   `YoloV8Obb`, used for YOLOv8 and YOLO11 oriented boxes, runs NMS and needs a nonzero
-  threshold. The `object-detection/multi-stream-obb-detector` example switches both values with
-  its model family.
+  threshold. The `object-detection/multi-stream-obb-detector` example picks the decoder from its
+  model family and sets the threshold only for `YoloV8Obb`.
+- Oriented boxes need one scale on both axes. They work when the stream, scaled to the model
+  input, has whole-pixel sides, as 16:9 sizes do. 640x512 scales to 1024x819.2 and fails with
+  `oriented boxes require equal authoritative affine scales`.
 - `BoxDecodeType::Ssd` selects the supported prepared SSD recipes. It does not infer a decoder
   from tensor shapes.
 

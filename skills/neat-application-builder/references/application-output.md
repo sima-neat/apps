@@ -12,6 +12,8 @@ setup belongs to the Insight documentation or the installed Insight skill.
 - `VideoSenderOptions::Passthrough(codec)` forwards encoded H.264, H.265, or MJPEG without
   re-encoding. Pass the `RtspCodec` the source uses, the same one as
   `RtspEncodedInputOptions::codec`. Insight plays MJPEG in releases after v0.0.8.
+- MJPEG goes out as RTP/JPEG, so each side must be a multiple of 8, at most 2040 pixels, such
+  as 1280x720. Another size fails the sender, with `Passthrough` and `FromRaw` alike.
 - `VideoSenderOptions::FromRaw(SimaEncodeOptions{...})` encodes decoded frames at their input
   resolution, as H.264 by default. It replaces the deprecated `H264RtpUdpFromRaw`.
 - Set `host`, `channel`, and `video_port_base`. The sender uses port `video_port_base + channel`,

@@ -49,7 +49,8 @@ option and show each default. Set only the options whose default does not fit. C
   them to the stream's own size and rate. The model's preprocessing resizes later.
 - `next_element` selects the decoder's downstream consumer, `"CVU"` or `"APU"`. The
   high-density example sets `"CVU"`, where its frames go to the model's EV74 preprocessing.
-  `decoder_name` only overrides the element name.
+  `decoder_name` names the element and its output buffer. The model's preprocessing reads the
+  buffer named by `Model::Options::upstream_name`, `"decoder"` by default.
 - `num_buffers`, `input_buffers`, `decoder_tuning`, and `memory_opt` trade memory for
   throughput. The high-density example sets all four for many streams, and the RF-DETR example
   raises only `num_buffers` (to 32) for MJPEG. The `neat-application-optimizer` skill's tuning
