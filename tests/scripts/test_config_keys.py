@@ -27,7 +27,6 @@ TYPE_CHECKS = {
 # request that converts it (#770).
 PENDING_EXAMPLES = {
     "depth-estimator",
-    "detection-to-vlm-assistant",
     "detr-object-detector",
     "efficientsam3-promptable-segmenter",
     "face-detector",
