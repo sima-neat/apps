@@ -27,6 +27,14 @@ When the user names a model, look for a compiled package in the
   with (`COCO_YOLO` for YOLO, `ImageNet` for RF-DETR). The default `enable` is `Auto`, and both
   reference examples set `On`. The model's preprocessing then resizes and converts each NV12
   frame on the EV74, so the decoder can hand it frames at the stream's own size.
+- **Images the application decodes itself,** such as an OpenCV `cv::Mat` or a NumPy array:
+  set `preprocess.kind = InputKind::Image`, `preprocess.color_convert.input_format` to the
+  image's pixel order (`BGR` for OpenCV), and the normalization the model was trained with,
+  through `preprocess.preset` (`COCO_YOLO` for YOLO detection and pose models, `ImageNet` for
+  ImageNet-trained models) or explicit `preprocess.normalize` values. Neat never takes
+  normalization from the model package, so without either setting the MLA receives raw pixel
+  values. That gives no error, only lower accuracy, so confirm that
+  `resolved_preprocess_plan().effective.normalize.enable` is `On`.
 - **Tensors that already match `input_specs()`:** leave preprocessing unset. The archive's
   Cast, Quant, and Tess adapters stay automatic, and `preprocess.enable = Off` does not select
   MLA-only execution. Core's `model.mdx` covers raw tensor input.

@@ -32,10 +32,12 @@ the public APIs. The project's own rules decide layout, configuration, and packa
    multi-stage patterns: `object-detection/high-density-multi-stream-object-detector` runs many
    RTSP streams on one shared model, and `object-detection/rfdetr-detection-segmentation` runs
    two models with host work between them. Where an example and the installed headers
-   disagree, follow the headers. Done when the starting code is open and either matches the
-   installed Core (it came from the image's `/neat-resources/apps-src`, or from
-   `sima-cli neat install apps`, which installs the Core it needs) or every API it calls has
-   passed the step 1 check.
+   disagree, follow the headers. Read example code to adapt it: the application builds only
+   against the installed Neat Library's headers and Python bindings, and never compiles,
+   includes, or imports an example's source by path. Done when the starting code is open and
+   either matches the installed Core (it came from the image's `/neat-resources/apps-src`, or
+   from `sima-cli neat install apps`, which installs the Core it needs) or every API it calls
+   has passed the step 1 check.
 
 3. **Choose the API shape.** Classic models load a compiled model archive
    (`*_mpk.tar.gz`), not ONNX. GenAI models load a deployed LLiMa model directory.
