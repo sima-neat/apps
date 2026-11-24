@@ -34,17 +34,23 @@ target_link_libraries(neat_app PRIVATE SimaNeat::sima_neat)
 Configure and build with no toolchain file:
 
 ```bash
+printenv SYSROOT CXX   # Palette SDK: /opt/toolchain/aarch64/modalix, aarch64-linux-gnu-g++
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-In the Palette SDK, the shell's `SYSROOT`, `CC`, `CXX`, `CXXFLAGS`, and `LDFLAGS` select the
-ARM64 cross compiler and the Modalix sysroot. Do not pass the Apps repository's
+In the Palette SDK, a login shell exports `SYSROOT`, `CC`, `CXX`, `CXXFLAGS`, `LDFLAGS`, and
+the pkg-config sysroot settings, which select the ARM64 cross compiler and the Modalix
+sysroot. CMake reads them only on the first configure of a `build` directory. When `printenv`
+prints nothing, the shell is not a login shell: run `rm -rf build`, then run the commands
+through `bash -lc '...'`. A `build` directory first configured without them keeps the host
+compiler and fails to build. Do not pass the Apps repository's
 `cmake/toolchains/aarch64-modalix.cmake` from `/neat-resources/apps-src`: it exists only in
 Core-bundled images. The build is correct when `file build/neat_app` reports ARM aarch64,
 `SimaNeat_DIR` in `build/CMakeCache.txt` points under `$SYSROOT`, and the
 `libsima_neat.so.<abi>` that `readelf -d build/neat_app | grep NEEDED` shows matches the
-DevKit's installed library.
+DevKit's installed library. Any architecture other than ARM aarch64 means the cross compiler
+was not used: run `rm -rf build` and configure again from a login shell.
 
 ## Python import
 

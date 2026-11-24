@@ -58,8 +58,9 @@ the public APIs. The project's own rules decide layout, configuration, and packa
    and closes every `Run` and `Model::Runner` on every exit path. For
    Insight video and metadata or a local window, read
    [application output](references/application-output.md). For Docker, read
-   [containers](references/containers.md). Done when the application builds against the
-   installed headers (C++), or, in Python, when every options object it uses has been
+   [containers](references/containers.md). For the C++ CMake file and the configure and build
+   commands, read the C++ build section of [validation](references/validation.md). Done when
+   the application builds against the installed headers (C++), or, in Python, when every options object it uses has been
    constructed and every field set on the target without an error. An import alone does not
    check attribute names. Check them with a short script that builds the options and graph
    objects, or with `dir()` and `help()` on each object.
