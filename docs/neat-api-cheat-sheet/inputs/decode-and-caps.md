@@ -172,6 +172,7 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
 - [rfdetr-detection-segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/) (`num_buffers` for MJPEG)
 - [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/) (`SimaDecode` MJPEG after `UsbCameraInput`)
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`num_buffers`)
+- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/) (`SimaDecode` after `RtspEncodedInput`)
 
 ## Source
 

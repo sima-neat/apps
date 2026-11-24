@@ -29,8 +29,8 @@ simaai::neat::Box box(float x1, float y1, float x2, float y2, float score = 0.9f
 
 TrackerSettings settings() {
   TrackerSettings values;
-  values.high_score_threshold = 0.5f;
-  values.new_track_threshold = 0.5f;
+  values.high_score_threshold = 0.5;
+  values.new_track_threshold = 0.5;
   values.max_missing_frames = 30;
   values.min_confirmed_hits = 1;
   return values;
@@ -54,8 +54,8 @@ bool test_shipped_config_is_usable() {
   ok &= expect_true(model_path.filename() == "yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz",
                     "model.path names the tiny-drone package");
   // The packaged path reaches prebuilt-apps/models from the config file.
-  ok &= expect_true(fs::weakly_canonical(model_path).parent_path() ==
-                        fs::weakly_canonical(fs::path("models")),
+  ok &= expect_true(fs::absolute(model_path).lexically_normal().parent_path() ==
+                        fs::absolute("models").lexically_normal(),
                     "model.path reaches models/ from the config file");
   ok &= expect_true(
       config.integer("input.width") >= 0 && config.integer("input.height") >= 0 &&
@@ -166,8 +166,8 @@ bool test_low_score_detection_continues_only_a_confirmed_track() {
 
 bool test_new_track_needs_new_track_threshold() {
   TrackerSettings values = settings();
-  values.high_score_threshold = 0.2f;
-  values.new_track_threshold = 0.3f;
+  values.high_score_threshold = 0.2;
+  values.new_track_threshold = 0.3;
   ObjectTracker object_tracker(values);
   bool ok = expect_true(object_tracker.update({box(0, 0, 10, 10, 0.25f)}, 0).empty() &&
                             object_tracker.tracks_started() == 0,

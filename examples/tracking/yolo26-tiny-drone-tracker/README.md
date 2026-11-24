@@ -59,7 +59,8 @@ Insight colors each track by its ID and draws its trail.
 The tracker matches boxes in two passes. First, a box at or above `app.tracking.high_score_threshold` can continue any track.
 Then a box with a lower score can continue only a confirmed track.
 An unmatched box at or above `app.tracking.new_track_threshold` starts a new track.
-A track is confirmed after `app.tracking.min_confirmed_hits` matches, and only confirmed tracks go to Insight.
+A track is confirmed at its `app.tracking.min_confirmed_hits`-th detection, counting the one that started it.
+Only confirmed tracks go to Insight.
 A tiny box rarely overlaps its previous position, so the tracker also matches by the distance to the position its velocity predicts.
 Track IDs start at 1 and are local to the stream.
 
@@ -72,6 +73,7 @@ Track IDs start at 1 and are local to the stream.
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 - An H.264 or H.265 RTSP stream that shows small drones against the sky, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
   The Insight video catalog has no drone video, so you provide one.
+- For H.265, a computer whose browser decodes HEVC in hardware to view Insight. Chromium has no software decoder for WebRTC H.265.
 
 ## Install Apps
 

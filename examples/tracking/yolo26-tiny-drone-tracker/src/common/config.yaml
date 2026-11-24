@@ -32,4 +32,4 @@ app:
                                 # score only continues a confirmed track.
     new_track_threshold: 0.30   # Score an unmatched detection needs to start a track.
     max_missing_frames: 30      # Frames a track survives without a match.
-    min_confirmed_hits: 2       # Matches before a track is sent to Insight.
+    min_confirmed_hits: 2       # Detections, counting the first, before a track goes to Insight.

@@ -28,10 +28,11 @@ constexpr double kVelocityMomentum = 0.75;
 constexpr int kMaxActiveTracks = 256;
 
 struct TrackerSettings {
-  float high_score_threshold = 0.0f; // Score that lets a detection start or confirm a track.
-  float new_track_threshold = 0.0f;  // Score an unmatched detection needs to start a track.
+  // Doubles, as Python reads them, so a score at a threshold falls on the same side in both.
+  double high_score_threshold = 0.0; // Score that lets a detection start or confirm a track.
+  double new_track_threshold = 0.0;  // Score an unmatched detection needs to start a track.
   int max_missing_frames = 0;        // Frames a track survives without a match.
-  int min_confirmed_hits = 0;        // Matches before a track is reported.
+  int min_confirmed_hits = 0;        // Detections, counting the first, before it is reported.
 };
 
 // A detection of this frame and the ID of the track it belongs to.

@@ -78,7 +78,12 @@ class GreedyIouCandidate:
 
 
 class GreedyCvCandidate:
-    """Drone-tracker matcher with its fixed match gates, one instance per class."""
+    """Drone-tracker matcher, one instance per class.
+
+    It uses the drone tracker's fixed gates: IoU 0.05 or center distance 3.0, momentum 0.75.
+    Before the tracker's conversion (#785) this candidate was IoU-only at 0.30, momentum 0.80,
+    so earlier greedy_cv results do not reproduce.
+    """
 
     def __init__(self, class_ids: list[int]) -> None:
         module = _load_module(

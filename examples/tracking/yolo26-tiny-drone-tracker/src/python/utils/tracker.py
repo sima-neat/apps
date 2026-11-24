@@ -42,7 +42,7 @@ class TrackerSettings:
     high_score_threshold: float  # Score that lets a detection start or confirm a track.
     new_track_threshold: float  # Score an unmatched detection needs to start a track.
     max_missing_frames: int  # Frames a track survives without a match.
-    min_confirmed_hits: int  # Matches before a track is reported.
+    min_confirmed_hits: int  # Detections, counting the first, before a track is reported.
 
 
 @dataclass(frozen=True)
