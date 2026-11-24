@@ -39,8 +39,12 @@ constexpr const char* kExampleName = "yolo26-tiny-drone-tracker";
 constexpr int kFrames = 150;
 // Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 constexpr double kMinScore = 0.1;
-// Each stream's results per second. Not verified on a DevKit yet.
-constexpr double kMinStreamResultsPerS = 20.0;
+// Each stream's results per second, about 80% of Vulcan CI run 45412976943 on f4f0e59 (Modalix
+// devkit-3 and devkit-8, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources).
+// With one or two streams, each stream gave 24.7 to 25.2, the source's rate. With four, each gave
+// 12.8 to 12.9, about 51 in all, which is what the model gives.
+constexpr double kMinResultsPerS = 20.0;
+constexpr double kMinFourStreamResultsPerS = 10.0;
 
 using Clock = std::chrono::steady_clock;
 
@@ -119,7 +123,8 @@ bool pairs(std::int64_t timestamp_ms, const std::set<std::uint32_t>& rtp_timesta
 }
 
 int run_case(const std::string& binary, const std::string& model_path,
-             const MultiStreamSourceCase& source_case, int streams, const std::string& label) {
+             const MultiStreamSourceCase& source_case, int streams, double min_results_per_s,
+             const std::string& label) {
   const std::string output_dir = create_test_output_dir(
       kExampleName, "test_streams_reach_their_insight_channels_as_video_and_tracks_" + label);
   if (output_dir.empty()) {
@@ -262,7 +267,10 @@ int run_case(const std::string& binary, const std::string& model_path,
       previous_frame_id = frame_id;
       // These checks cover the tracks the run sent. A stream without drones sends none, and the
       // count printed below shows how many there were.
-      for (const auto& track : nlohmann::json::parse(message.payload).at("data").at("tracks")) {
+      // Named, because before C++23 a range-for over a member of a temporary reads it after the
+      // temporary is destroyed.
+      const auto payload = nlohmann::json::parse(message.payload);
+      for (const auto& track : payload.at("data").at("tracks")) {
         const double confidence = track.at("confidence").get<double>();
         const int id = std::stoi(track.at("id").get<std::string>());
         if (track.at("label") != "drone" || confidence < kMinScore || confidence > 1.0 || id < 1 ||
@@ -298,7 +306,7 @@ int run_case(const std::string& binary, const std::string& model_path,
     const double results_per_s = static_cast<double>(times.size() - first - 1) / seconds;
     std::cout << label << " " << stream << ": " << messages << " messages, " << results_per_s
               << " results/s, " << tracks << " tracks in " << tracks_started << " track IDs\n";
-    if (results_per_s < kMinStreamResultsPerS) {
+    if (results_per_s < min_results_per_s) {
       problems.push_back(stream + ": " + std::to_string(results_per_s) + " results/s");
     }
   }
@@ -331,23 +339,24 @@ int main(int argc, char** argv) {
   const MultiStreamSourceCase h264{"h264", rtsp_h264_urls_from_env()};
   const MultiStreamSourceCase h265{"h265", rtsp_h265_urls_from_env()};
   // With one source, Core names the samples after the decoder instead of the stream.
-  const std::vector<std::tuple<MultiStreamSourceCase, int, std::string>> cases = {
-      {h264, 2, "h264"},
-      {h265, 2, "h265"},
-      {h264, 1, "h264-one-stream"},
-      {h264, 4, "h264-four-streams"}};
+  const std::vector<std::tuple<MultiStreamSourceCase, int, double, std::string>> cases = {
+      {h264, 2, kMinResultsPerS, "h264"},
+      {h265, 2, kMinResultsPerS, "h265"},
+      {h264, 1, kMinResultsPerS, "h264-one-stream"},
+      {h264, 4, kMinFourStreamResultsPerS, "h264-four-streams"}};
   int cases_run = 0;
-  for (const auto& [source_case, streams, label] : cases) {
+  for (const auto& [source_case, streams, min_results_per_s, label] : cases) {
     const int needed = streams == 4 ? 1 : streams;
     if (source_case.urls.size() < static_cast<std::size_t>(needed)) {
       record_unavailable_case("SIMANEAT_TEST_RTSP_" +
                                   std::string(source_case.codec == "h264" ? "H264" : "H265") +
-                                  "_URLS needs " + std::to_string(needed) + " URLs for " + label,
+                                  "_URLS needs " + std::to_string(needed) + " URL(s) for " + label,
                               "not enough " + source_case.codec + " URLs for " + label, rc);
       continue;
     }
     ++cases_run;
-    if (run_case(binary, model_paths.front(), source_case, streams, label) != 0) {
+    if (run_case(binary, model_paths.front(), source_case, streams, min_results_per_s, label) !=
+        0) {
       rc = 1;
     }
   }

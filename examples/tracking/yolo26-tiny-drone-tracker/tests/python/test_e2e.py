@@ -23,19 +23,23 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 FRAMES = 150
 # Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 MIN_SCORE = 0.1
-# Each stream's results per second. Not verified on a DevKit yet.
-MIN_STREAM_RESULTS_PER_S = 20.0
+# Each stream's results per second, about 80% of Vulcan CI run 45412976943 on f4f0e59 (Modalix
+# devkit-3 and devkit-8, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources).
+# With one or two streams, each stream gave 24.7 to 25.2, the source's rate. With four, each gave
+# 12.8 to 12.9, about 51 in all, which is what the model gives.
+MIN_RESULTS_PER_S = 20.0
+MIN_FOUR_STREAM_RESULTS_PER_S = 10.0
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
 
 CASES = [
-    pytest.param("h264", 2, id="h264"),
-    pytest.param("h265", 2, id="h265"),
+    pytest.param("h264", 2, MIN_RESULTS_PER_S, id="h264"),
+    pytest.param("h265", 2, MIN_RESULTS_PER_S, id="h265"),
     # With one source, Core names the samples after the decoder instead of the stream.
-    pytest.param("h264", 1, id="h264-one-stream"),
+    pytest.param("h264", 1, MIN_RESULTS_PER_S, id="h264-one-stream"),
     # Four streams of the first URL: the most the README lists. From three streams on, Core's
     # default in-flight total of 8 is below 4 per stream.
-    pytest.param("h264", 4, id="h264-four-streams"),
+    pytest.param("h264", 4, MIN_FOUR_STREAM_RESULTS_PER_S, id="h264-four-streams"),
 ]
 
 
@@ -64,11 +68,12 @@ def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize(("codec", "streams"), CASES)
+@pytest.mark.parametrize(("codec", "streams", "min_results_per_s"), CASES)
 def test_streams_reach_their_insight_channels_as_video_and_tracks(
     request,
     codec,
     streams,
+    min_results_per_s,
     e2e_model_path,
     tmp_output_dir,
     test_timeout_ms,
@@ -80,7 +85,7 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         urls = urls[:1] * 4
     needed = 1 if streams == 4 else streams
     skip_unless_e2e_ready(
-        len(urls) >= needed, f"SIMANEAT_TEST_RTSP_{codec.upper()}_URLS needs {needed} URLs"
+        len(urls) >= needed, f"SIMANEAT_TEST_RTSP_{codec.upper()}_URLS needs {needed} URL(s)"
     )
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
     video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
@@ -219,6 +224,6 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
             f"{codec} stream {index}: {len(stream_messages)} messages, "
             f"{results_per_s:.1f} results/s, {len(tracks)} tracks in {tracks_started} track IDs"
         )
-        assert results_per_s >= MIN_STREAM_RESULTS_PER_S, (
+        assert results_per_s >= min_results_per_s, (
             f"stream {index}: {results_per_s:.1f} results/s"
         )
