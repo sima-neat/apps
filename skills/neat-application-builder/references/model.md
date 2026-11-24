@@ -27,6 +27,14 @@ When the user names a model, look for a compiled package in the
   with (`COCO_YOLO` for YOLO, `ImageNet` for RF-DETR). The default `enable` is `Auto`, and both
   reference examples set `On`. The model's preprocessing then resizes and converts each NV12
   frame on the EV74, so the decoder can hand it frames at the stream's own size.
+- **Images the application decodes itself,** such as an OpenCV `cv::Mat` or a NumPy array:
+  set `preprocess.kind = InputKind::Image`, `preprocess.color_convert.input_format` to the
+  image's pixel order (`BGR` for OpenCV), and the normalization the model was trained with,
+  through `preprocess.preset` (`COCO_YOLO` for YOLO detection and pose models, `ImageNet` for
+  ImageNet-trained models) or explicit `preprocess.normalize` values. Neat never takes
+  normalization from the model package, so without either setting the MLA receives raw pixel
+  values. That gives no error, only lower accuracy, so confirm that
+  `resolved_preprocess_plan().effective.normalize.enable` is `On`.
 - **Tensors that already match `input_specs()`:** leave preprocessing unset. The archive's
   Cast, Quant, and Tess adapters stay automatic, and `preprocess.enable = Off` does not select
   MLA-only execution. Core's `model.mdx` covers raw tensor input.
@@ -45,6 +53,33 @@ When the user names a model, look for a compiled package in the
     carries none, `YoloV26` skips NMS and the other decoders suppress every overlapping box. The
     high-density example sets `0.60` for `YoloV26` explicitly. Set an explicit value, such as
     `0.45`, for any decoder that runs NMS.
+- `decode_type_option` (`BoxDecodeTypeOption` in `pipeline/BoxDecodeType.h`) sets how the head
+  tensors are arranged and whether class scores are logits or probabilities. The default,
+  `Auto`, decides the score form only when the package's tensor names or score activation
+  declare it. When neither does, the scores can be read in the wrong form. The values (Python:
+  `pyneat.BoxDecodeTypeOption.<name>`):
+
+  | Value | Head layout and score form it forces |
+  |---|---|
+  | `Auto` | Taken from the package's tensor contract (default) |
+  | `PackedPerHead` | One tensor per head holds box, objectness, and classes |
+  | `InterleavedByHead` | Tensors alternate by head: box and class of head 1, then head 2 |
+  | `GroupedByRole` | All box tensors, then all class tensors |
+  | `Split3Interleaved` | Three split tensors, alternating by head |
+  | `Split3Grouped` | Three split tensors, grouped by role |
+  | `InterleavedByHeadProbability` | `InterleavedByHead`, class scores already probabilities |
+  | `InterleavedByHeadLogit` | `InterleavedByHead`, class scores as logits (before sigmoid) |
+  | `GroupedByRoleProbability` | `GroupedByRole`, class scores already probabilities |
+  | `GroupedByRoleLogit` | `GroupedByRole`, class scores as logits (before sigmoid) |
+
+  - A decoded score above 1 means the decoder read logits as probabilities. Set the matching
+    `...Logit` option, for example `GroupedByRoleLogit` for a YOLOv8 pose package with separate
+    box, score, and keypoint heads.
+  - Do not clamp scores into [0, 1]. The score threshold is still compared with logits, so a
+    clamp only hides the wrong option and drops correct detections.
+- Pose decoders: choose by the box heads in `output_specs()`. 64-channel DFL box heads mean
+  `YoloV8Pose`, and 4-channel l/t/r/b box heads mean `YoloV26Pose`. `YoloV26Pose` on a YOLOv8
+  package returns valid-looking scores and wrong boxes.
 - Oriented boxes: `YoloV26Obb` requires `nms_iou_threshold = 0` and a positive `top_k`. A
   nonzero threshold fails the build with `YOLO26-OBB does not support per-tile NMS`.
   `YoloV8Obb`, used for YOLOv8 and YOLO11 oriented boxes, runs NMS and needs a nonzero
