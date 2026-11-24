@@ -3,7 +3,8 @@
 
 Candidates:
   greedy_iou   The previous multi-stream-people-tracker matcher (no motion model).
-  greedy_cv    Greedy IoU with constant-velocity prediction (yolo26-tiny-drone-tracker).
+  greedy_cv    IoU and center distance with constant-velocity prediction
+               (yolo26-tiny-drone-tracker).
   bytetrack    This example's per-class ByteTrack-style tracker.
 
 Inputs:
@@ -27,6 +28,7 @@ import json
 from pathlib import Path
 import random
 import sys
+from types import SimpleNamespace
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[1]
 TRACKING_DIR = EXAMPLE_DIR.parent
@@ -76,26 +78,29 @@ class GreedyIouCandidate:
 
 
 class GreedyCvCandidate:
-    """Drone-tracker matcher with its defaults, one instance per class."""
+    """Drone-tracker matcher with its fixed match gates, one instance per class."""
 
     def __init__(self, class_ids: list[int]) -> None:
         module = _load_module(
             "drone_tracker",
             TRACKING_DIR / "yolo26-tiny-drone-tracker" / "src" / "python" / "utils" / "tracker.py",
         )
-        config = module.TrackerConfig(
+        settings = module.TrackerSettings(
             high_score_threshold=0.30,
             new_track_threshold=0.30,
-            match_iou_threshold=0.30,
             max_missing_frames=15,
+            min_confirmed_hits=1,
         )
-        self.trackers = {cid: module.ObjectTracker(config) for cid in class_ids}
+        self.trackers = {cid: module.ObjectTracker(settings) for cid in class_ids}
         self._offset = {cid: i * 1_000_000 for i, cid in enumerate(class_ids)}
 
     def update(self, dets: list[dict], frame: int):
         out = []
         for cid, tracker in self.trackers.items():
-            own = [d for d in dets if d["class_id"] == cid and d["score"] >= 0.10]
+            # The drone tracker reads boxes as objects, such as pyneat.detections.Box.
+            own = [
+                SimpleNamespace(**d) for d in dets if d["class_id"] == cid and d["score"] >= 0.10
+            ]
             for t in tracker.update(own, frame):
                 out.append(((t.x1, t.y1, t.x2, t.y2), t.track_id + self._offset[cid], cid))
         return out

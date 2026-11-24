@@ -1,53 +1,35 @@
+# YOLO26 tiny-drone tracking of one RTSP stream, shown in Insight.
 model:
-  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
-
-streams:
-  - <tiny-drone-rtsp-url>
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
 
 input:
-  codec: h264
-  tcp: true
-  latency_ms: 100
-
-runtime:
-  profile: true
-  warmup_frames: 30
+  source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # The RTSP URL.
+  codec: h264                   # h264 or h265.
+  width: 0                      # 0 reads the stream's frame size and rate with a probe.
+  height: 0                     # Set them only for a stream that does not report them.
+  fps: 0
+  rtsp:
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0
-  fps: 0                       # Output/inference FPS; 0 keeps the source rate.
-  max_inflight_per_stream: 4
-  max_inflight_total: 4
-  num_classes: 1
-  target_class_id: 0
-  target_label: drone
-  min_score: 0.05
-  nms_iou: 0.60
-  max_detections: 100
-
-tracking:
-  high_score_threshold: 0.20
-  new_track_threshold: 0.30
-  match_iou_threshold: 0.05
-  center_distance_enabled: true
-  max_center_distance: 3.0
-  velocity_momentum: 0.75
-  max_missing_frames: 30
-  min_confirmed_hits: 2
-  max_active_tracks: 256
+  frames: 0                     # Frames to process before stopping; 0 runs until stopped.
+  min_score: 0.05               # Lowest score a detection needs; low, so faint drones reach
+                                # the tracker, which confirms tracks at higher scores.
+  nms_iou: 0.60                 # Overlap at which NMS drops the weaker box.
+  max_detections: 100           # Boxes kept per frame.
 
 output:
   insight:
-    host: <insight-host-ip>
-    video_port_base: 9000
-    metadata_port_base: 9100
-  video_enabled: true
-  debug_dir: null
-  save_every: 0
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Insight video port.
+    metadata_port_base: 9100    # Insight metadata port.
 
-# Test harness settings only. Normal example runs ignore this section.
-testing:
-  e2e:
-    output:
-      save_every: 10
-      total_saved_frames: 20
+app:
+  tracking:
+    high_score_threshold: 0.20  # Score that lets a detection start or confirm a track. A lower
+                                # score only continues a confirmed track.
+    new_track_threshold: 0.30   # Score an unmatched detection needs to start a track.
+    max_missing_frames: 30      # Frames a track survives without a match.
+    min_confirmed_hits: 2       # Matches before a track is sent to Insight.

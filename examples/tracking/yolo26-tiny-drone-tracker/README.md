@@ -14,12 +14,54 @@
 
 ## Concept
 
-Track tiny drones across up to four RTSP streams with YOLO26 and publish
-annotated video plus per-stream tracking metadata to Insight.
+Tracks tiny drones in one RTSP stream with YOLO26 and sends the video and each drone's track to Insight.
 
-The tracker combines high-confidence association, low-confidence recovery, and
-bounded motion matching so small, fast-moving detections can retain stable
-per-stream IDs.
+```text
+How does a frame move through yolo26-tiny-drone-tracker?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                                 ┆
+┆  ┌──────────────────────┐  H.264 or H.265    ┌──────────────────┐   ┆
+┆  │ RtspEncodedInput     │───────────────────►│ VideoSender      │───┼─────┐
+┆  └──────────────────────┘  as received       └──────────────────┘   ┆     │
+┆             │ encoded frames                                        ┆     │ video
+┆             ▼                                                       ┆     │
+┆  ┌──────────────────────┐                                           ┆     │
+┆  │ SimaDecode           │                                           ┆     │
+┆  └──────────────────────┘                                           ┆     │
+┆             │ NV12 frames                                           ┆     │
+┆             ▼                                                       ┆     │
+┆  ┌──────────────────────┐                                           ┆     │
+┆  │ YOLO26 Model         │                                           ┆     │
+┆  └──────────────────────┘                                           ┆     │
+┆             │ BBOX tensor                                           ┆     │
+┆             ▼                                                       ┆     │
+┆  ┌──────────────────────┐                                           ┆     │
+┆  │ Output "detections"  │                                           ┆     │
+┆  └──────────────────────┘                                           ┆     │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯     │
+              ▼ pull, decode_bbox_tensor                                    │
+   ┌──────────────────────┐                                                 │
+   │ ObjectTracker        │                                                 │
+   └──────────────────────┘                                                 │
+              │ boxes with track IDs                                        │
+              ▼                                                             ▼
+   ┌──────────────────────┐   tracks as JSON                          ┌───────────┐
+   │ MetadataSender       │──────────────────────────────────────────►│ Insight   │
+   └──────────────────────┘                                           └───────────┘
+```
+
+The encoded stream goes to Insight as received, while the decoder feeds the model.
+The application pulls each frame's boxes, and `ObjectTracker` gives every drone an ID that lasts across frames.
+Each tracking message carries the frame's timestamp, so Insight draws the tracks on the frame they came from.
+Insight colors each track by its ID and draws its trail.
+
+The tracker matches boxes in two passes. First, a box at or above `app.tracking.high_score_threshold` can continue any track.
+Then a box with a lower score can continue only a confirmed track.
+An unmatched box at or above `app.tracking.new_track_threshold` starts a new track.
+A track is confirmed after `app.tracking.min_confirmed_hits` matches, and only confirmed tracks go to Insight.
+A tiny box rarely overlaps its previous position, so the tracker also matches by the distance to the position its velocity predicts.
+Track IDs start at 1 and are local to the stream.
 
 ## Preview
 
@@ -27,15 +69,9 @@ per-stream IDs.
 
 ## Prerequisites
 
-- `sima-cli` 2.1.15 or newer
-  ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the
-  Modalix DevKit, or in a Neat SDK container paired with it.
-- One or more H.264 or H.265 RTSP sources and an
-  [Insight](https://developer.sima.ai/software/tools/insight/) endpoint
-  reachable from the target.
-- For H.265, the computer running the Insight viewer must support hardware
-  HEVC decoding; Chromium does not provide a software decoder fallback for
-  WebRTC H.265.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
+- An H.264 or H.265 RTSP stream that shows small drones against the sky, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+  The Insight video catalog has no drone video, so you provide one.
 
 ## Install Apps
 
@@ -53,7 +89,7 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Download the tested SDK 3.0.0 model artifact:
+The drone detector is not in the model browser yet. Download it from the Model Zoo release below:
 
 ```bash
 export MODELZOO_VERSION="3.0.0"
@@ -64,104 +100,83 @@ sima-cli download \
 cd ..
 ```
 
-The command stores
-`models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz`.
+The command stores `models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz`.
+The packaged `model.path` already points to it: a relative `model.path` starts at the config file.
+`../../../../../models/` from `${APP_DIR}/src/common/` is `prebuilt-apps/models/`.
 
 ## Prepare Insight
 
-Use the source video packaged with Apps:
-
-`assets/datasets/yolo26-tiny-drone-tracker/anti_uav_multi_uav_source_demo.mp4`
-
-In the Insight Web UI, open `RTSP Source`, upload this video, start its stream,
-and copy the RTSP URL into `streams`. Use the host and UDP port ranges reported
-by `neat` for the output settings. Use a host and published port that the target
-can reach, not `localhost` and not an address only Insight's own machine can
-resolve. Verify the URL from the target before running; the application prints
-the resolved source and its dimensions on startup.
+In the Insight Web UI, open Media Sources and upload a drone video.
+Insight's YouTube import also works.
+Then assign the video to an RTSP source, start the stream, and copy its URL into `input.source`.
+Use a host and port that the target can reach, not `localhost`.
+The application prints the source and its frame size on startup.
 
 ## Configure
 
-Use the packaged configuration as the source of truth:
-`examples/tracking/yolo26-tiny-drone-tracker/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml` and set:
 
-Set `streams` to the Insight RTSP URLs. Confirm `input.codec` and `input.tcp`
-match each source, then set `output.insight.host`, `video_port_base`, and
-`metadata_port_base` to the values reported by `neat`. The prepared model path
-already matches the package installed above; change `model.path` only if the
-archive is installed elsewhere.
+- `input.source`: the RTSP URL.
+- `input.codec`: `h264` or `h265`.
+- `output.insight.host`, and the Insight ports `output.insight.video_port_base` and `output.insight.metadata_port_base`.
 
-Track IDs are local to each stream. Lower-confidence detections may recover a
-confirmed track but cannot create or confirm an identity.
+Leave `input.width`, `input.height`, and `input.fps` at 0 to read them from the stream.
+Keep `inference.frames` at `0` to run until you stop the application.
+The `app.tracking` keys tune the tracker, as Concept describes.
 
 ## Run
-
-Validate the config without opening a stream:
-
-```bash
-APP_BIN="$APP_DIR/src/cpp/pre-built/yolo26-tiny-drone-tracker"
-CONFIG="$APP_DIR/src/common/config.yaml"
-"$APP_BIN" \
-  --config "$CONFIG" \
-  --validate-config-only
-```
 
 ### C++
 
 ```bash
-APP_BIN="$APP_DIR/src/cpp/pre-built/yolo26-tiny-drone-tracker"
-CONFIG="$APP_DIR/src/common/config.yaml"
-"$APP_BIN" --config "$CONFIG"
+./${APP_DIR}/src/cpp/pre-built/yolo26-tiny-drone-tracker \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
-APP_DIR=examples/tracking/yolo26-tiny-drone-tracker
 source ~/pyneat/bin/activate
-pip install -r "$APP_DIR/src/python/requirements.txt"
-python3 "$APP_DIR/src/python/main.py" \
-  --config "$APP_DIR/src/common/config.yaml"
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Expected Result
 
-Each stream reports its own progress while the run is in flight:
+The application prints the source on startup.
+When it stops, it prints the frames it processed and the number of tracks it started:
 
 ```text
-[profile stream=0] frames=100 output_fps=27.0271 avg_detection_pull_ms=27.4154 avg_tracker_ms=0.50715 avg_metadata_send_ms=1.45828 avg_tracks=46.76
+source=rtsp://<rtsp-source-ip>:<port>/<stream-name> codec=h264 stream=1280x720@30 insight=<insight-host-ip> video=9000 metadata=9100
+processed=200 tracks_started=14
 ```
 
-`avg_tracks` is the mean number of active tracks per processed frame. On the
-packaged anti-UAV source it runs to several dozen, because the model is tuned for
-small objects and that footage is dense with them; values between roughly 35 and
-50 are ordinary there. Expect a much lower figure on other material.
+The packaged config runs until Ctrl-C, and the `processed=` line prints when you stop it.
+For a run that ends by itself, set `inference.frames` to a positive number, such as `200`.
+When the network buffer was full, a last line counts the tracking messages that did not go out, such as `3 metadata messages dropped`.
 
-The two implementations format these numbers differently: Python prints the full
-float, the C++ binary prints at the default stream precision of six significant
-digits. Compare the magnitudes rather than the digits.
+Insight shows the video with a box, an ID, and a trail on every confirmed drone.
 
 ## Troubleshooting
 
-- Start with one stream before adding more inputs.
-- Verify the model path, RTSP URL, codec, Insight host, and UDP port ranges.
-- Keep `inference.num_classes: 1`; it must match the model's class-head depth.
-- Set either inflight limit to `-1` to use the Core default.
-- Use `output.debug_dir` and `output.save_every` to save sampled overlays.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: the stream is unreachable from the board, or it does not report that value. Verify the URL from the board. For a reachable stream, set the value the message names.
+- `input.codec: unknown value '<value>' (expected h264, h265)`: set `input.codec` to the stream's codec.
+- `<config> is missing <key>` or `<key> must be <type>`: the config lacks a key or has a value of the wrong type. Compare it with the packaged config.
+- Video without tracks: the model finds only small drones in the sky. Check that the video shows them, and check `inference.min_score`.
+- No video or tracks in Insight: verify `output.insight.host` and the two ports.
 
 ## Source Files
 
 - C++ reference source: `src/cpp/main.cpp`
-- C++ tracker implementation: `src/cpp/utils/`
+- C++ tracker: `src/cpp/utils/tracker.h` and `src/cpp/utils/tracker.cpp`
 - Python source: `src/python/main.py`
-- Python tracker implementation: `src/python/utils/`
-- Shared runtime configuration: `src/common/config.yaml`
+- Python tracker: `src/python/utils/tracker.py`
+- Shared config: `src/common/config.yaml`
+- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds above itself. Their C++ reference source is in `support/cpp/sima_examples/`.
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake
-files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`. The installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

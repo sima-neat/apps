@@ -10,44 +10,19 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
-get_filename_component(APPS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
-if (NOT TARGET SimaNeatApps::sima_neat)
-  _sima_neat_apps_ensure_neat_target("${APPS_ROOT}")
-endif()
-if (NOT TARGET SimaNeatApps::support_runtime)
-  _sima_neat_apps_ensure_support_runtime("${APPS_ROOT}")
-endif()
-
-add_library(yolo26_tiny_drone_tracker_lib STATIC
-  "${CMAKE_CURRENT_LIST_DIR}/utils/tracker.cpp"
-)
-target_link_libraries(yolo26_tiny_drone_tracker_lib
-  PUBLIC
-    SimaNeatApps::sima_neat
-    SimaNeatApps::support_runtime
-)
-target_include_directories(yolo26_tiny_drone_tracker_lib
-  PUBLIC
-    "${APPS_ROOT}"
-)
-
 sima_neat_apps_module(
   "yolo26-tiny-drone-tracker"
+  OUTPUT_TARGET_VAR DRONE_TRACKER_TARGET
   UNIT_TEST
   E2E_TEST
-  OUTPUT_TARGET_VAR YOLO26_TINY_DRONE_TRACKER_TARGET
-  SOURCES
-    "${CMAKE_CURRENT_LIST_DIR}/main.cpp"
 )
 
-target_link_libraries("${YOLO26_TINY_DRONE_TRACKER_TARGET}"
-  PRIVATE
-    yolo26_tiny_drone_tracker_lib
-)
+set(DRONE_TRACKER_UTILS "${CMAKE_CURRENT_LIST_DIR}/utils/tracker.cpp")
+target_sources(${DRONE_TRACKER_TARGET} PRIVATE ${DRONE_TRACKER_UTILS})
 
+# The unit test checks the tracker in process, so it compiles the utils too, and links the Neat
+# Library whose Box the tracker reads.
 if (TARGET yolo26-tiny-drone-tracker_unit_test)
-  target_link_libraries(yolo26-tiny-drone-tracker_unit_test
-    PRIVATE
-      yolo26_tiny_drone_tracker_lib
-  )
+  target_sources(yolo26-tiny-drone-tracker_unit_test PRIVATE ${DRONE_TRACKER_UTILS})
+  target_link_libraries(yolo26-tiny-drone-tracker_unit_test PRIVATE SimaNeatApps::sima_neat)
 endif()
