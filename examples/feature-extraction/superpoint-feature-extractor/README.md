@@ -47,17 +47,23 @@ Run the remaining commands from `prebuilt-apps/`.
 SuperPoint is licensed by Magic Leap under the [SuperPoint Software License Agreement](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE), which restricts the software to noncommercial research use and prohibits its distribution to third parties. Redistribution of a compiled SuperPoint model package is therefore prohibited, and the model browser does not offer one for download. To run this example, compile the model from its recipe in the [models repository](https://github.com/sima-neat/models/tree/d0b3f921b29be11a8ca80859f0805ba143a2e975/models/superpoint) on a machine with the Model Compiler, such as the Neat SDK. Review the license terms to confirm that they permit your intended use.
 
 Every models repository link on this page points at commit `d0b3f921`, the revision these
-steps were checked against. Check it out in your clone before you start, so the recipe,
-the scripts and the step numbering match what is written here:
+steps were checked against. Clone the models repository outside the bundle and check that
+revision out, so the recipe, the scripts and the step numbering match what is written
+here:
 
 ```bash
-git clone https://github.com/sima-neat/models.git
-cd models
-git checkout d0b3f921b29be11a8ca80859f0805ba143a2e975
+BUNDLE=$(pwd)
+git clone https://github.com/sima-neat/models.git ~/models
+git -C ~/models checkout d0b3f921b29be11a8ca80859f0805ba143a2e975
 ```
 
 A later revision may renumber the steps or change the recipe, in which case the
 substitutions below no longer apply. Move to `main` once you have a build that works.
+
+The models repository runs its commands from its own root, so `cd ~/models` for the build
+and `cd "${BUNDLE}"` when it finishes. Every `${APP_DIR}` path on this page is relative to
+`prebuilt-apps/`, so the `sed` below and the Configure and Run sections all assume you are
+back in the bundle.
 
 Follow steps 1 to 5 of [Getting started](https://github.com/sima-neat/models/blob/d0b3f921b29be11a8ca80859f0805ba143a2e975/docs/getting-started.md) in the models repository, replacing `yolo26n` with `superpoint`. Steps 4 and 5 convert the checkpoint to ONNX and compile it into a model package; the later performance and accuracy steps are optional. Choose one build profile:
 
@@ -89,7 +95,7 @@ Read the [HPatches dataset repository](https://github.com/hpatches/hpatches-data
 
 `COPYFILE_DISABLE=1` matters on macOS. The downloaded files carry an extended attribute, and macOS `tar` then writes a `._<name>.ppm` companion for each one. The compile reads every `.ppm` member under `hpatches/cal/<sequence>/` as an image and stops at the first companion with `ValueError: could not decode image`. macOS `tar -tzf` hides those members, so the archive looks correct while half of it is unreadable. On Linux the variable does nothing.
 
-Pass the archive to the step 5 compile with `--dataset hpatches-cal.tar.gz`. Other sequences also calibrate a working model, as long as the archive holds at least 50 `.ppm` files under `hpatches/cal/<sequence>/`; they pick different INT8 ranges, so the package is then a different model from the published `w8a8` one. Whatever images you calibrate with, the compile gates the result: it compares the quantized model's keypoints with FP32's and fails the build when keypoint recall falls below 0.8 or descriptor similarity below 0.9.
+Run these commands in `~/models`, so that the archive sits where the compile runs, and pass it to the step 5 compile with `--dataset hpatches-cal.tar.gz`. Other sequences also calibrate a working model, as long as the archive holds at least 50 `.ppm` files under `hpatches/cal/<sequence>/`; they pick different INT8 ranges, so the package is then a different model from the published `w8a8` one. Whatever images you calibrate with, the compile gates the result: it compares the quantized model's keypoints with FP32's and fails the build when keypoint recall falls below 0.8 or descriptor similarity below 0.9.
 
 ## Configure
 
