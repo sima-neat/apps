@@ -571,6 +571,9 @@ simaai::neat::UsbCameraInputOptions make_usb_camera_options(const AppConfig& cfg
   opt.width = static_cast<std::uint32_t>(cfg.source_width);
   opt.height = static_cast<std::uint32_t>(cfg.source_height);
   opt.framerate_num = static_cast<std::uint32_t>(cfg.source_fps);
+  if (cfg.usb_format == "yuyv") {
+    opt.format = simaai::neat::UsbCameraFormat::YUYV;
+  }
   return opt;
 }
 
@@ -586,9 +589,9 @@ simaai::neat::SimaDecodeOptions make_usb_decode_options(const AppConfig& cfg,
   return opt;
 }
 
-simaai::neat::Graph make_source_graph(
-    const AppConfig& cfg, const SourceGeometry& geometry,
-    const std::optional<simaai::neat::UsbCameraCaptureInfo>& usb_camera = std::nullopt) {
+simaai::neat::Graph
+make_source_graph(const AppConfig& cfg, const SourceGeometry& geometry,
+                  const std::optional<simaai::neat::UsbCameraInfo>& usb_camera = std::nullopt) {
   if (cfg.source_type == SourceType::Usb) {
     simaai::neat::Graph camera("usb_camera");
     camera.add(
@@ -716,21 +719,21 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   const bool raw_usb = usb && cfg.usb_format == "yuyv";
   const bool mjpeg_usb = usb && !raw_usb;
   // The camera is checked once; the same info gives the decoded layout and builds the node.
-  const std::optional<simaai::neat::UsbCameraCaptureInfo> usb_camera =
-      usb ? std::optional(simaai::neat::usb_camera_info(
-                make_usb_camera_options(cfg), raw_usb ? simaai::neat::UsbCameraFormat::YUYV
-                                                      : simaai::neat::UsbCameraFormat::MJPEG))
+  const std::optional<simaai::neat::UsbCameraInfo> usb_camera =
+      usb ? std::optional(simaai::neat::usb_camera_info(make_usb_camera_options(cfg)))
           : std::nullopt;
   const simaai::neat::FormatTag decoded_format =
-      usb ? usb_camera->camera.decoded_format : simaai::neat::FormatTag::NV12;
+      usb ? usb_camera->decoded_format : simaai::neat::FormatTag::NV12;
   runtime.model = make_model(cfg, geometry, decoded_format == simaai::neat::FormatTag::NV16);
   runtime.labels = load_labels(cfg.labels_path);
 
   auto video_options =
-      mjpeg_usb
-          ? simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
-                simaai::neat::nodes::groups::RtspCodec::MJPEG)
-          : simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = runtime.output_fps});
+      mjpeg_usb ? simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
+                      simaai::neat::nodes::groups::RtspCodec::MJPEG)
+                : simaai::neat::nodes::groups::VideoSenderOptions::FromRaw(
+                      {.fps = runtime.output_fps,
+                       .input_policy = raw_usb ? simaai::neat::EncoderInputPolicy::RequireDirect
+                                               : simaai::neat::EncoderInputPolicy::Compatible});
   video_options.host = cfg.insight_host;
   video_options.channel = 0;
   video_options.video_port_base = cfg.video_port;
@@ -761,17 +764,17 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
     convert.color = usb_camera->color;
     convert.color.output_siting = {simaai::neat::ImageChromaSiting::Cosited,
                                    simaai::neat::ImageChromaSiting::Centered};
-    video_graph.add(simaai::neat::nodes::ColorConvert(convert, usb_camera->colorimetry));
+    convert.input_colorimetry = usb_camera->colorimetry;
+    video_graph.add(simaai::neat::nodes::ColorConvert(convert));
   }
-  video_graph.add(simaai::neat::nodes::groups::VideoSender(
-      video_options, raw_usb ? simaai::neat::EncoderInputPolicy::RequireDirect
-                             : simaai::neat::EncoderInputPolicy::Compatible));
+  video_graph.add(simaai::neat::nodes::groups::VideoSender(video_options));
 
   simaai::neat::Graph model_graph("model");
   if (raw_usb) {
     model_graph.add(simaai::neat::nodes::Input("model"));
-    model_graph.add(simaai::neat::nodes::Preproc(simaai::neat::PreprocOptions(*runtime.model),
-                                                 usb_camera->color));
+    simaai::neat::PreprocOptions preproc(*runtime.model);
+    preproc.input_color = usb_camera->color;
+    model_graph.add(simaai::neat::nodes::Preproc(preproc));
     model_graph.add(runtime.model->inference());
     model_graph.add(runtime.model->postprocess());
   } else {
@@ -812,7 +815,8 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
       simaai::neat::ColorConvertOptions snapshot;
       snapshot.output_format = simaai::neat::ImageFormat::BGR;
       snapshot.color = usb_camera->color;
-      frame_graph.add(simaai::neat::nodes::ColorConvert(snapshot, usb_camera->colorimetry));
+      snapshot.input_colorimetry = usb_camera->colorimetry;
+      frame_graph.add(simaai::neat::nodes::ColorConvert(snapshot));
     }
     frame_graph.add(
         simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));

@@ -543,6 +543,8 @@ def make_usb_camera_options(cfg: AppConfig):
     opt.width = cfg.source_width
     opt.height = cfg.source_height
     opt.framerate_num = cfg.source_fps
+    if cfg.usb_format == "yuyv":
+        opt.format = pyneat.UsbCameraFormat.YUYV
     return opt
 
 
@@ -651,6 +653,8 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int, usb_cam
     else:
         encode = pyneat.SimaEncodeOptions()
         encode.fps = fps
+        if raw_usb:
+            encode.input_policy = pyneat.EncoderInputPolicy.RequireDirect
         sender_options = pyneat.VideoSenderOptions.from_raw(encode)
         sender_options.encoder.bitrate_kbps = 1000
     sender_options.host = cfg.insight_host
@@ -668,15 +672,9 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int, usb_cam
             pyneat.ImageChromaSiting.Cosited,
             pyneat.ImageChromaSiting.Centered,
         ]
-        graph.add(pyneat.nodes.color_convert(convert, usb_camera.colorimetry))
-    graph.add(
-        pyneat.groups.video_sender(
-            sender_options,
-            pyneat.EncoderInputPolicy.RequireDirect
-            if raw_usb
-            else pyneat.EncoderInputPolicy.Compatible,
-        )
-    )
+        convert.input_colorimetry = usb_camera.colorimetry
+        graph.add(pyneat.nodes.color_convert(convert))
+    graph.add(pyneat.groups.video_sender(sender_options))
     return graph, sender_options.video_port
 
 
@@ -695,11 +693,8 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     raw_usb = usb and cfg.usb_format == "yuyv"
     mjpeg_usb = usb and not raw_usb
     # The camera is checked once; the same info gives the decoded layout and builds the node.
-    camera_format = pyneat.UsbCameraFormat.YUYV if raw_usb else pyneat.UsbCameraFormat.MJPEG
-    usb_camera = (
-        pyneat.usb_camera_info(make_usb_camera_options(cfg), camera_format) if usb else None
-    )
-    decoded_format = usb_camera.camera.decoded_format if usb else pyneat.Format.NV12
+    usb_camera = pyneat.usb_camera_info(make_usb_camera_options(cfg)) if usb else None
+    decoded_format = usb_camera.decoded_format if usb else pyneat.Format.NV12
     model = make_model(cfg, frame_w, frame_h, decoded_format == pyneat.Format.NV16)
     labels = load_labels(cfg.labels_path)
 
@@ -718,7 +713,9 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     model_graph = pyneat.Graph("model")
     if raw_usb:
         model_graph.add(pyneat.nodes.input("model"))
-        model_graph.add(pyneat.nodes.preproc(pyneat.PreprocOptions(model), usb_camera.color))
+        preproc = pyneat.PreprocOptions(model)
+        preproc.input_color = usb_camera.color
+        model_graph.add(pyneat.nodes.preproc(preproc))
         model_graph.add(model.inference())
         model_graph.add(model.postprocess())
     else:
@@ -758,7 +755,8 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
             snapshot = pyneat.ColorConvertOptions()
             snapshot.output_format = pyneat.ImageFormat.BGR
             snapshot.color = usb_camera.color
-            frame_graph.add(pyneat.nodes.color_convert(snapshot, usb_camera.colorimetry))
+            snapshot.input_colorimetry = usb_camera.colorimetry
+            frame_graph.add(pyneat.nodes.color_convert(snapshot))
         frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
         joined = pyneat.graphs.combine(
             ["frame", "detections"], "detector_output", pyneat.CombinePolicy.ByFrame
