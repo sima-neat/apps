@@ -155,7 +155,11 @@ decoder, including the YOLO types, `EffDet` and `Centernet`, needs a letterbox
 resize; a `Stretch` resize fails when the pipeline is built.
 
 Pick the value by the model's family and how it was exported, not by the
-number or shape of its outputs. Core's
+number of its outputs. When a pose package does not name its family, its box
+heads in `output_specs()` tell the two apart: 64-channel DFL box heads mean
+`YoloV8Pose`, and 4-channel l/t/r/b box heads mean `YoloV26Pose`.
+`YoloV26Pose` on a YOLOv8 package gives valid-looking scores and wrong boxes,
+with no error. Core's
 [decode-types reference](https://developer.sima.ai/software/reference/boxdecode_decode_types)
 gives the exact head layout each value expects.
 
