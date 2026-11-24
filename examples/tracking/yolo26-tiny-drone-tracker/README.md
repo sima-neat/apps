@@ -54,6 +54,7 @@ How does a frame move through yolo26-tiny-drone-tracker?
 Each stream's encoded video goes to Insight as received, on its own channel, while its decoder feeds the shared model.
 The link to the model keeps the latest frames of each stream.
 When the model falls behind, a stream drops frames instead of slowing the others.
+When a video sender falls behind, its stream drops encoded frames, and the video in Insight may break up until the next keyframe.
 The application pulls each frame's boxes, and the stream's `ObjectTracker` gives every drone an ID that lasts across frames.
 Each tracking message carries the frame's timestamp, so Insight draws the tracks on the frame they came from.
 Insight colors each track by its ID and draws its trail.
@@ -117,13 +118,12 @@ Insight's YouTube import also works.
 Under Streaming Sources, assign the video to a source slot for each stream, start them, and copy their URLs into `input.source`.
 Several slots may play the same video.
 Use a host and port that the target can reach, not `localhost`.
-The application prints each source and its frame size on startup.
 
 ## Configure
 
 Open `${APP_DIR}/src/common/config.yaml` and set:
 
-- `input.source`: one to four RTSP URLs, one per line. Stream `i` goes to Insight channel `i`. The example is tested with up to four streams.
+- `input.source`: one to four RTSP URLs, one per line. Stream `i` goes to Insight channel `i`.
 - `input.codec`: `h264` or `h265`, for every stream.
 - `output.insight.host`, and the Insight ports of stream 0, `output.insight.video_port_base` and `output.insight.metadata_port_base`. Stream `i` uses each port plus `i`.
 
@@ -153,7 +153,8 @@ python3 ${APP_DIR}/src/python/main.py \
 
 ## Expected Result
 
-When it stops, the application prints the frames each stream processed and the tracks it started:
+The application prints each source on startup.
+When it stops, it prints the frames each stream processed and the tracks it started:
 
 ```text
 [stream 0] rtsp=rtsp://<rtsp-source-ip>:<port>/<stream-name> stream=640x512@30 insight=<insight-host-ip> video=9000 metadata=9100

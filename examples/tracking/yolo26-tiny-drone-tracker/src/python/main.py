@@ -45,12 +45,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def model_options(config: Config, max_detections: int) -> pyneat.ModelOptions:
-    """YOLO26 on the decoded NV12 frames of every stream."""
+def model_options(
+    config: Config, stream: RtspStreamInfo, max_detections: int
+) -> pyneat.ModelOptions:
+    """YOLO26 on the decoded NV12 frames of every stream, which all have the size of `stream`."""
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
     options.preprocess.enable = pyneat.AutoFlag.On
     options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    # Lets streams above Core's 1920x1080 default in (PreprocessPlan.h).
+    options.preprocess.input_max_width = stream.width
+    options.preprocess.input_max_height = stream.height
     options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     options.decode_type = pyneat.BoxDecodeType.YoloV26
     # The split heads of a single-class YOLO may not give Core the class count, so
@@ -89,7 +94,8 @@ def rtsp_options(
     # from the probed values alone failed to negotiate in some runs. The H.265 path does not read
     # auto_caps_from_stream (RtspEncodedInput.cpp).
     options.auto_caps_from_stream = config.integer("input.fps") == 0
-    # The probed rate, or input.fps when set: the rate the tracker counts frames at.
+    # The stream's rate in the encoded caps. With input.fps set, the H.264 explicit caps need it
+    # (RtspEncodedInput.cpp), and H.265 writes it into its caps (H265Depacketize.cpp).
     options.source_fps = stream.fps
     if options.codec == pyneat.RtspCodec.H264:
         options.fallback_h264_width = stream.width
@@ -159,6 +165,7 @@ def metadata_options(config: Config, index: int) -> pyneat.MetadataSenderOptions
 def run_options() -> pyneat.RunOptions:
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Realtime
+    # Auto may copy an output when the sink queue backs up (Core RunCoreGraphStart.cpp).
     options.output_memory = pyneat.OutputMemory.ZeroCopy
     return options
 
@@ -266,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     # Used by both the model and the box decode.
     max_detections = config.integer("inference.max_detections")
     model_path = args.config.absolute().parent / config.string("model.path")
-    model = pyneat.Model(str(model_path), model_options(config, max_detections))
+    model = pyneat.Model(str(model_path), model_options(config, streams[0], max_detections))
     detector = detector_graph(model)
 
     graph = pyneat.Graph()

@@ -72,12 +72,17 @@ fs::path parse_args(int argc, char** argv) {
   return config_path;
 }
 
-// YOLO26 on the decoded NV12 frames of every stream.
-neat::Model::Options model_options(const sima_examples::Config& config, int max_detections) {
+// YOLO26 on the decoded NV12 frames of every stream, which all have the size of `stream`.
+neat::Model::Options model_options(const sima_examples::Config& config,
+                                   const sima_examples::RtspStreamInfo& stream,
+                                   int max_detections) {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Image;
   options.preprocess.enable = neat::AutoFlag::On;
   options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
+  // Lets streams above Core's 1920x1080 default in (PreprocessPlan.h).
+  options.preprocess.input_max_width = stream.width;
+  options.preprocess.input_max_height = stream.height;
   options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
   options.decode_type = neat::BoxDecodeType::YoloV26;
   // The split heads of a single-class YOLO may not give Core the class count, so
@@ -116,7 +121,8 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
   // from the probed values alone failed to negotiate in some runs. The H.265 path does not read
   // auto_caps_from_stream (RtspEncodedInput.cpp).
   options.auto_caps_from_stream = config.integer("input.fps") == 0;
-  // The probed rate, or input.fps when set: the rate the tracker counts frames at.
+  // The stream's rate in the encoded caps. With input.fps set, the H.264 explicit caps need it
+  // (RtspEncodedInput.cpp), and H.265 writes it into its caps (H265Depacketize.cpp).
   options.source_fps = stream.fps;
   if (options.codec == groups::RtspCodec::H264) {
     options.fallback_h264_width = stream.width;
@@ -185,6 +191,7 @@ neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config
 neat::RunOptions run_options() {
   neat::RunOptions options;
   options.preset = neat::RunPreset::Realtime;
+  // Auto may copy an output when the sink queue backs up (Core RunCoreGraphStart.cpp).
   options.output_memory = neat::OutputMemory::ZeroCopy;
   return options;
 }
@@ -302,7 +309,7 @@ int run_app(const fs::path& config_path) {
   // Used by both the model and the box decode.
   const int max_detections = config.integer("inference.max_detections");
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
-  neat::Model model(model_path.string(), model_options(config, max_detections));
+  neat::Model model(model_path.string(), model_options(config, streams.front(), max_detections));
   const neat::Graph detector = detector_graph(model);
 
   neat::Graph graph;

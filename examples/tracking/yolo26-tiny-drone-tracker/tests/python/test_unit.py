@@ -178,22 +178,30 @@ def test_score_at_high_score_threshold_confirms_a_track():
     assert ids(object_tracker.update([Box(0, 0, 10, 10, 0.5)], pts(1))) == [1]
 
 
-def test_frame_without_timestamp_counts_as_the_next_frame():
-    object_tracker = tracker.ObjectTracker(settings(max_missing_frames=1), FPS)
+@pytest.mark.parametrize("max_missing_frames, track_id", [(2, 1), (1, 2)])
+def test_frame_without_timestamp_counts_as_the_next_frame(max_missing_frames, track_id):
+    object_tracker = tracker.ObjectTracker(settings(max_missing_frames=max_missing_frames), FPS)
     object_tracker.update([Box(10, 10, 50, 80)], pts(0))
     object_tracker.update([], -1)
     object_tracker.update([], -1)
-    # Frame 3 is 2 frames past the track's last match, beyond max_missing_frames.
-    assert ids(object_tracker.update([Box(10, 10, 50, 80)], -1)) == [2]
+    # Frame 3 is 2 frames past the track's last match.
+    assert ids(object_tracker.update([Box(10, 10, 50, 80)], -1)) == [track_id]
 
 
 def test_timestamp_before_the_last_counts_as_the_next_frame():
-    object_tracker = tracker.ObjectTracker(settings(max_missing_frames=1), FPS)
+    object_tracker = tracker.ObjectTracker(settings(max_missing_frames=0), FPS)
     object_tracker.update([Box(10, 10, 50, 80)], pts(10))
-    # The source restarted, and its timestamps start over.
-    object_tracker.update([], pts(0))
-    object_tracker.update([], pts(1))
-    assert ids(object_tracker.update([Box(10, 10, 50, 80)], pts(2))) == [2]
+    # The source restarted, and its timestamps start over. Frame 1 follows frame 0 directly.
+    assert ids(object_tracker.update([Box(10, 10, 50, 80)], pts(0))) == [1]
+
+
+@pytest.mark.parametrize("max_missing_frames, track_id", [(2, 1), (1, 2)])
+def test_timestamps_after_a_restart_count_from_it(max_missing_frames, track_id):
+    object_tracker = tracker.ObjectTracker(settings(max_missing_frames=max_missing_frames), FPS)
+    object_tracker.update([Box(10, 10, 50, 80)], pts(10))
+    object_tracker.update([Box(10, 10, 50, 80)], pts(0))
+    # The restart at pts(0) is frame 1, so pts(3) is frame 4, 2 frames past the last match.
+    assert ids(object_tracker.update([Box(10, 10, 50, 80)], pts(3))) == [track_id]
 
 
 def test_box_beyond_the_distance_gate_starts_a_new_track():

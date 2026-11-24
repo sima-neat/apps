@@ -37,5 +37,5 @@ app:
                                 # only continues a confirmed track.
     new_track_threshold: 0.30   # Score an unmatched detection needs to start a track.
     max_missing_frames: 30      # Frames a track survives without a match, counted at input.fps,
-                                # or at the probed rate when it is 0.
+                                # or at the probed rate when input.fps is 0.
     min_confirmed_hits: 2       # Detections, counting the first, before a track goes to Insight.

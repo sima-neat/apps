@@ -226,27 +226,49 @@ bool test_score_at_high_score_threshold_confirms_a_track() {
 }
 
 bool test_frame_without_timestamp_counts_as_the_next_frame() {
-  TrackerSettings values = settings();
-  values.max_missing_frames = 1;
-  ObjectTracker object_tracker(values, kFps);
-  object_tracker.update({box(10, 10, 50, 80)}, pts(0));
-  object_tracker.update({}, -1);
-  object_tracker.update({}, -1);
-  // Frame 3 is 2 frames past the track's last match, beyond max_missing_frames.
-  return expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, -1)) == std::vector{2},
-                     "frames without a timestamp age the track");
+  bool ok = true;
+  for (const auto& [max_missing_frames, track_id] : {std::pair{2, 1}, std::pair{1, 2}}) {
+    TrackerSettings values = settings();
+    values.max_missing_frames = max_missing_frames;
+    ObjectTracker object_tracker(values, kFps);
+    object_tracker.update({box(10, 10, 50, 80)}, pts(0));
+    object_tracker.update({}, -1);
+    object_tracker.update({}, -1);
+    // Frame 3 is 2 frames past the track's last match.
+    ok &=
+        expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, -1)) == std::vector{track_id},
+                    "after 2 frames without a timestamp and max_missing_frames " +
+                        std::to_string(max_missing_frames) + ", the box gets track " +
+                        std::to_string(track_id));
+  }
+  return ok;
 }
 
 bool test_timestamp_before_the_last_counts_as_the_next_frame() {
   TrackerSettings values = settings();
-  values.max_missing_frames = 1;
+  values.max_missing_frames = 0;
   ObjectTracker object_tracker(values, kFps);
   object_tracker.update({box(10, 10, 50, 80)}, pts(10));
-  // The source restarted, and its timestamps start over.
-  object_tracker.update({}, pts(0));
-  object_tracker.update({}, pts(1));
-  return expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, pts(2))) == std::vector{2},
-                     "frames after a timestamp restart age the track");
+  // The source restarted, and its timestamps start over. Frame 1 follows frame 0 directly.
+  return expect_true(ids(object_tracker.update({box(10, 10, 50, 80)}, pts(0))) == std::vector{1},
+                     "a restart counts as the next frame");
+}
+
+bool test_timestamps_after_a_restart_count_from_it() {
+  bool ok = true;
+  for (const auto& [max_missing_frames, track_id] : {std::pair{2, 1}, std::pair{1, 2}}) {
+    TrackerSettings values = settings();
+    values.max_missing_frames = max_missing_frames;
+    ObjectTracker object_tracker(values, kFps);
+    object_tracker.update({box(10, 10, 50, 80)}, pts(10));
+    object_tracker.update({box(10, 10, 50, 80)}, pts(0));
+    // The restart at pts(0) is frame 1, so pts(3) is frame 4, 2 frames past the last match.
+    ok &= expect_true(
+        ids(object_tracker.update({box(10, 10, 50, 80)}, pts(3))) == std::vector{track_id},
+        "pts(3) after a restart with max_missing_frames " + std::to_string(max_missing_frames) +
+            " gets track " + std::to_string(track_id));
+  }
+  return ok;
 }
 
 bool test_box_beyond_the_distance_gate_starts_a_new_track() {
@@ -360,6 +382,7 @@ int main() {
   ok &= test_score_at_high_score_threshold_confirms_a_track();
   ok &= test_frame_without_timestamp_counts_as_the_next_frame();
   ok &= test_timestamp_before_the_last_counts_as_the_next_frame();
+  ok &= test_timestamps_after_a_restart_count_from_it();
   ok &= test_box_beyond_the_distance_gate_starts_a_new_track();
   ok &= test_track_is_reported_from_its_min_confirmed_hits_th_detection();
   ok &= test_low_score_detection_continues_only_a_confirmed_track();

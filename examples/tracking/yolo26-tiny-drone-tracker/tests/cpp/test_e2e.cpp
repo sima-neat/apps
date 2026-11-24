@@ -138,8 +138,8 @@ int run_case(const std::string& binary, const std::string& model_path,
               << "\n";
     return 1;
   }
-  // Four streams repeat the first URL: the README's most, and the first count past Core's default
-  // in-flight total of 8.
+  // Four streams of the first URL: the most the README lists. From three streams on, Core's default
+  // in-flight total of 8 is below 4 per stream.
   const std::vector<std::string> urls =
       streams == 4
           ? std::vector<std::string>(4, source_case.urls.front())
@@ -281,8 +281,7 @@ int run_case(const std::string& binary, const std::string& model_path,
       problems.push_back(stream + ": " + std::to_string(messages) + " of " +
                          std::to_string(kFrames) + " messages arrived");
     }
-    // A frame the video link dropped leaves its message unpaired, so allow as few as for the
-    // count.
+    // A frame the video link dropped leaves its message unpaired, so allow 5%, as for the count.
     if (static_cast<int>(unpaired.size()) > messages * 5 / 100) {
       problems.push_back(stream + ": " + std::to_string(unpaired.size()) +
                          " timestamps with no video frame, first " +
@@ -339,10 +338,11 @@ int main(int argc, char** argv) {
       {h264, 4, "h264-four-streams"}};
   int cases_run = 0;
   for (const auto& [source_case, streams, label] : cases) {
-    if (source_case.urls.size() < static_cast<std::size_t>(streams == 4 ? 1 : streams)) {
+    const int needed = streams == 4 ? 1 : streams;
+    if (source_case.urls.size() < static_cast<std::size_t>(needed)) {
       record_unavailable_case("SIMANEAT_TEST_RTSP_" +
                                   std::string(source_case.codec == "h264" ? "H264" : "H265") +
-                                  "_URLS needs " + std::to_string(streams) + " URLs for " + label,
+                                  "_URLS needs " + std::to_string(needed) + " URLs for " + label,
                               "not enough " + source_case.codec + " URLs for " + label, rc);
       continue;
     }

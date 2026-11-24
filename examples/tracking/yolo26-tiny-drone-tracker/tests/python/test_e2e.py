@@ -33,8 +33,8 @@ CASES = [
     pytest.param("h265", 2, id="h265"),
     # With one source, Core names the samples after the decoder instead of the stream.
     pytest.param("h264", 1, id="h264-one-stream"),
-    # Four streams of the first URL: the README's most, and the first count past Core's default
-    # in-flight total of 8.
+    # Four streams of the first URL: the most the README lists. From three streams on, Core's
+    # default in-flight total of 8 is below 4 per stream.
     pytest.param("h264", 4, id="h264-four-streams"),
 ]
 
@@ -78,8 +78,9 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
     urls = request.getfixturevalue(f"rtsp_{codec}_urls")
     if streams == 4:
         urls = urls[:1] * 4
+    needed = 1 if streams == 4 else streams
     skip_unless_e2e_ready(
-        len(urls) >= streams, f"SIMANEAT_TEST_RTSP_{codec.upper()}_URLS needs {streams} URLs"
+        len(urls) >= needed, f"SIMANEAT_TEST_RTSP_{codec.upper()}_URLS needs {needed} URLs"
     )
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
     video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
@@ -206,8 +207,8 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         unpaired = [
             m.timestamp_ms for m in stream_messages if not _pairs(m.timestamp_ms, rtp_timestamps)
         ]
-        # A frame the video link dropped leaves its message unpaired, so allow as few as for
-        # the count.
+        # A frame the video link dropped leaves its message unpaired, so allow 5%, as for the
+        # count.
         assert len(unpaired) <= len(stream_messages) * 5 // 100, (
             f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}"
         )
