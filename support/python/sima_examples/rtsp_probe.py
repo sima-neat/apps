@@ -51,12 +51,16 @@ def probe_rtsp_streams(
     because the streams share one model.
     """
     by_url: dict[str, RtspStreamInfo] = {}
+    first_url = ""
     for url in urls:
         if url in by_url:
             continue
         stream = probe_rtsp_stream_info(url, tcp, configured)
         by_url[url] = stream
-        first_url, first = next(iter(by_url.items()))
+        if not first_url:
+            first_url = url
+            continue
+        first = by_url[first_url]
         # Core gap: a model shared by several streams accepts one input size, and a stream of
         # another size fails the build with "input spec mismatch".
         if (stream.width, stream.height) != (first.width, first.height):
