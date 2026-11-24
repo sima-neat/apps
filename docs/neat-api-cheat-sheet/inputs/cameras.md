@@ -250,6 +250,7 @@ elements run in sync mode, but Core only removes the queues that
 - [single-stream-instance-segmenter](../../../examples/segmentation/single-stream-instance-segmenter/) (`UsbCameraInput`, `HttpMjpegDecodedInput`)
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`UsbCameraInput`)
 - [mipi-multi-model](../../../examples/benchmarking/mipi-multi-model/) (`CameraInput` with `buffer_name` shared with the model route, Python only)
+- [detection-to-vlm-assistant](../../../examples/genai/detection-to-vlm-assistant/) (`CameraInput` and `UsbCameraInput` in one example, chosen by `input.type`)
 
 ## Source
 
