@@ -14,26 +14,52 @@
 
 ## Concept
 
-Runs a different model on each of up to four RTSP cameras in one process, and sends every camera's video and its own detection, segmentation, or pose metadata to Insight.
-
-Each stream uses its own model and Insight channel. The default configuration runs
-object detection, instance segmentation, pose estimation, and object detection on
-streams 0–3. Source timestamps keep each overlay paired with its camera frame.
+Runs a different YOLO model on each of up to four RTSP cameras. Insight shows each camera's video with its detection, segmentation, or pose results.
 
 ```text
-Per stream: RTSP encoded ─┬─> codec passthrough ──────────────> Insight video
-                          └─> decode NV12 ─> NV12 frame output ─┐
-                                                                │
-Application, per stream:  NV12 frame ───────────────────────────┘
-                          └─> model graph (Preproc ─> inference ─> BoxDecode)
-                              ─> boxes, masks or keypoints ────> Insight metadata
+How does a frame move through multi-stream-multi-model?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                                        ┆
+┆   ┌────────────────────────┐                  ┌────────────────────────┐   ┆
+┆   │ RtspEncodedInput × N   │─────────────────►│ VideoSender × N        │───┆──────┐
+┆   └────────────────────────┘  latest/stream   └────────────────────────┘   ┆      │
+┆       │             │ encoded frames                                       ┆      │ video
+┆       │             └────────────────────────►┌────────────────────────┐   ┆      │
+┆       │               latest/stream           │ Output "frames_i" × N  │   ┆      │
+┆       │ encoded frames                        └────────────────────────┘   ┆      │
+┆       ▼                                           │ newest frame           ┆      │
+┆   ┌────────────────────────┐                      │                        ┆      │
+┆   │ SimaDecode × N         │                      │                        ┆      │
+┆   └────────────────────────┘                      │                        ┆      │
+┆       │ NV12, latest/stream                       │                        ┆      │
+┆       ▼                                           │                        ┆      │
+┆   ┌────────────────────────┐                      │                        ┆      │
+┆   │ YOLO Model × N         │ one per stream       │                        ┆      │
+┆   └────────────────────────┘                      │                        ┆      │
+┆       │ BBOX tensors                              │                        ┆      │
+┆       ▼                                           │                        ┆      │
+┆   ┌────────────────────────┐                      │                        ┆      │
+┆   │ Output "results_i" × N │                      │                        ┆      │
+┆   └────────────────────────┘                      │                        ┆      │
+╰┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      │
+        ▼ pull                                      ▼ pull                          │
+    ┌───────────────────────────────────────────────┐                               │
+    │ Pull loop: metadata, result deadline          │                               │
+    └───────────────────────────────────────────────┘                               │
+        │ objects, segments, or poses as JSON                                       │
+        ▼                                                                           ▼
+    ┌────────────────────────┐                                               ┌────────────┐
+    │ MetadataSender × N     │──────────────────────────────────────────────►│ Insight    │
+    └────────────────────────┘                                               └────────────┘
 ```
 
-Every camera's receive-and-decode chain shares one graph and one run, because Neat
-grants a decoder-admission lease only when a single graph holds more than one decoder.
-Each model gets a graph and run of its own, so a stalled model cannot stop its
-neighbours. The video the viewer sees is the camera's own encoded stream, passed
-through untouched; Insight draws every overlay from the metadata.
+- One graph and one `Run` hold every stream. Each stream has its own `SimaDecode`, its own model, and its own `Output "results_i"`.
+- `RtspEncodedInput` sends each stream's encoded video to Insight unchanged. Insight draws every overlay from the metadata.
+- The link into each model keeps the newest decoded frames. Core lets each model hold 4 frames of its stream at once.
+- `Output "frames_i"` keeps only the newest encoded frame. The pull loop reads it to know that the camera is sending.
+- One pull loop reads every output in turn. It turns each result into Insight metadata and sends it on the stream's channel.
+- After a stream's first result, frames that arrive with no result for 10 seconds stop the application with an error. A camera that pauses sends no frames, so it may wait without a limit.
 
 ## Preview
 
@@ -41,11 +67,13 @@ through untouched; Insight draws every overlay from the metadata.
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- Up to four RTSP sources, all H.264 or all H.265, and an [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target. Pointing several streams at the same camera is fine; each one still builds its own decode and its own model.
-- Source frame rates that fit the decoder. Four 1920x1080@30 streams fit a DevKit; four 1920x1080@60 H.265 streams exceed decoder admission. Reduce the camera's frame rate or use fewer streams — the application does not resample, so `inference.fps` cannot work around this.
+- `sima-cli` 2.1.20 or newer ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
+- One to four RTSP streams, all H.264 or all H.265. Several streams may use the same URL. Each one still gets its own decoder and model.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) host that the DevKit can reach.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are up to date. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
 
 Install the latest Neat Apps runtime and enter the installed bundle:
 
@@ -59,16 +87,7 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The four packages come from the [model browser](https://developer.sima.ai/models/). Download and
-unpack them with `sima-cli` 2.1.20 or newer. Set each `streams[].model` to the matching package
-and keep the archives compressed.
-
-| Stream | Task | Model package | Source | `decode` |
-| --- | --- | --- | --- | --- |
-| 0 | Detection | `models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz` | `yolo11s`, variant `w8a8` | `yolov8` |
-| 1 | Segmentation | `models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz` | `yolo26s_seg`, variant `w8a16` | `yolo26` |
-| 2 | Pose | `models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz` | `yolo26m_pose`, variant `w8a8` | `yolo26` |
-| 3 | Detection | `models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz` | `yolo26m`, variant `w8a8` | `yolo26` |
+The four default packages come from the [model browser](https://developer.sima.ai/models/). Download and unpack each one:
 
 ```bash
 sima-cli models download --id yolo11s --variant w8a8
@@ -81,45 +100,31 @@ sima-cli models download --id yolo26m --variant w8a8
 unzip -o models/yolo26m/w8a8/yolo26m_w8a8_default.zip -d models/yolo26m/w8a8
 ```
 
-`sima-cli models download` saves each package as a ZIP file, such as
-`models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_default.zip`; extracting it gives the
-`_mpk.tar.gz` file in the table.
+Each download is a ZIP file with the model package and its license. `unzip` puts the model package next to the ZIP file. The packaged `app.model_paths` already points to these four files. A relative path starts at the config file, and `../../../../../models/` from `${APP_DIR}/src/common/` is `prebuilt-apps/models/`.
 
-These four packages are the tested set. The `decode` setting selects the package's head layout:
-use `yolov8` for the YOLO11 package and `yolo26` for the YOLO26 packages.
+| Stream | Task | Model package | `app.model_ids` |
+| --- | --- | --- | --- |
+| 0 | Detection | `models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz` | `yolov8` |
+| 1 | Segmentation | `models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz` | `yolo26-seg` |
+| 2 | Pose | `models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz` | `yolo26-pose` |
+| 3 | Detection | `models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz` | `yolo26` |
+
+These four packages are the tested set. `app.model_ids` names each package's task and head layout. The package does not name its decoder. YOLO11 packages carry the YOLOv8 heads, so they take `yolov8`, `yolov8-seg`, or `yolov8-pose`. YOLO26 packages take `yolo26`, `yolo26-seg`, or `yolo26-pose`.
 
 ## Prepare Insight
 
-[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render
-each output channel. Install videos directly from the Insight catalog or through Insight's YouTube
-support.
-
-In the Insight Web UI, start the four required streams and copy their RTSP URLs into `streams`. Use
-a host and published port that the target can reach, not `localhost` and not an address only
-Insight's own machine can resolve. Verify each URL from the target before running; the application
-prints the resolved source and its dimensions for every stream on startup.
+In the Insight Web UI, install or pick up to four videos and start one stream per video. Copy their RTSP URLs into `input.source`. Use a host and port the DevKit can reach, not `localhost`.
 
 ## Configure
 
 Open `${APP_DIR}/src/common/config.yaml` and set:
 
-- `streams[].url` — the RTSP URL for each camera.
-- `streams[].task` — `detection`, `segmentation`, or `pose`.
-- `streams[].decode` — `yolov8` or `yolo26`, matching the package's head layout.
-- `streams[].model` — the downloaded package for that stream.
-- `input.codec` — `h264` or `h265`. All streams share this one setting, so every camera must use
-  the same codec.
-- `input.tcp` — `true` to receive RTSP over TCP, `false` for UDP.
-- `output.insight.host` — the host running Insight.
-- `output.insight.video_port_base` and `output.insight.metadata_port_base` — the first Insight
-  port for each kind of output (defaults `9000` and `9100`).
+- `input.source`: one RTSP URL per stream. Stream i runs model i and goes to Insight channel i.
+- `input.codec`: `h264` or `h265`, the same for every stream.
+- `app.model_paths` and `app.model_ids`: one entry per stream, in `input.source` order. To run fewer streams, remove the same entries from all three lists.
+- `output.insight.host`. Stream i sends video to `video_port_base` + i and results to `metadata_port_base` + i.
 
-`inference.fps` must remain `0`: this application uses each camera's source frame
-rate. Configure a lower rate at the camera or RTSP streamer when needed.
-
-Drop stream entries to run fewer than four models; the example accepts one to four. Stream *i*
-publishes video on `output.insight.video_port_base + i` and metadata on
-`output.insight.metadata_port_base + i`.
+Keep `inference.frames` at `0` to run until you stop the application.
 
 ## Run
 
@@ -139,96 +144,54 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Both implementations read the same config and accept `--validate-config-only` to check it without
-touching the cameras.
+Stop the application with `Ctrl-C`.
 
 ## Expected Result
 
-Each stream prints its resolved task, model, camera, and Insight ports at startup:
+The application prints one line per stream with its model, source, frame size, and Insight ports:
 
 ```text
-[stream 0] task=detection decode=yolov8 model=yolo11s_w8a8_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9000 metadata=9100
-[stream 1] task=segmentation decode=yolo26 model=yolo26s_seg_w8a16_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9001 metadata=9101
-[stream 2] task=pose decode=yolo26 model=yolo26m_pose_w8a8_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9002 metadata=9102
-[stream 3] task=detection decode=yolo26 model=yolo26m_w8a8_mpk.tar.gz rtsp=<url> stream=1920x1080@30 insight=<host> video=9003 metadata=9103
+[stream 0] yolov8 model=../../../../../models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host>:8554/src1 stream=1920x1080@30 insight=<insight-host> video=9000 metadata=9100
+[stream 1] yolo26-seg model=../../../../../models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz rtsp=rtsp://<insight-host>:8554/src2 stream=1920x1080@30 insight=<insight-host> video=9001 metadata=9101
+[stream 2] yolo26-pose model=../../../../../models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host>:8554/src3 stream=1920x1080@30 insight=<insight-host> video=9002 metadata=9102
+[stream 3] yolo26 model=../../../../../models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host>:8554/src4 stream=1920x1080@30 insight=<insight-host> video=9003 metadata=9103
 ```
 
-When the run ends (Ctrl-C, or `inference.frames` reached), each stream reports what it published:
+Open a viewer tab in Insight for each channel. Detection channels show boxes, the segmentation channel shows mask outlines, and the pose channel shows skeletons.
+
+When it stops, the application prints how many results each stream sent. A positive `inference.frames` stops it after that many results per stream. With `inference.frames: 300`:
 
 ```text
-[stream 0] task=detection processed=1229 dropped_objects=0
-[stream 1] task=segmentation processed=1210 dropped_segments=0
-[stream 2] task=pose processed=1203 dropped_poses=0
-[stream 3] task=detection processed=1205 dropped_objects=0
+[stream 0] processed=300 left_out=0
+[stream 1] processed=300 left_out=0
+[stream 2] processed=300 left_out=0
+[stream 3] processed=300 left_out=0
 ```
 
-Open the Insight Video Viewer and select the four channels. Open a viewer tab for **every**
-channel you want to see: Insight only forwards frames to channels with a viewer attached, and a
-channel with no tab open renders nothing and correlates no metadata. Each one shows its own camera with the
-overlay its task publishes: boxes on the detection channels, masks on the segmentation channel, and
-skeletons on the pose channel. Insight draws these from the metadata, so the video itself is the
-untouched camera stream.
+`left_out` counts the objects, segments, or poses that did not fit their metadata message. The lowest-confidence ones are left out first.
 
-Setting `output.debug_dir` and `output.save_every` also writes annotated JPEGs named
-`stream_<i>_frame_<n>.jpg`, which is the quickest way to confirm a stream's model without a browser.
-
-With `runtime.profile: true`, the packaged default, the application also prints each pipeline and
-its element counters (`Pipeline:`, `ElementFlow:`, `Backend:`), and each stream reports its
-throughput every 100 frames:
-
-```text
-[profile stream=1 task=segmentation] frames=100 output_fps=30.3 avg_result_pull_ms=28.0 avg_metadata_send_ms=3.5 avg_instances=15.2
-```
-
-Set `runtime.profile: false` for a quiet run.
-
-With the four default packages and debug saving disabled, every stream tracks its source rate on a
-Modalix DevKit: four 1920x1080@30 H.264 cameras each report close to 30 fps in `output_fps`, in both
-implementations. This is the source rate, not a capacity measurement; the device has headroom these
-packages do not use.
-
-Setting `output.debug_dir` adds a host NV12-to-BGR conversion for every frame the application
-pulls, not only for the frames `output.save_every` writes. Leave `debug_dir` unset for a
-performance run.
+The metadata sender does not wait for a full network buffer. It drops the message instead, and the application then prints the count, such as `[stream 0] 3 metadata messages dropped`.
 
 ## Troubleshooting
 
-- Boxes lag or lead the objects they describe: Insight is not matching metadata to video frames.
-  Each message carries its source frame's timestamp and a frame ID (numbered per stream when the
-  decoder supplies none); when the decoded camera frame has no PTS, the message is sent with
-  timestamp `-1` and cannot be matched.
-  Check `matched_video_first` in
-  `curl -k https://<insight-host>:9900/api/ingest/stats` — it should track `messages_received`
-  one-for-one. It also reads zero when two copies of the application publish to the same channel,
-  so confirm only one is running.
-- Boxes appear in roughly the right places but at the wrong sizes: `streams[].decode` does not match
-  the package's head layout. Check it against the table above.
-- One stream is silent while the others work: confirm that its camera URL plays and that its
-  Insight metadata port is not taken by another application.
-- A stream reports a nonzero `dropped_objects`, `dropped_segments` or `dropped_poses` at exit: a
-  frame's results did not fit one metadata message, so the lowest-confidence ones were left out.
-  Lower `inference.max_detections` or raise `inference.min_score`.
-- The application exits with `consecutive decoded frames were unusable`: the decoder is not
-  producing NV12 frames for that stream. Check that `input.codec` matches the camera.
-- The application exits with a `source pull`, `model pull` or `model push failed` error: a camera,
-  decoder or model stopped with the reason shown. Check that camera's URL and that model's package,
-  then start the application again.
-- One stream falls far behind the others while the rest hold the source rate: the MLA is
-  oversubscribed. Four 1920x1080@30 streams fit the small INT8 defaults; heavier packages do not,
-  and the shortfall concentrates on a single stream instead of spreading. Drop stream entries or
-  return to the default packages.
-- Every stream is slow, or a decoder fails to start: the source frame rates exceed decoder
-  admission. Four 1920x1080@60 H.265 streams do not fit a DevKit. Lower the rate at the cameras or
-  run fewer streams; the application cannot resample, so `inference.fps` is rejected rather than
-  silently dropping frames.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config.
+- `app.model_paths has 3 entries and input.source has 4`: give every list one entry per stream.
+- `app.model_ids: unknown value` lists the values the application takes. Pick the one for the package's task and family.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: a value left at 0 could not be read. Check that the URL is reachable from the DevKit. For a reachable stream, set the value the message names.
+- `stream <i>: model <path> returned no result for 10 s while its camera sent frames`: that stream's model stopped. Check its package and its `app.model_ids` entry, then start the application again.
+- Boxes appear in about the right places but at the wrong sizes: the `app.model_ids` entry does not match the package's heads. Check it against the table above.
+- A positive `left_out` at exit: a frame's results did not fit one message. Lower `inference.max_detections` or raise `inference.min_score`.
+- No video or results in Insight: check the Insight host and the UDP ports. Make sure no other application sends to the same ports.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`
-- Python source: `src/python/main.py`
-- Shared runtime files: `src/common/`
+- C++ reference source: `src/cpp/main.cpp`, with the Insight metadata in `src/cpp/utils/insight_metadata.cpp` and the result deadline in `src/cpp/utils/pending_results.cpp`
+- Python source: `src/python/main.py`, with the Insight metadata in `src/python/utils/insight_metadata.py` and the result deadline in `src/python/utils/pending_results.py`
+- Shared config: `src/common/config.yaml`
+- Class labels: `src/common/coco_label.txt`
+- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle. `main.py` finds it in a folder above itself. Their C++ reference source is in `support/cpp/sima_examples/`.
 
-The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`. The installed bundle does not include CMake files.
 
 ## Development From Source
 

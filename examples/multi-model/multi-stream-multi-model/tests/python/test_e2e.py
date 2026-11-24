@@ -1,191 +1,241 @@
-"""E2E tests for multi-stream-multi-model (Python)."""
+"""End-to-end tests: four RTSP streams, each with its own model, reach Insight as video and as
+that model's metadata, each on its own channel. tests/cpp/test_e2e.cpp runs the same checks in
+C++."""
 
 from __future__ import annotations
 
-import contextlib
-import importlib.util
 import json
 import os
-from pathlib import Path
-import sys
-import subprocess
+import re
 import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
 
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
-from tests.utils.output_assertions import assert_streamed_frames_are_usable
 
-
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+EXAMPLE_DIR = Path(__file__).resolve().parents[2]
+APPS_ROOT = EXAMPLE_DIR.parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-E2E_INSIGHT_HOST = "127.0.0.1"
-
-# One slot per stream: the task, the head layout of its package, the package file the scope
-# downloads, the Insight contract that stream must publish on, and how many results at least one
-# of its messages must carry. Detection and segmentation cover all COCO classes, so the CI
-# footage yields results. Pose stays at 0: it needs people, and the CI H.264 fixture published
-# 140 frames without a tracked person (see multi-stream-tracker's E2E); poses that are published
-# are still checked below.
-STREAM_SLOTS = [
-    ("detection", "yolov8", "yolo11s_w8a8_mpk.tar.gz", "object-detection", "objects", 1),
-    ("segmentation", "yolo26", "yolo26s_seg_w8a16_mpk.tar.gz", "segmentation", "segments", 1),
-    ("pose", "yolo26", "yolo26m_pose_w8a8_mpk.tar.gz", "pose-estimation", "poses", 0),
-    ("detection", "yolo26", "yolo26m_w8a8_mpk.tar.gz", "object-detection", "objects", 1),
+LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitlines()
+FRAMES = 150
+# Above the shipped 0.30, so the results show that the example applies inference.min_score.
+MIN_SCORE = 0.35
+# Each stream's results per second. Not verified on a DevKit yet.
+MIN_STREAM_RESULTS_PER_S = 20.0
+# RTP payload types: H.264 96, H.265 98.
+PAYLOAD_TYPES = {"h264": 96, "h265": 98}
+# The shipped config's streams, in order: the package test-scope.yaml downloads for each, the
+# Insight metadata type its model sends, and the key of the entries in that type's data.
+STREAMS = [
+    ("yolo11s_w8a8_mpk.tar.gz", "object-detection", "objects"),
+    ("yolo26s_seg_w8a16_mpk.tar.gz", "segmentation", "segments"),
+    ("yolo26m_pose_w8a8_mpk.tar.gz", "pose-estimation", "poses"),
+    ("yolo26m_w8a8_mpk.tar.gz", "object-detection", "objects"),
 ]
 
 
-def _runtime_deps_ready() -> bool:
-    return all(importlib.util.find_spec(name) is not None for name in ("cv2", "numpy", "pyneat"))
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    return int(value) if value else default
 
 
-def _env_int_or_default(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    return int(raw) if raw else default
+def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
+    """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
+    # A copy of single-stream's helper. #823 moves it into tests/utils/rtp_video.py.
+    sock.settimeout(0.2)
+    while True:
+        try:
+            headers.append(sock.recv(65536)[:12])
+        except TimeoutError:
+            if stop.is_set():
+                return
+
+
+def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
+    """Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a
+    video frame's RTP timestamp."""
+    ticks = (timestamp_ms * 90) & 0xFFFFFFFF
+    return any(abs(ticks - rtp) <= 90 for rtp in rtp_timestamps)
+
+
+def _entry_problem(metadata_type: str, entry: dict) -> str:
+    """Why `entry` is not a result the stream's model can send, or "" when it is."""
+    if not MIN_SCORE <= entry["confidence"] <= 1.0:
+        return "confidence below inference.min_score"
+    if metadata_type == "pose-estimation":
+        names = [point["name"] for point in entry["keypoints"]]
+        if entry["label"] != "person" or len(names) != 17 or names[0] != "nose":
+            return "not a person with the 17 COCO keypoints"
+        return ""
+    if entry["label"] not in LABELS:
+        return "label not in coco_label.txt"
+    if metadata_type == "segmentation" and len(entry["mask"]) < 3:
+        return "mask outline with fewer than three points"
+    return ""
 
 
 @pytest.mark.e2e
-class TestE2E:
-    @pytest.mark.parametrize(
-        ("codec", "urls_fixture"),
-        [("h264", "rtsp_h264_urls"), ("h265", "rtsp_h265_urls")],
+@pytest.mark.parametrize("codec", ["h264", "h265"])
+def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results(
+    request,
+    codec,
+    models_dir,
+    tmp_output_dir,
+    test_timeout_ms,
+    e2e_config_writer,
+    skip_unless_e2e_ready,
+):
+    urls = request.getfixturevalue(f"rtsp_{codec}_urls")
+    skip_unless_e2e_ready(len(urls) >= 1, f"SIMANEAT_TEST_RTSP_{codec.upper()}_URLS needs 1 URL")
+    model_files = [models_dir / file for file, _, _ in STREAMS]
+    missing = [str(path) for path in model_files if not path.is_file()]
+    skip_unless_e2e_ready(not missing, f"models not found: {', '.join(missing)}")
+    metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
+    video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
+    config_dir = tmp_output_dir.parent
+    model_paths = [os.path.relpath(path.resolve(), config_dir.resolve()) for path in model_files]
+    # The app runs from the Apps root, so only a path joined to the config file finds a model.
+    assert not any((APPS_ROOT / path).exists() for path in model_paths), model_paths
+    sources = [urls[index % len(urls)] for index in range(len(STREAMS))]
+    config_path = e2e_config_writer(
+        {
+            "input": {"source": sources, "codec": codec},
+            "inference": {"frames": FRAMES, "min_score": MIN_SCORE},
+            # This test is the Insight receiver, so the example sends to loopback.
+            "output": {
+                "insight": {
+                    "host": "127.0.0.1",
+                    "video_port_base": video_port,
+                    "metadata_port_base": metadata_port,
+                }
+            },
+            # Relative to the generated config, so the test runs the app's path join.
+            "app": {"model_paths": model_paths},
+        }
     )
-    def test_every_stream_publishes_its_own_model_contract(
-        self,
-        request,
-        codec,
-        urls_fixture,
-        models_dir,
-        tmp_output_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
-        e2e_config_section,
-    ):
-        rtsp_urls = request.getfixturevalue(urls_fixture)
-        skip_unless_e2e_ready(
-            _runtime_deps_ready(),
-            "python runtime dependencies (cv2, numpy, pyneat) are not available",
-        )
-        skip_unless_e2e_ready(
-            len(rtsp_urls) >= 1, f"need at least one RTSP {codec.upper()} URLs for multistream e2e"
-        )
+    assert config_path.parent == config_dir
 
-        model_paths = [models_dir / slot[2] for slot in STREAM_SLOTS]
-        missing = [str(path) for path in model_paths if not path.is_file()]
-        skip_unless_e2e_ready(
-            not missing, f"configured models not found under {models_dir}: {', '.join(missing)}"
-        )
-
-        output_cfg = e2e_config_section("multi-stream-multi-model", "testing.e2e.output")
-        total_saved_frames = int(output_cfg["total_saved_frames"])
-        metadata_port_base = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
-
-        streams = [
-            {
-                "url": rtsp_urls[index % len(rtsp_urls)],
-                "task": task,
-                "decode": decode,
-                "model": str(model_paths[index]),
-            }
-            for index, (task, decode, _, _, _, _) in enumerate(STREAM_SLOTS)
-        ]
-
-        config_path = e2e_config_writer(
-            {
-                "streams": streams,
-                "input": {"codec": codec},
-                "output": {
-                    "insight": {
-                        "host": E2E_INSIGHT_HOST,
-                        "video_port_base": _env_int_or_default(
-                            "SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000
-                        ),
-                        "metadata_port_base": metadata_port_base,
-                    },
-                    "debug_dir": str(tmp_output_dir),
-                },
-                "inference": {
-                    "frames": 140,
-                },
-            }
-        )
-
-        cmd = [sys.executable, str(MAIN_PY), "--config", str(config_path)]
-
-        # One listener per stream: the four channels carry three different Insight contracts, so a
-        # single shared listener could not tell a wrong-typed stream from a silent one.
-        with contextlib.ExitStack() as stack:
-            video_sockets = []
-            video_base = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
-            for index in range(len(STREAM_SLOTS)):
-                sock = stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-                sock.bind((E2E_INSIGHT_HOST, video_base + index))
-                sock.setblocking(False)
-                video_sockets.append(sock)
-            listeners = [
-                (
-                    index,
-                    metadata_type,
-                    stack.enter_context(
-                        MetadataJsonListener(
-                            E2E_INSIGHT_HOST,
-                            metadata_port_base + index,
-                            num_ports=1,
-                            metadata_type=metadata_type,
-                            data_array_key=data_array_key,
-                            require_all_ports=True,
-                            min_object_count=min_objects,
-                        )
-                    ),
-                )
-                for index, (_, _, _, metadata_type, data_array_key, min_objects) in enumerate(
-                    STREAM_SLOTS
-                )
-            ]
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=test_timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
-            )
-            assert result.returncode == 0, (
-                f"main.py exited with code {result.returncode}\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-            )
-            for index, sock in enumerate(video_sockets):
-                try:
-                    packet = sock.recv(65535)
-                except BlockingIOError:
-                    pytest.fail(f"stream {index}: no {codec} RTP video received")
-                assert len(packet) >= 12 and packet[0] >> 6 == 2, f"stream {index}: invalid RTP"
-                assert packet[1] & 0x7f == (96 if codec == "h264" else 98), (
-                    f"stream {index}: unexpected video payload type")
-            received = [
-                (index, metadata_type, listener.wait_for_messages(5.0))
-                for index, metadata_type, listener in listeners
-            ]
-
-        for index, metadata_type, metadata in received:
-            assert metadata.success, (
-                f"stream {index} did not publish {metadata_type} metadata on port "
-                f"{metadata_port_base + index}: {metadata.error}"
-            )
-
-            assert metadata.messages and all(
-                message.timestamp_ms >= 0 and message.frame_id
-                for message in metadata.messages
-            ), f"stream {index} metadata is missing a usable source timestamp or frame ID"
-
-            if metadata_type == "pose-estimation":
-                for message in metadata.messages:
-                    poses = json.loads(message.payload)["data"]["poses"]
-                    assert all(len(pose.get("keypoints", [])) == 17 for pose in poses), (
-                        f"stream {index} published a pose without 17 keypoints"
+    streams = len(STREAMS)
+    messages = []
+    arrivals = {index: [] for index in range(streams)}
+    errors = []
+    headers: list[list[bytes]] = [[] for _ in range(streams)]
+    stop = threading.Event()
+    video_sockets = []
+    drains = []
+    process = None
+    stdout = stderr = ""
+    with MetadataJsonListener(
+        "127.0.0.1",
+        metadata_port,
+        num_ports=streams,
+        metadata_contracts={metadata_type: key for _, metadata_type, key in STREAMS},
+    ) as listener:
+        try:
+            for index in range(streams):
+                video_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                video_sockets[-1].bind(("127.0.0.1", video_port + index))
+                drains.append(
+                    threading.Thread(
+                        target=_drain_video,
+                        args=(video_sockets[-1], stop, headers[index]),
+                        daemon=True,
                     )
-
-        saved = assert_streamed_frames_are_usable(
-            tmp_output_dir, total_saved_frames, streams=len(STREAM_SLOTS)
-        )
-        for index in range(len(STREAM_SLOTS)):
-            assert any(path.name.startswith(f"stream_{index}_frame_") for path in saved), (
-                f"stream {index} saved no annotated debug frame"
+                )
+                drains[-1].start()
+            process = subprocess.Popen(
+                [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(APPS_ROOT),
             )
+            deadline = time.monotonic() + test_timeout_ms / 1000
+            # Read during the run and at exit, so no message waits long enough to overflow the
+            # socket buffer.
+            while process.poll() is None and time.monotonic() < deadline:
+                result = listener.wait_for_messages(0.2)
+                if result.error and not result.timed_out:
+                    errors.append(result.error)
+                for message in result.messages:
+                    messages.append(message)
+                    arrivals[message.port - metadata_port].append(time.monotonic())
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                    stderr = f"killed after {test_timeout_ms} ms\n"
+                out, err = process.communicate()
+                stdout, stderr = out, stderr + err
+                rest = listener.drain_pending()
+                messages.extend(rest.messages)
+                if rest.error:
+                    errors.append(rest.error)
+            stop.set()
+            for drain in drains:
+                drain.join()
+            for sock in video_sockets:
+                sock.close()
+
+    assert process.returncode == 0, (
+        f"exit {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    )
+    assert not errors, errors
+    for index, (_, metadata_type, key) in enumerate(STREAMS):
+        assert re.search(
+            rf"^\[stream {index}\] [a-z0-9-]+ model={re.escape(model_paths[index])} "
+            rf"rtsp={re.escape(sources[index])} stream=\d+x\d+@\d+ insight=127\.0\.0\.1 "
+            rf"video={video_port + index} metadata={metadata_port + index}$",
+            stdout,
+            re.MULTILINE,
+        ), stdout
+        assert re.search(
+            rf"^\[stream {index}\] processed={FRAMES} left_out=0$", stdout, re.MULTILINE
+        ), stdout
+        assert {header[1] & 0x7F for header in headers[index]} == {PAYLOAD_TYPES[codec]}, (
+            f"stream {index} video payload types"
+        )
+
+        stream_messages = [m for m in messages if m.port == metadata_port + index]
+        assert {m.metadata_type for m in stream_messages} == {metadata_type}, (
+            f"stream {index} metadata types"
+        )
+        # UDP on loopback may drop a message under load, so allow a few to go missing.
+        assert len(stream_messages) >= FRAMES * 95 // 100, (
+            f"stream {index}: {len(stream_messages)} of {FRAMES} messages arrived"
+        )
+        frame_ids = [int(message.frame_id) for message in stream_messages]
+        assert frame_ids == sorted(set(frame_ids)), f"stream {index}: frame IDs out of order"
+        entries = [e for m in stream_messages for e in json.loads(m.payload)["data"][key]]
+        problems = [(problem, e) for e in entries if (problem := _entry_problem(metadata_type, e))]
+        assert not problems, f"stream {index}: {problems[:3]}"
+        # The detection and segmentation models find objects in every test stream. The pose
+        # stream checks the poses it sent, and may send none when no person is in view. The
+        # counts it saw on a DevKit are not verified yet.
+        if metadata_type != "pose-estimation":
+            assert entries, f"stream {index} sent no {key}"
+        # Insight draws each message's entries on the video frame its timestamp names.
+        rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers[index]}
+        unpaired = [
+            m.timestamp_ms for m in stream_messages if not _pairs(m.timestamp_ms, rtp_timestamps)
+        ]
+        # A frame the video link dropped leaves its message unpaired, so allow 5%, as for the
+        # count.
+        assert len(unpaired) <= len(stream_messages) * 5 // 100, (
+            f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}"
+        )
+        times = arrivals[index][len(arrivals[index]) // 10:]
+        assert len(times) > 10, f"stream {index}: {len(times)} messages arrived during the run"
+        results_per_s = (len(times) - 1) / (times[-1] - times[0])
+        print(
+            f"{codec} stream {index}: {len(stream_messages)} messages, "
+            f"{results_per_s:.1f} results/s, {len(entries)} {key}"
+        )
+        assert results_per_s >= MIN_STREAM_RESULTS_PER_S, (
+            f"stream {index}: {results_per_s:.1f} results/s"
+        )

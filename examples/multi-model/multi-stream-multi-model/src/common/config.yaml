@@ -1,56 +1,49 @@
-model:                       # Settings shared by every stream.
+# A different YOLO model on each of up to four RTSP streams, shown in Insight.
+model:
+  # Class labels of the detection and segmentation models, one per line. A relative path starts
+  # at the working directory.
   labels: examples/multi-model/multi-stream-multi-model/src/common/coco_label.txt
 
-streams:                     # One entry per camera. Each entry runs its own model.
-  - url: <rtsp-url-1>        # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
-    task: detection          # detection, segmentation, or pose.
-    decode: yolov8           # Head layout of this package: yolov8 or yolo26.
-    model: <model-path>      # Example: models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz
-  - url: <rtsp-url-2>
-    task: segmentation
-    decode: yolo26
-    model: <model-path>      # Example: models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz
-  - url: <rtsp-url-3>
-    task: pose
-    decode: yolo26
-    model: <model-path>      # Example: models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz
-  - url: <rtsp-url-4>
-    task: detection
-    decode: yolo26
-    model: <model-path>      # Example: models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz
+input:
+  source:                       # One to four RTSP URLs, the most the example is tested with. The
+                                # same URL may repeat. Stream i runs model i of app.model_paths
+                                # and goes to Insight channel i.
+    - <rtsp-url-1>
+    - <rtsp-url-2>
+    - <rtsp-url-3>
+    - <rtsp-url-4>
+  codec: h264                   # h264 or h265, for every stream.
+  width: 0                      # 0 reads each stream's frame size and rate with a probe. Set
+  height: 0                     # them only for a stream that does not report them.
+  fps: 0
+  rtsp:
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 100             # RTSP jitter buffer.
 
-input:                       # RTSP input transport settings.
-  codec: h264                # h264/avc or h265/hevc.
-  tcp: true                  # Use TCP for RTSP transport.
-  latency_ms: 100            # RTSP receive latency in milliseconds.
+inference:
+  frames: 0                     # Results each stream sends before the app stops. 0 runs until
+                                # stopped.
+  min_score: 0.30               # Lowest score a detection, segment, or pose needs.
+  nms_iou: 0.60                 # Overlap at which NMS drops the weaker result.
+  max_detections: 50            # Objects, segments, or poses kept per frame.
 
-runtime:                     # Runtime and profiling settings.
-  profile: true              # Print per-stream timing summaries.
-  warmup_frames: 30          # Drain this many frames before metadata/profile output.
+output:
+  insight:
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Stream i sends video to this port + i.
+    metadata_port_base: 9100    # Stream i sends results to this port + i.
 
-inference:                   # Controls shared by every model.
-  frames: 0                  # Frame limit per stream. 0 means unlimited.
-  fps: 0                     # Must be 0. Set frame rate at the RTSP source.
-  max_inflight_per_stream: 4 # Frames this stream may have inside its model at once.
-  min_score: 0.30            # Detection, segmentation, and pose score threshold.
-  nms_iou: 0.60              # NMS IoU threshold.
-  max_detections: 50         # Max instances to keep per frame after NMS.
-
-output:                      # Insight output plus optional local debug saves.
-  insight:                   # Live video and metadata destination.
-    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
-    video_port_base: 9000    # Base UDP port for video channels.
-    metadata_port_base: 9100 # Base UDP port for metadata channels.
-  video_enabled: true        # Disable to publish metadata only.
-  mask_threshold: 0.50       # Mask threshold for segmentation polygons and saved frames.
-  mask_alpha: 0.55           # Mask overlay opacity in saved frames.
-  min_keypoint_visibility: 0.30 # Hide lower-confidence joints on saved debug overlays.
-  debug_dir: null            # Optional directory for periodic debug frame saves.
-  save_every: 0              # Save every Nth debug frame. 0 disables saving.
-
-# Test harness settings only. Normal example runs ignore this section.
-testing:
-  e2e:
-    output:
-      save_every: 10
-      total_saved_frames: 20
+app:
+  model_paths:                  # Compiled model package of each stream, in input.source order.
+                                # A relative path starts at this file.
+    - ../../../../../models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz
+    - ../../../../../models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz
+    - ../../../../../models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz
+    - ../../../../../models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz
+  model_ids:                    # What each package runs, in the same order: yolov8, yolov8-seg,
+                                # yolov8-pose, yolo26, yolo26-seg, or yolo26-pose. YOLO11
+                                # packages carry the YOLOv8 heads.
+    - yolov8
+    - yolo26-seg
+    - yolo26-pose
+    - yolo26
