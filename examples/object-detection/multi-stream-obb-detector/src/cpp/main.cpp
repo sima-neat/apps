@@ -188,6 +188,8 @@ neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config
 neat::RunOptions run_options() {
   neat::RunOptions options;
   options.preset = neat::RunPreset::Realtime;
+  // Auto copies a frame when the sink queue backs up (Core RunCoreGraphStart.cpp:275-281).
+  options.output_memory = neat::OutputMemory::ZeroCopy;
   return options;
 }
 

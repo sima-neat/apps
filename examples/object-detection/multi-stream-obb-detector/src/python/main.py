@@ -164,6 +164,8 @@ def metadata_options(config: Config, index: int) -> pyneat.MetadataSenderOptions
 def run_options() -> pyneat.RunOptions:
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Realtime
+    # Auto copies a frame when the sink queue backs up (Core RunCoreGraphStart.cpp:275-281).
+    options.output_memory = pyneat.OutputMemory.ZeroCopy
     return options
 
 
