@@ -186,6 +186,7 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         f"exit {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     )
     assert not errors, errors
+    entries_by_stream = {}
     for index, (_, metadata_type, key) in enumerate(STREAMS):
         assert re.search(
             rf"^\[stream {index}\] [a-z0-9-]+ model={re.escape(model_paths[index])} "
@@ -209,16 +210,24 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         assert len(stream_messages) >= FRAMES * 95 // 100, (
             f"stream {index}: {len(stream_messages)} of {FRAMES} messages arrived"
         )
+        assert all(message.frame_id for message in stream_messages), (
+            f"stream {index}: a message without a frame ID"
+        )
         frame_ids = [int(message.frame_id) for message in stream_messages]
         assert frame_ids == sorted(set(frame_ids)), f"stream {index}: frame IDs out of order"
         entries = [e for m in stream_messages for e in json.loads(m.payload)["data"][key]]
+        entries_by_stream[index] = entries
         problems = [(problem, e) for e in entries if (problem := _entry_problem(metadata_type, e))]
         assert not problems, f"stream {index}: {problems[:3]}"
         # The detection and segmentation models find objects in every test stream. The pose
-        # stream checks the poses it sent, and may send none when no person is in view. The
-        # counts it saw on a DevKit are not verified yet.
+        # model needs a person in view: when stream 0 found a person on the same URL, the pose
+        # stream must send poses. The pose counts seen on a DevKit are not verified yet.
         if metadata_type != "pose-estimation":
             assert entries, f"stream {index} sent no {key}"
+        elif sources[index] == sources[0] and any(
+            entry["label"] == "person" for entry in entries_by_stream[0]
+        ):
+            assert entries, f"stream {index} sent no poses while stream 0 saw a person"
         # Insight draws each message's entries on the video frame its timestamp names.
         rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers[index]}
         unpaired = [

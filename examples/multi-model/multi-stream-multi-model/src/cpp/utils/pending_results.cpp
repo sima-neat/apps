@@ -9,26 +9,26 @@
 
 namespace pending_results {
 
-PendingResults::PendingResults(int stream_index, std::string model_path, double deadline_s)
-    : stream_index_(stream_index), model_path_(std::move(model_path)), deadline_s_(deadline_s) {}
+PendingResults::PendingResults(int stream_index, std::string model_path, double deadline_s,
+                               double first_result_s)
+    : stream_index_(stream_index), model_path_(std::move(model_path)), deadline_s_(deadline_s),
+      first_result_s_(first_result_s) {}
 
-void PendingResults::frame_arrived(double now_s) {
-  if (started_ && !pending_since_) {
+void PendingResults::observe(bool frame_arrived, bool result_arrived, double now_s) {
+  if (result_arrived) {
+    has_result_ = true;
+    pending_since_.reset();
+    return;
+  }
+  if (frame_arrived && !pending_since_) {
     pending_since_ = now_s;
   }
-}
-
-void PendingResults::result_arrived() {
-  started_ = true;
-  pending_since_.reset();
-}
-
-void PendingResults::check(double now_s) const {
-  if (pending_since_ && now_s - *pending_since_ > deadline_s_) {
+  const double limit_s = has_result_ ? deadline_s_ : first_result_s_;
+  if (pending_since_ && now_s - *pending_since_ > limit_s) {
     std::ostringstream message;
     // Shortest form, as Python's {:g}: 10 prints "10", 0.5 prints "0.5".
     message << "stream " << stream_index_ << ": model " << model_path_ << " returned no result for "
-            << deadline_s_ << " s while its camera sent frames";
+            << limit_s << " s while its decoder sent frames";
     throw std::runtime_error(message.str());
   }
 }

@@ -265,6 +265,7 @@ int run_case(const std::string& binary, const std::string& models_dir,
       problems.push_back("metadata listener: " + error);
     }
   }
+  bool stream_0_saw_person = false;
   for (int index = 0; index < streams; ++index) {
     const auto& stream_case = kStreams[static_cast<std::size_t>(index)];
     const std::string stream = "stream " + std::to_string(index);
@@ -310,6 +311,10 @@ int run_case(const std::string& binary, const std::string& models_dir,
       if (message.metadata_type != stream_case.metadata_type) {
         problems.push_back(stream + " sent " + message.metadata_type + " metadata");
       }
+      if (message.frame_id.empty()) {
+        problems.push_back(stream + ": a message without a frame ID");
+        continue;
+      }
       const long long frame_id = std::stoll(message.frame_id);
       if (frame_id <= previous_frame_id) {
         problems.push_back(stream + ": frame IDs out of order: " + message.frame_id + " after " +
@@ -322,6 +327,7 @@ int run_case(const std::string& binary, const std::string& models_dir,
             !problem.empty()) {
           problems.push_back(stream + " frame " + message.frame_id + ": " + problem);
         }
+        stream_0_saw_person |= index == 0 && entry.at("label") == "person";
         ++entries;
       }
       // Insight draws each message's entries on the video frame its timestamp names.
@@ -334,11 +340,15 @@ int run_case(const std::string& binary, const std::string& models_dir,
       problems.push_back(stream + ": " + std::to_string(messages) + " of " +
                          std::to_string(kFrames) + " messages arrived");
     }
-    // The detection and segmentation models find objects in every test stream. The pose stream
-    // checks the poses it sent, and may send none when no person is in view. The counts it saw
-    // on a DevKit are not verified yet.
+    // The detection and segmentation models find objects in every test stream. The pose model
+    // needs a person in view: when stream 0 found a person on the same URL, the pose stream must
+    // send poses. The pose counts seen on a DevKit are not verified yet.
     if (stream_case.metadata_type != "pose-estimation" && entries == 0) {
       problems.push_back(stream + " sent no " + stream_case.key);
+    }
+    if (stream_case.metadata_type == "pose-estimation" && entries == 0 && stream_0_saw_person &&
+        sources[static_cast<std::size_t>(index)] == sources.front()) {
+      problems.push_back(stream + " sent no poses while stream 0 saw a person");
     }
     // A frame the video link dropped leaves its message unpaired, so allow 5%, as for the count.
     if (static_cast<int>(unpaired.size()) > messages * 5 / 100) {

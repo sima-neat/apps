@@ -5,12 +5,15 @@ tests/cpp/test_unit.cpp runs the same tests in C++."""
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import yaml
 
 from tests.utils.config_cases import load_example_main
 from tests.utils.fake_run import FakeRun
@@ -148,60 +151,64 @@ def test_data_json_leaves_out_the_lowest_confidence_entries():
     assert insight_metadata.data_json("poses", []) == ('{"poses":[]}', 0)
 
 
-def started(stream_index: int, model_path: str) -> PendingResults:
-    """A deadline of 10 s after the stream's first result."""
-    pending = PendingResults(stream_index, model_path, 10.0)
-    pending.result_arrived()
-    return pending
+def error_of(pending: PendingResults, frame: bool, result: bool, now_s: float) -> str:
+    """The error `observe` raises for one round, or "" when it raises none."""
+    try:
+        pending.observe(frame, result, now_s)
+    except RuntimeError as error:
+        return str(error)
+    return ""
 
 
-def test_pending_result_past_the_deadline_names_the_stream_and_model():
-    pending = started(2, "models/m.tar.gz")
-    pending.frame_arrived(100.0)
-    pending.check(110.0)
-    with pytest.raises(RuntimeError) as error:
-        pending.check(110.5)
-    assert str(error.value) == (
-        "stream 2: model models/m.tar.gz returned no result for 10 s while its camera sent frames"
+def test_late_result_names_the_stream_and_model():
+    pending = PendingResults(2, "models/m.tar.gz", 10.0, 30.0)
+    pending.observe(True, True, 100.0)
+    assert error_of(pending, True, False, 101.0) == ""
+    assert error_of(pending, False, False, 111.0) == ""
+    assert error_of(pending, False, False, 111.5) == (
+        "stream 2: model models/m.tar.gz returned no result for 10 s while its decoder sent frames"
     )
 
 
 def test_later_frames_keep_the_first_pending_time():
-    pending = started(0, "m.tar.gz")
-    pending.frame_arrived(100.0)
-    pending.frame_arrived(105.0)
-    with pytest.raises(RuntimeError):
-        pending.check(110.5)
+    pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
+    pending.observe(False, True, 100.0)
+    pending.observe(True, False, 101.0)
+    pending.observe(True, False, 106.0)
+    assert error_of(pending, True, False, 111.5) != ""
 
 
 def test_result_clears_the_pending_frame():
-    pending = started(0, "m.tar.gz")
-    pending.frame_arrived(100.0)
-    pending.result_arrived()
-    pending.check(200.0)
-    pending.frame_arrived(205.0)
-    pending.check(215.0)
-    with pytest.raises(RuntimeError):
-        pending.check(215.5)
+    pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
+    pending.observe(False, True, 100.0)
+    pending.observe(True, False, 101.0)
+    pending.observe(False, True, 105.0)
+    assert error_of(pending, False, False, 200.0) == ""
+    pending.observe(True, False, 205.0)
+    assert error_of(pending, False, False, 215.0) == ""
+    assert error_of(pending, False, False, 215.5) != ""
 
 
-def test_frames_before_the_first_result_are_not_pending():
-    # The decoder may wait for a keyframe before the model sees a frame.
-    pending = PendingResults(0, "m.tar.gz", 10.0)
-    pending.frame_arrived(100.0)
-    pending.check(1_000_000.0)
-    pending.result_arrived()
-    pending.frame_arrived(1_000_001.0)
-    with pytest.raises(RuntimeError):
-        pending.check(1_000_011.5)
+def test_frame_with_its_result_in_one_round_is_not_pending():
+    pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
+    pending.observe(True, True, 100.0)
+    assert error_of(pending, False, False, 1_000_000.0) == ""
+
+
+def test_first_result_has_its_own_deadline():
+    pending = PendingResults(1, "m.tar.gz", 10.0, 30.0)
+    pending.observe(True, False, 100.0)
+    assert error_of(pending, False, False, 125.0) == ""
+    assert error_of(pending, False, False, 130.5) == (
+        "stream 1: model m.tar.gz returned no result for 30 s while its decoder sent frames"
+    )
 
 
 def test_paused_camera_waits_without_a_limit():
-    pending = started(0, "m.tar.gz")
-    pending.check(1_000_000.0)
-    pending.frame_arrived(100.0)
-    pending.result_arrived()
-    pending.check(1_000_000.0)
+    pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
+    assert error_of(pending, False, False, 1_000_000.0) == ""
+    pending.observe(False, True, 1_000_001.0)
+    assert error_of(pending, False, False, 2_000_000.0) == ""
 
 
 class StoppingRun(FakeRun):
@@ -218,33 +225,113 @@ class StoppingRun(FakeRun):
         return super().pull(output_name, timeout_ms)
 
 
-def fake_stream(deadline_s: float):
-    """A stream that has sent its first result, so its deadline runs."""
-    pending = PendingResults(0, "models/m.tar.gz", deadline_s)
-    pending.result_arrived()
+class FakeSender:
+    def __init__(self) -> None:
+        self.sent = []
+
+    def send_metadata(self, metadata_type, data, timestamp_ms, frame_id) -> bool:
+        self.sent.append((metadata_type, data, timestamp_ms, frame_id))
+        return True
+
+
+RESULT = SimpleNamespace(pts_ns=2_000_000, frame_id=7)
+
+
+def fake_stream(deadline_s: float, first_result_s: float):
+    """A detection stream that has not sent a result yet."""
     return main_module.Stream(
         info=main_module.RtspStreamInfo(640, 480, 30),
         metadata_type=main_module.DETECTION,
-        metadata_sender=None,
-        pending=pending,
+        metadata_sender=FakeSender(),
+        pending=PendingResults(0, "models/m.tar.gz", deadline_s, first_result_s),
     )
 
 
-def test_send_results_stops_a_model_that_returns_nothing_while_frames_arrive():
-    # A healthy run whose model never returns the result of the frame that arrived.
+@pytest.fixture
+def no_decode(monkeypatch):
+    """Results that hold nothing, so the loop runs without a real model output."""
+    monkeypatch.setattr(main_module, "metadata_entries", lambda *args: [])
+
+
+def test_send_results_stops_a_model_that_stops_returning_results(no_decode):
+    # Round 1: a frame and its result. Round 2: a frame. Round 3: nothing, past the deadline.
+    stop = threading.Event()
+    run = StoppingRun(
+        stop, ("sample", object()), ("sample", RESULT), ("sample", object()), "timeout",
+        "timeout", "timeout",
+    )
+    stream = fake_stream(0.0, 60.0)
+    with pytest.raises(RuntimeError) as error:
+        main_module.send_results(run, [stream], LABELS, 50, 0, stop)
+    assert str(error.value) == (
+        "stream 0: model models/m.tar.gz returned no result for 0 s while its decoder sent frames"
+    )
+    assert stream.metadata_sender.sent == [("object-detection", '{"objects":[]}', 2, "7")]
+    assert run.pulls == [("frames_0", 0), ("results_0", 0)] * 3
+
+
+def test_send_results_stops_a_model_that_never_returns_a_result(no_decode):
     stop = threading.Event()
     run = StoppingRun(stop, ("sample", object()), "timeout", "timeout", "timeout")
     with pytest.raises(RuntimeError) as error:
-        main_module.send_results(run, [fake_stream(0.0)], LABELS, 50, 0, stop)
+        main_module.send_results(run, [fake_stream(60.0, 0.0)], LABELS, 50, 0, stop)
     assert str(error.value) == (
-        "stream 0: model models/m.tar.gz returned no result for 0 s while its camera sent frames"
+        "stream 0: model models/m.tar.gz returned no result for 0 s while its decoder sent frames"
     )
-    assert run.pulls == [("frames_0", 0), ("results_0", 0)] * 2
 
 
-def test_send_results_lets_a_paused_camera_wait():
+def test_send_results_lets_a_paused_camera_wait(no_decode):
     # No frames and no results: the loop keeps waiting until the stop signal.
     stop = threading.Event()
     run = StoppingRun(stop, *["timeout"] * 20)
-    main_module.send_results(run, [fake_stream(0.0)], LABELS, 50, 0, stop)
+    main_module.send_results(run, [fake_stream(0.0, 0.0)], LABELS, 50, 0, stop)
     assert len(run.pulls) == 20
+
+
+def run_main(tmp_path: Path, change) -> str:
+    """The last line main.py prints to stderr for the shipped config with `change` applied.
+
+    The frame size and rate are set, so no stream is probed and no source is needed.
+    """
+    config = yaml.safe_load((COMMON_DIR / "config.yaml").read_text())
+    config["input"].update(width=1280, height=720, fps=30)
+    change(config)
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(config))
+    result = subprocess.run(
+        [sys.executable, str(EXAMPLE_DIR / "src" / "python" / "main.py"), "--config", str(path)],
+        capture_output=True, text=True, cwd=APPS_ROOT, timeout=60,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    return result.stderr.strip().splitlines()[-1]
+
+
+def test_per_stream_lists_need_one_entry_per_stream(tmp_path):
+    def drop_one(config):
+        config["app"]["model_paths"] = config["app"]["model_paths"][:3]
+
+    assert run_main(tmp_path, drop_one) == (
+        "[ERR] app.model_paths has 3 entries and input.source has 4: give one per stream"
+    )
+
+
+def test_unknown_model_id_names_the_choices(tmp_path):
+    def unknown(config):
+        config["app"]["model_ids"][1] = "yolo26-obb"
+
+    assert run_main(tmp_path, unknown) == (
+        "[ERR] app.model_ids: unknown value 'yolo26-obb' (expected yolo26, yolo26-pose, "
+        "yolo26-seg, yolov8, yolov8-pose, yolov8-seg)"
+    )
+
+
+def test_model_ids_select_the_decoder_and_metadata_type():
+    decode = main_module.pyneat.BoxDecodeType
+    assert main_module.MODEL_IDS == {
+        "yolov8": (decode.YoloV8, "object-detection"),
+        "yolov8-seg": (decode.YoloV8Seg, "segmentation"),
+        "yolov8-pose": (decode.YoloV8Pose, "pose-estimation"),
+        "yolo26": (decode.YoloV26, "object-detection"),
+        "yolo26-seg": (decode.YoloV26Seg, "segmentation"),
+        "yolo26-pose": (decode.YoloV26Pose, "pose-estimation"),
+    }

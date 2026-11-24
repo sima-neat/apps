@@ -24,29 +24,26 @@ How does a frame move through multi-stream-multi-model?
 ┆   ┌────────────────────────┐                  ┌────────────────────────┐   ┆
 ┆   │ RtspEncodedInput × N   │─────────────────►│ VideoSender × N        │───┆──────┐
 ┆   └────────────────────────┘  latest/stream   └────────────────────────┘   ┆      │
-┆       │             │ encoded frames                                       ┆      │ video
-┆       │             └────────────────────────►┌────────────────────────┐   ┆      │
-┆       │               latest/stream           │ Output "frames_i" × N  │   ┆      │
-┆       │ encoded frames                        └────────────────────────┘   ┆      │
+┆       │ encoded frames                                                     ┆      │ video
+┆       ▼                                                                    ┆      │
+┆   ┌────────────────────────┐                                               ┆      │
+┆   │ SimaDecode × N         │─────────────────►┌────────────────────────┐   ┆      │
+┆   └────────────────────────┘  latest/stream   │ Output "frames_i" × N  │   ┆      │
+┆       │ NV12, latest/stream                   └────────────────────────┘   ┆      │
 ┆       ▼                                           │ newest frame           ┆      │
-┆   ┌────────────────────────┐                      │                        ┆      │
-┆   │ SimaDecode × N         │                      │                        ┆      │
-┆   └────────────────────────┘                      │                        ┆      │
-┆       │ NV12, latest/stream                       │                        ┆      │
-┆       ▼                                           │                        ┆      │
 ┆   ┌────────────────────────┐                      │                        ┆      │
 ┆   │ YOLO Model × N         │ one per stream       │                        ┆      │
 ┆   └────────────────────────┘                      │                        ┆      │
-┆       │ BBOX tensors                              │                        ┆      │
+┆       │ result tensors                            │                        ┆      │
 ┆       ▼                                           │                        ┆      │
 ┆   ┌────────────────────────┐                      │                        ┆      │
 ┆   │ Output "results_i" × N │                      │                        ┆      │
 ┆   └────────────────────────┘                      │                        ┆      │
 ╰┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      │
         ▼ pull                                      ▼ pull                          │
-    ┌───────────────────────────────────────────────┐                               │
-    │ Pull loop: metadata, result deadline          │                               │
-    └───────────────────────────────────────────────┘                               │
+    ┌──────────────────────────────────────────────────┐                            │
+    │ Pull loop: metadata, result deadline             │                            │
+    └──────────────────────────────────────────────────┘                            │
         │ objects, segments, or poses as JSON                                       │
         ▼                                                                           ▼
     ┌────────────────────────┐                                               ┌────────────┐
@@ -57,9 +54,9 @@ How does a frame move through multi-stream-multi-model?
 - One graph and one `Run` hold every stream. Each stream has its own `SimaDecode`, its own model, and its own `Output "results_i"`.
 - `RtspEncodedInput` sends each stream's encoded video to Insight unchanged. Insight draws every overlay from the metadata.
 - The link into each model keeps the newest decoded frames. Core lets each model hold 4 frames of its stream at once.
-- `Output "frames_i"` keeps only the newest encoded frame. The pull loop reads it to know that the camera is sending.
+- `Output "frames_i"` keeps only the newest decoded frame. The pull loop reads it to know that the decoder is sending. The RTSP input feeds only the decoder and the video sender, so Core runs the three as one pipeline.
 - One pull loop reads every output in turn. It turns each result into Insight metadata and sends it on the stream's channel.
-- After a stream's first result, frames that arrive with no result for 10 seconds stop the application with an error. A camera that pauses sends no frames, so it may wait without a limit.
+- Decoded frames that arrive with no result for 10 seconds stop the application with an error. The first result may take 30 seconds, because Core builds the rest of the pipeline on the first frame. A camera that pauses sends no frames, so it may wait without a limit.
 
 ## Preview
 
@@ -70,6 +67,7 @@ How does a frame move through multi-stream-multi-model?
 - `sima-cli` 2.1.20 or newer ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
 - One to four RTSP streams, all H.264 or all H.265. Several streams may use the same URL. Each one still gets its own decoder and model.
 - An [Insight](https://developer.sima.ai/software/tools/insight/) host that the DevKit can reach.
+- Source frame rates that fit the decoder. Four 1920x1080@30 streams fit a DevKit. Four 1920x1080@60 H.265 streams exceed what the decoder admits. Lower the rate at the camera, or use fewer streams.
 
 ## Install Apps
 
@@ -151,10 +149,10 @@ Stop the application with `Ctrl-C`.
 The application prints one line per stream with its model, source, frame size, and Insight ports:
 
 ```text
-[stream 0] yolov8 model=../../../../../models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host>:8554/src1 stream=1920x1080@30 insight=<insight-host> video=9000 metadata=9100
-[stream 1] yolo26-seg model=../../../../../models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz rtsp=rtsp://<insight-host>:8554/src2 stream=1920x1080@30 insight=<insight-host> video=9001 metadata=9101
-[stream 2] yolo26-pose model=../../../../../models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host>:8554/src3 stream=1920x1080@30 insight=<insight-host> video=9002 metadata=9102
-[stream 3] yolo26 model=../../../../../models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host>:8554/src4 stream=1920x1080@30 insight=<insight-host> video=9003 metadata=9103
+[stream 0] yolov8 model=../../../../../models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host-ip>:8554/src1 stream=1920x1080@30 insight=<insight-host-ip> video=9000 metadata=9100
+[stream 1] yolo26-seg model=../../../../../models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz rtsp=rtsp://<insight-host-ip>:8554/src2 stream=1920x1080@30 insight=<insight-host-ip> video=9001 metadata=9101
+[stream 2] yolo26-pose model=../../../../../models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host-ip>:8554/src3 stream=1920x1080@30 insight=<insight-host-ip> video=9002 metadata=9102
+[stream 3] yolo26 model=../../../../../models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz rtsp=rtsp://<insight-host-ip>:8554/src4 stream=1920x1080@30 insight=<insight-host-ip> video=9003 metadata=9103
 ```
 
 Open a viewer tab in Insight for each channel. Detection channels show boxes, the segmentation channel shows mask outlines, and the pose channel shows skeletons.
@@ -174,11 +172,12 @@ The metadata sender does not wait for a full network buffer. It drops the messag
 
 ## Troubleshooting
 
-- `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config. In C++, a number of the wrong type prints `stoi` without the key until #793 merges.
 - `app.model_paths has 3 entries and input.source has 4`: give every list one entry per stream.
 - `app.model_ids: unknown value` lists the values the application takes. Pick the one for the package's task and family.
 - `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: a value left at 0 could not be read. Check that the URL is reachable from the DevKit. For a reachable stream, set the value the message names.
-- `stream <i>: model <path> returned no result for 10 s while its camera sent frames`: that stream's model stopped. Check its package and its `app.model_ids` entry, then start the application again.
+- `stream <i>: model <path> returned no result for 10 s while its decoder sent frames`: that stream's model stopped. Check its package and its `app.model_ids` entry, then start the application again. The same message with `30 s` means the model never returned its first result.
+- One stream falls far behind while the others hold the source rate: the MLA is oversubscribed. The slowdown lands on one stream instead of spreading. Use lighter packages or fewer streams.
 - Boxes appear in about the right places but at the wrong sizes: the `app.model_ids` entry does not match the package's heads. Check it against the table above.
 - A positive `left_out` at exit: a frame's results did not fit one message. Lower `inference.max_detections` or raise `inference.min_score`.
 - No video or results in Insight: check the Insight host and the UDP ports. Make sure no other application sends to the same ports.

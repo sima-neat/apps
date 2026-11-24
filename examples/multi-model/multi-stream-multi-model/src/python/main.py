@@ -50,10 +50,14 @@ MODEL_IDS = {
 }
 # The key that holds a message's entries, for each metadata type.
 DATA_KEYS = {DETECTION: "objects", SEGMENTATION: "segments", POSE: "poses"}
-# How long a stream's frames may arrive with no result before the app stops with an error.
+# How long a stream's decoded frames may arrive with no result before the app stops with an
+# error. Not measured on a DevKit: a result takes a fraction of a second.
 RESULT_DEADLINE_S = 10.0
+# The same for the first result, which also waits for Core to build the rest of the pipeline on
+# the first frame (EdgeRouter.cpp). Not measured on a DevKit.
+FIRST_RESULT_DEADLINE_S = 30.0
 # Decoded frames each stream's decoder keeps: the 4 its model may hold, and 8 more to decode
-# into while those are in use.
+# into while those are in use. 12 as before the conversion, not re-measured with this graph.
 DECODER_BUFFERS = 12
 # The pull loop polls every output without waiting, and sleeps this long after a round that
 # pulled no result.
@@ -138,11 +142,15 @@ def rtsp_options(
     # another dynamic type.
     options.payload_type = 0
     options.source_fps = config.integer("input.fps")
-    options.auto_caps_from_stream = options.source_fps == 0
     if options.codec == pyneat.RtspCodec.H264:
         options.fallback_h264_width = stream.width
         options.fallback_h264_height = stream.height
-        options.fallback_h264_fps = stream.fps
+        if options.source_fps > 0:
+            # H.264 caps from input.fps and the probed size, instead of the stream's own.
+            options.auto_caps_from_stream = False
+        else:
+            # The rate the stream's caps fall back to; with input.fps set it has no effect.
+            options.fallback_h264_fps = stream.fps
     return options
 
 
@@ -166,9 +174,9 @@ def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
 
 
 def frames_graph(index: int) -> pyneat.Graph:
-    """The newest encoded frame of one stream, which tells the pull loop the camera is sending."""
+    """The newest decoded frame of one stream, which tells the pull loop the decoder is sending."""
     # Core gap: a Run reports no count of the frames a model holds, so the pull loop watches
-    # each camera's frames to tell a stalled model from a paused camera.
+    # each decoder's frames to tell a stalled model from a paused camera.
     graph = pyneat.Graph()
     graph.add(pyneat.nodes.output(frames_output(index), pyneat.OutputOptions.latest()))
     return graph
@@ -205,7 +213,8 @@ def metadata_options(config: Config, index: int) -> pyneat.MetadataSenderOptions
 def run_options() -> pyneat.RunOptions:
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Realtime
-    # Auto may copy a result when the output queue backs up (Core RunCoreGraphStart.cpp).
+    # Auto copies a result that waits at an output while another one is queued there, unless it
+    # is DMA-BUF or framework memory (RunCoreGraphStart.cpp, GraphRuntimeUtil.cpp).
     options.output_memory = pyneat.OutputMemory.ZeroCopy
     return options
 
@@ -237,7 +246,7 @@ def sample_tensors(sample: pyneat.Sample) -> list[pyneat.Tensor]:
     # languages pick the tensors out of the Sample here.
     if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
         return list(sample.tensors)
-    if sample.kind == pyneat.SampleKind.Tensor:
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         return [sample.tensor]
     raise RuntimeError("expected a tensor result")
 
@@ -279,28 +288,30 @@ def send_results(
     stop: threading.Event,
 ) -> None:
     """Send every stream's results to its Insight channel until each stream sent `frames`
-    (0: no limit) or a stop signal. A stream whose frames arrive with no result for
-    RESULT_DEADLINE_S raises with its model."""
-    while not stop.is_set() and (frames == 0 or min(s.processed for s in streams) < frames):
+    (0 or less: no limit) or a stop signal. A stream whose decoded frames arrive with no result
+    for its deadline raises with its model."""
+    while not stop.is_set() and (frames <= 0 or min(s.processed for s in streams) < frames):
         pulled = False
         now_s = time.monotonic()
         for index, stream in enumerate(streams):
-            if frames and stream.processed >= frames:
+            if frames > 0 and stream.processed >= frames:
                 continue
-            if run.pull(frames_output(index), 0) is not None:
-                stream.pending.frame_arrived(now_s)
+            frame_arrived = run.pull(frames_output(index), 0) is not None
             sample = run.pull(results_output(index), 0)
+            # Core gap: Python's pull returns None both on a timeout and on a closed output, so
+            # an output that closed shows only once the run stopped. A source that ends cleanly
+            # leaves the run running, and the loop waits for it. C++ reads the PullStatus.
+            # Core candidate: a Python pull that returns the PullStatus (RunPull.cpp).
+            if sample is None and (run.last_error() or not run.running()):
+                error = run.last_error()
+                raise RuntimeError(
+                    f"{results_output(index)} output closed unexpectedly"
+                    + (f": {error}" if error else "")
+                )
+            stream.pending.observe(frame_arrived, sample is not None, now_s)
             if sample is None:
-                # Core gap: Python's pull returns None both on a timeout and on a closed output,
-                # so a run that stopped shows only in its state.
-                if run.last_error() or not run.running():
-                    raise RuntimeError(
-                        f"{results_output(index)} output closed: {run.last_error()}"
-                    )
-                stream.pending.check(now_s)
                 continue
             pulled = True
-            stream.pending.result_arrived()
             data, left_out = insight_metadata.data_json(
                 DATA_KEYS[stream.metadata_type],
                 metadata_entries(sample, stream, labels, max_detections),
@@ -327,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
     infos = stream_info(config, sources)
     model_paths = per_stream(config, "app.model_paths", len(sources))
     model_ids = per_stream(config, "app.model_ids", len(sources))
+    # Each stream's BoxDecode type and metadata type, read before any model loads.
+    model_types = [lookup("app.model_ids", model_id, MODEL_IDS) for model_id in model_ids]
     labels = load_labels(Path(config.string("model.labels")))
     # Used by both the models and the box decode.
     max_detections = config.integer("inference.max_detections")
@@ -336,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     streams = []
     for index, url in enumerate(sources):
         info = infos[index]
-        decode_type, metadata_type = lookup("app.model_ids", model_ids[index], MODEL_IDS)
+        decode_type, metadata_type = model_types[index]
         model_path = args.config.absolute().parent / model_paths[index]
         models.append(
             pyneat.Model(str(model_path), model_options(config, info, decode_type, max_detections))
@@ -344,19 +357,23 @@ def main(argv: list[str] | None = None) -> int:
         rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(config, url, info))
         decoder = decoder_graph(config, info)
         # A plain link keeps every encoded frame. A dropped one corrupts the decoded frames
-        # after it until the next keyframe.
+        # after it until the next keyframe. Core runs an RTSP input with exactly two consumers,
+        # a decoder and an encoded VideoSender, as one pipeline (ExecutionGraphCompiler.cpp),
+        # so the frames output taps the decoder instead.
         graph.connect(rtsp, decoder)
         graph.connect(decoder, model_graph(models[-1], index), realtime_link())
         graph.connect(
             rtsp, pyneat.groups.video_sender(video_options(config, index)), realtime_link()
         )
-        graph.connect(rtsp, frames_graph(index), realtime_link())
+        graph.connect(decoder, frames_graph(index), realtime_link())
         streams.append(
             Stream(
                 info,
                 metadata_type,
                 pyneat.MetadataSender(metadata_options(config, index)),
-                PendingResults(index, model_paths[index], RESULT_DEADLINE_S),
+                PendingResults(
+                    index, model_paths[index], RESULT_DEADLINE_S, FIRST_RESULT_DEADLINE_S
+                ),
             )
         )
         print(

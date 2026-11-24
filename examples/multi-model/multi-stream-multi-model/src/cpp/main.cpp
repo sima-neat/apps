@@ -30,7 +30,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <iostream>
@@ -75,10 +74,14 @@ const std::map<std::string, std::string> kDataKeys = {
     {kSegmentation, "segments"},
     {kPose, "poses"},
 };
-// How long a stream's frames may arrive with no result before the app stops with an error.
+// How long a stream's decoded frames may arrive with no result before the app stops with an
+// error. Not measured on a DevKit: a result takes a fraction of a second.
 constexpr double kResultDeadlineS = 10.0;
+// The same for the first result, which also waits for Core to build the rest of the pipeline on
+// the first frame (EdgeRouter.cpp). Not measured on a DevKit.
+constexpr double kFirstResultDeadlineS = 30.0;
 // Decoded frames each stream's decoder keeps: the 4 its model may hold, and 8 more to decode into
-// while those are in use.
+// while those are in use. 12 as before the conversion, not re-measured with this graph.
 constexpr int kDecoderBuffers = 12;
 // The pull loop polls every output without waiting, and sleeps this long after a round that
 // pulled no result.
@@ -169,11 +172,16 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
   // dynamic type.
   options.payload_type = 0;
   options.source_fps = config.integer("input.fps");
-  options.auto_caps_from_stream = options.source_fps == 0;
   if (options.codec == groups::RtspCodec::H264) {
     options.fallback_h264_width = stream.width;
     options.fallback_h264_height = stream.height;
-    options.fallback_h264_fps = stream.fps;
+    if (options.source_fps > 0) {
+      // H.264 caps from input.fps and the probed size, instead of the stream's own.
+      options.auto_caps_from_stream = false;
+    } else {
+      // The rate the stream's caps fall back to; with input.fps set it has no effect.
+      options.fallback_h264_fps = stream.fps;
+    }
   }
   return options;
 }
@@ -196,10 +204,10 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
   return graph;
 }
 
-// The newest encoded frame of one stream, which tells the pull loop the camera is sending.
+// The newest decoded frame of one stream, which tells the pull loop the decoder is sending.
 neat::Graph frames_graph(std::size_t index) {
   // Core gap: a Run reports no count of the frames a model holds, so the pull loop watches each
-  // camera's frames to tell a stalled model from a paused camera.
+  // decoder's frames to tell a stalled model from a paused camera.
   neat::Graph graph;
   graph.add(neat::nodes::Output(frames_output(index), neat::OutputOptions::Latest()));
   return graph;
@@ -236,7 +244,8 @@ neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config
 neat::RunOptions run_options() {
   neat::RunOptions options;
   options.preset = neat::RunPreset::Realtime;
-  // Auto may copy a result when the output queue backs up (Core RunCoreGraphStart.cpp).
+  // Auto copies a result that waits at an output while another one is queued there, unless it is
+  // DMA-BUF or framework memory (RunCoreGraphStart.cpp, GraphRuntimeUtil.cpp).
   options.output_memory = neat::OutputMemory::ZeroCopy;
   return options;
 }
@@ -284,10 +293,14 @@ neat::TensorList sample_tensors(const neat::Sample& sample) {
   throw std::runtime_error("expected a tensor result");
 }
 
+// The tensor's values, copied once. A frame with nothing found has zero rows.
 template <typename T> std::vector<T> tensor_values(const neat::Tensor& tensor) {
-  const auto bytes = tensor.copy_dense_bytes_tight();
-  std::vector<T> values(bytes.size() / sizeof(T));
-  std::memcpy(values.data(), bytes.data(), values.size() * sizeof(T));
+  std::vector<T> values(tensor.dense_bytes_tight() / sizeof(T));
+  if (!values.empty() &&
+      !tensor.copy_dense_bytes_tight_to(reinterpret_cast<std::uint8_t*>(values.data()),
+                                        values.size() * sizeof(T))) {
+    throw std::runtime_error("cannot read a result tensor");
+  }
   return values;
 }
 
@@ -330,9 +343,9 @@ double now_s() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// Send every stream's results to its Insight channel until each stream sent `frames` (0: no
-// limit) or a stop signal. A stream whose frames arrive with no result for kResultDeadlineS throws
-// with its model.
+// Send every stream's results to its Insight channel until each stream sent `frames` (0 or less: no
+// limit) or a stop signal. A stream whose decoded frames arrive with no result for its deadline
+// throws with its model.
 void send_results(neat::Run& run, std::vector<Stream>& streams,
                   const std::vector<std::string>& labels, int max_detections, int frames,
                   const std::atomic<bool>& stop) {
@@ -351,18 +364,16 @@ void send_results(neat::Run& run, std::vector<Stream>& streams,
       neat::Sample sample;
       neat::PullError error;
       const std::string frames_name = frames_output(index);
-      if (sima_examples::pull_status_has_sample(run.pull(frames_name, 0, sample, &error),
-                                                frames_name, error, run.last_error())) {
-        stream.pending.frame_arrived(now);
-      }
+      const bool frame_arrived = sima_examples::pull_status_has_sample(
+          run.pull(frames_name, 0, sample, &error), frames_name, error, run.last_error());
       const std::string results_name = results_output(index);
-      if (!sima_examples::pull_status_has_sample(run.pull(results_name, 0, sample, &error),
-                                                 results_name, error, run.last_error())) {
-        stream.pending.check(now);
+      const bool result_arrived = sima_examples::pull_status_has_sample(
+          run.pull(results_name, 0, sample, &error), results_name, error, run.last_error());
+      stream.pending.observe(frame_arrived, result_arrived, now);
+      if (!result_arrived) {
         continue;
       }
       pulled = true;
-      stream.pending.result_arrived();
       const auto [data, left_out] =
           insight_metadata::data_json(kDataKeys.at(stream.metadata_type),
                                       metadata_entries(sample, stream, labels, max_detections));
@@ -390,6 +401,11 @@ int run_app(const fs::path& config_path) {
   const auto infos = stream_info(config, sources);
   const auto model_paths = per_stream(config, "app.model_paths", sources.size());
   const auto model_ids = per_stream(config, "app.model_ids", sources.size());
+  // Each stream's BoxDecode type and metadata type, read before any model loads.
+  std::vector<std::pair<neat::BoxDecodeType, std::string>> model_types;
+  for (const auto& model_id : model_ids) {
+    model_types.push_back(sima_examples::lookup("app.model_ids", model_id, kModelIds));
+  }
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
   // Used by both the models and the box decode.
   const int max_detections = config.integer("inference.max_detections");
@@ -400,26 +416,27 @@ int run_app(const fs::path& config_path) {
   for (std::size_t index = 0; index < sources.size(); ++index) {
     const auto& url = sources[index];
     const auto& info = infos[index];
-    const auto& [decode_type, metadata_type] =
-        sima_examples::lookup("app.model_ids", model_ids[index], kModelIds);
+    const auto& [decode_type, metadata_type] = model_types[index];
     const fs::path model_path = fs::absolute(config_path).parent_path() / model_paths[index];
     models.emplace_back(model_path.string(),
                         model_options(config, info, decode_type, max_detections));
     const neat::Graph rtsp = groups::RtspEncodedInput(rtsp_options(config, url, info));
     const neat::Graph decoder = decoder_graph(config, info);
     // A plain link keeps every encoded frame. A dropped one corrupts the decoded frames after it
-    // until the next keyframe.
+    // until the next keyframe. Core runs an RTSP input with exactly two consumers, a decoder and
+    // an encoded VideoSender, as one pipeline (ExecutionGraphCompiler.cpp), so the frames output
+    // taps the decoder instead.
     graph.connect(rtsp, decoder);
     graph.connect(decoder, model_graph(models.back(), index), realtime_link());
     graph.connect(rtsp, groups::VideoSender(video_options(config, index)), realtime_link());
-    graph.connect(rtsp, frames_graph(index), realtime_link());
+    graph.connect(decoder, frames_graph(index), realtime_link());
     std::string error;
     neat::MetadataSender metadata_sender(metadata_options(config, index), &error);
     sima_examples::require(metadata_sender.ok(), error);
     streams.push_back(Stream{
         info, metadata_type, std::move(metadata_sender),
         pending_results::PendingResults(static_cast<int>(index), model_paths[index],
-                                        kResultDeadlineS)});
+                                        kResultDeadlineS, kFirstResultDeadlineS)});
     std::cout << "[stream " << index << "] " << model_ids[index] << " model=" << model_paths[index]
               << " rtsp=" << url << " stream=" << info.width << "x" << info.height << "@"
               << info.fps << " insight=" << config.string("output.insight.host")
