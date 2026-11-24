@@ -10,16 +10,45 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | multi-stream-obb-detector |
-| Model | yolo26n_obb_w8a8_mpk |
+| Model | yolo26n_obb (w8a8) |
 
 ## Concept
 
-Runs YOLO26, YOLOv8, or YOLO11 oriented-box detection on up to four RTSP streams of top-down aerial video and sends each stream's video and rotated boxes to Insight.
+Runs one YOLO26, YOLOv8, or YOLO11 oriented-box detector on several RTSP streams of top-down aerial video. Each stream's video and rotated boxes go to Insight on their own channel.
 
-An oriented bounding box (OBB) is a box that turns with the object. It fits ships,
-planes, and vehicles seen from above, which an upright box would cover with
-mostly background. The model detects the 15 DOTA classes listed in
-`src/common/dota_label.txt`, such as plane, ship, storage tank, and small vehicle.
+An oriented bounding box (OBB) turns with the object. It fits ships, planes, and vehicles seen from above, which an upright box would cover with mostly background. The model detects the 15 DOTA classes in `src/common/dota_label.txt`, such as plane, ship, storage tank, and small vehicle.
+
+```text
+How does a frame move through multi-stream-obb-detector?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                             ┆
+┆  ┌──────────────────────┐  encoded frames  ┌──────────────────┐ ┆
+┆  │ RtspEncodedInput × N │─────────────────►│ VideoSender × N  │──────┐
+┆  └──────────────────────┘  latest/stream   └──────────────────┘ ┆    │
+┆             │ encoded frames                                    ┆    │ video
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ SimaDecode × N       │                                       ┆    │
+┆  └──────────────────────┘                                       ┆    │
+┆             │ NV12, latest/stream                               ┆    │
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ YOLO OBB Model       │  one model for every stream           ┆    │
+┆  └──────────────────────┘                                       ┆    │
+┆             │ BBOX_OBB_V1 tensor                                ┆    │
+┆             ▼                                                   ┆    │
+┆  ┌──────────────────────┐                                       ┆    │
+┆  │ Output "detections"  │                                       ┆    │
+┆  └──────────────────────┘                                       ┆    │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯    │
+              ▼ pull                                                   ▼
+   ┌──────────────────────┐   rotated boxes as JSON             ┌──────────────┐
+   │ MetadataSender × N   │────────────────────────────────────►│ Insight      │
+   └──────────────────────┘                                     └──────────────┘
+```
+
+Each stream is read once. Its encoded frames go to Insight unchanged, and only the branch to the model is decoded. Every stream's decoder feeds the same model. The link into the model keeps each stream's newest frames and tags them with the stream's ID. One pull loop on `detections` sends each result to its stream's channel.
 
 ## Preview
 
@@ -27,10 +56,10 @@ mostly background. The model detects the 15 DOTA classes listed in
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- H.264, H.265, or MJPEG RTSP sources of top-down aerial video, such as drone or satellite footage, matching `input.codec`. The model was trained on overhead imagery and finds little in street-level video.
-- An [Insight](https://developer.sima.ai/software/tools/insight/) version that draws `oriented_bbox`, and for MJPEG streams one that shows JPEG channels, reachable from the target.
-- For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
+- `sima-cli` 2.1.20 or newer ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
+- H.264, H.265, or MJPEG RTSP streams of top-down aerial video, such as drone or satellite footage. The model was trained on overhead images and finds little in street-level video.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) version that draws `oriented_bbox`, reachable from the DevKit. For MJPEG streams, Insight must also show JPEG channels.
+- For H.265, the computer running the Insight viewer must support hardware HEVC decoding. Chromium has no software decoder for WebRTC H.265.
 
 ## Install Apps
 
@@ -48,44 +77,44 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The YOLO26, YOLOv8, and YOLO11 OBB models each come in five sizes, n (nano) through x (extra large), in the [model browser](https://developer.sima.ai/models/). Download one with its ID and variant using `sima-cli` 2.1.20 or newer, and unpack it:
+The default model is `yolo26n_obb` with the `w8a8` variant. Download it and unpack it:
 
 ```bash
 sima-cli models download --id yolo26n_obb --variant w8a8
 unzip -o models/yolo26n_obb/w8a8/yolo26n_obb_w8a8_default.zip -d models/yolo26n_obb/w8a8
 ```
 
-| ID | Variants | `model.family` | Role |
-| --- | --- | --- | --- |
-| `yolo26n_obb` | `w8a8`, `w16a16` | `yolo26` | Default (`w8a8`) |
-| `yolo26s_obb` | `w8a8`, `w16a16`, `w8a16` | `yolo26` | Supported |
-| `yolo26m_obb` | `w8a8`, `w16a16` | `yolo26` | Supported |
-| `yolo26l_obb` | `w8a8`, `w16a16`, `w8a16` | `yolo26` | Supported |
-| `yolo26x_obb` | `w8a8`, `w16a16` | `yolo26` | Supported |
-| `yolov8{n,s,m,l,x}_obb` | `w8a8`, `w16a16` | `yolov8` | Supported |
-| `yolo11{n,s,m,l,x}_obb` | `w8a8`, `w16a16` | `yolo11` | Supported |
+The download is a ZIP file with the model package and its license. `unzip` puts the model package, `models/yolo26n_obb/w8a8/yolo26n_obb_w8a8_mpk.tar.gz`, next to the ZIP file. The packaged `model.path` already points to that file. A relative `model.path` starts at the config file, and `../../../../../models/` from `${APP_DIR}/src/common/` is `prebuilt-apps/models/`.
 
-The download is a ZIP file with the model package and its license. `unzip` puts the model package at `models/<id>/<variant>/<id>_<variant>_mpk.tar.gz`. Set `model.path` in the config to that `.tar.gz` file, not to the ZIP file, and `model.family` to the family in the table. YOLO26 needs no overlap removal. For YOLOv8 and YOLO11 the app removes overlapping boxes with rotated non-maximum suppression.
+The [model browser](https://developer.sima.ai/models/) has each family in five sizes, from n (nano) to x (extra large):
 
-Larger sizes find more objects but run slower. All streams share one detector, so its rate is divided among them. On four 720p 30 fps streams, `n` and `s` with `w8a8` detect on every frame, while `m`, `l`, and `x` detect on fewer frames per stream, and the `w16a16` and `w8a16` variants on fewer still. A slower detector also lowers the video frame rate in Insight. For smooth live video with a larger model, use fewer streams.
+| Model browser ID | Variants | `model.id` |
+| --- | --- | --- |
+| `yolo26{n,m,x}_obb` | `w8a8`, `w16a16` | `yolo26` |
+| `yolo26{s,l}_obb` | `w8a8`, `w16a16`, `w8a16` | `yolo26` |
+| `yolov8{n,s,m,l,x}_obb` | `w8a8`, `w16a16` | `yolov8` |
+| `yolo11{n,s,m,l,x}_obb` | `w8a8`, `w16a16` | `yolo11` |
+
+To use another model, replace the model browser ID and variant in both commands and in `model.path`. Set `model.id` to the family in the table, because the model package does not name its decoder. YOLO26 needs no overlap removal. For YOLOv8 and YOLO11, the application removes overlapping boxes with rotated non-maximum suppression.
+
+All streams share one model, so its rate is split among them. Larger sizes find more objects but run slower. A slower model also lowers the video frame rate in Insight. For smooth video with a larger model, use fewer streams.
 
 ## Prepare Insight
 
-In the Insight Web UI, upload your aerial videos, start one stream per video, and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings. Use a host and published port that the target can reach, not `localhost` and not an address only Insight's own machine can resolve.
+In the Insight Web UI, install or pick aerial videos and start one stream per video. Copy their RTSP URLs into `input.source`. Use the host and UDP port ranges that `neat` reports for the output settings. Use a host and port the DevKit can reach, not `localhost`.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path` and `model.family`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to `h264`, `h265`, or `mjpeg` to match the streams. All streams use the same codec. The video reaches Insight as the stream's own encoded frames, without re-encoding. Only the detector decodes them.
+Open `${APP_DIR}/src/common/config.yaml` and set:
+
+- `input.source`: one RTSP URL per stream. Stream i goes to Insight channel i.
+- `input.codec`: `h264`, `h265`, or `mjpeg`, the same for every stream.
+- `input.width`, `input.height`, and `input.fps`: leave each at 0 to read it from the stream. Set a value only for a stream that does not report it. Every stream needs the same frame size, because the streams share one model.
+- `output.insight.host`. Stream i sends video to `video_port_base` + i and boxes to `metadata_port_base` + i.
+
+Keep `inference.frames` at `0` to run until you stop the application.
 
 ## Run
-
-Validate the config without opening streams:
-
-```bash
-./${APP_DIR}/src/cpp/pre-built/multi-stream-obb-detector \
-  --config ${APP_DIR}/src/common/config.yaml \
-  --validate-config-only
-```
 
 ### C++
 
@@ -103,6 +132,8 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
+Stop the application with `Ctrl-C`.
+
 ## Expected Result
 
 The application prints one line per stream with its source, frame size, and Insight ports:
@@ -114,32 +145,36 @@ The application prints one line per stream with its source, frame size, and Insi
 
 Insight shows each stream on its own channel, with a rotated box and a label around each detected object.
 
-The packaged config sets `inference.frames: 0`, which runs until Ctrl-C. Set a positive value to stop after that many frames per stream. Either way, the application ends by printing each stream's processed frame count:
+When it stops, the application prints how many frames each stream processed. A positive `inference.frames` stops it after that many frames per stream:
 
 ```text
 [stream 0] processed=300
 [stream 1] processed=300
 ```
 
-To also save annotated frames, set `output.save_every` to a positive interval. Every that-many frames, each stream writes `stream_<N>_frame_<count>.jpg` with the rotated boxes under `output.debug_dir`, which the packaged config sets to `sandbox/multi-stream-obb-detector`.
+The metadata sender does not wait for a full network buffer. It drops the message instead, and the application then prints the count, such as `[stream 0] 3 metadata messages dropped`.
 
 ## Troubleshooting
 
-- Replace all placeholder stream URLs and the Insight host before running.
-- `oriented boxes require equal authoritative affine scales`: Neat could not scale the stream's frames to the model input by the same factor on both axes. 1280x720 and 1920x1080 streams work; a 640x512 stream fails. Re-encode the stream to 1280x720.
-- Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are present but missed, and raise it if the overlay shows boxes on background.
-- Boxes are missing on dense scenes: raise `inference.max_detections`. Each box adds to the metadata sent to Insight. At 300 with four dense 30 fps streams, C++ keeps about 28 fps per stream and Python about 20 to 27 fps.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: a value left at 0 could not be read. Check that the URL is reachable from the DevKit itself. For a reachable stream, set the value the message names.
+- `every input.source stream needs the same frame size` names two streams whose sizes differ. Use streams of one size, because they share one model.
+- `oriented boxes require equal authoritative affine scales`: Neat could not scale the frames to the model input by one factor on both axes. 1280x720 and 1920x1080 streams work, and a 640x512 stream fails. Re-encode such a stream to 1280x720.
+- Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are missed, and raise it if boxes appear on background.
+- Boxes missing on dense scenes: raise `inference.max_detections`. Each box adds about 150 bytes, up to 160, so about 400 boxes fit in one message. A message over 65507 bytes stops the application with `MetadataSender payload exceeds 65507 bytes`.
 - Insight shows upright boxes: the installed Insight does not draw `oriented_bbox`. Update Insight.
-- MJPEG frames reach Insight as RTP/JPEG, which carries at most 2040 pixels per side. Use MJPEG streams of 1080p or smaller.
-- Verify host and UDP port ranges if Insight receives no output.
+- MJPEG frames reach Insight as RTP/JPEG. Each side must be a multiple of 8, at most 2040 pixels, such as 1280x720 or 1920x1080.
+- No video or boxes in Insight: check the Insight host and the UDP ports.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`
-- Python source: `src/python/main.py`
-- Shared runtime files: `src/common/`
+- C++ reference source: `src/cpp/main.cpp`, with the Insight objects in `src/cpp/utils/oriented_boxes.cpp`
+- Python source: `src/python/main.py`, with the Insight objects in `src/python/utils/oriented_boxes.py`
+- Shared config: `src/common/config.yaml`
+- Class labels: `src/common/dota_label.txt`
+- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle. `main.py` finds it in a folder above itself. Their C++ reference source is in `support/cpp/sima_examples/`.
 
-The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`. The installed bundle does not include CMake files.
 
 ## Development From Source
 

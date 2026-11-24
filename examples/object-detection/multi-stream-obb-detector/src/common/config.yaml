@@ -1,35 +1,31 @@
-model:                       # Oriented-box detector model selection.
-  path: <model-path>         # Example: models/yolo26n_obb/w8a8/yolo26n_obb_w8a8_mpk.tar.gz
-  family: yolo26             # yolo26, yolov8, or yolo11. Must match the model package.
-  labels: examples/object-detection/multi-stream-obb-detector/src/common/dota_label.txt # Class names, one per line.
+# Oriented-box detection on several aerial RTSP streams with one shared model, shown in Insight.
+model:
+  id: yolo26                    # Family of the model in model.path: yolo26, yolov8, or yolo11.
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/yolo26n_obb/w8a8/yolo26n_obb_w8a8_mpk.tar.gz
+  # Class labels, one per line; a relative path starts at the working directory.
+  labels: examples/object-detection/multi-stream-obb-detector/src/common/dota_label.txt
 
-streams:                     # RTSP inputs, one entry per camera. Up to four.
-  - <rtsp-url-1>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
-  - <rtsp-url-2>
+input:
+  source:                       # One RTSP URL per stream; stream i goes to Insight channel i.
+    - <rtsp-url-1>
+    - <rtsp-url-2>
+  codec: h264                   # h264, h265, or mjpeg, for every stream.
+  width: 0                      # 0 reads each stream's frame size and rate with a probe.
+  height: 0                     # Set them only for a stream that does not report them.
+  fps: 0
+  rtsp:
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 100             # RTSP jitter buffer.
 
-input:                       # RTSP input transport settings.
-  codec: h264                # h264/avc, h265/hevc, or mjpeg.
-  tcp: true                  # Use TCP for RTSP transport.
-  latency_ms: 100            # RTSP receive latency in milliseconds.
+inference:
+  frames: 0                     # Frames each stream sends before the app stops; 0 runs until stopped.
+  min_score: 0.30               # Lowest score a detection needs.
+  max_detections: 100           # Oriented boxes kept per frame. Each adds about 150 bytes,
+                                # up to 160, so about 400 boxes fit in one metadata message.
 
-inference:                   # Detection controls.
-  frames: 0                  # Frame limit per stream. 0 means unlimited.
-  max_inflight_per_stream: 4 # Decoded frames admitted per stream to the shared detector. -1 uses the Core default.
-  max_inflight_total: 16     # Decoded frames admitted across all streams. -1 uses the Core default.
-  min_score: 0.30            # Detection score threshold.
-  max_detections: 100        # Max oriented boxes kept per frame.
-
-output:                      # Insight output plus optional local debug saves.
-  insight:                   # Live video and metadata destination.
-    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
-    video_port_base: 9000    # Base UDP port for video channels.
-    metadata_port_base: 9100 # Base UDP port for metadata channels.
-  debug_dir: sandbox/multi-stream-obb-detector # Directory for saved debug frames.
-  save_every: 0              # Save every Nth frame per stream with its boxes drawn. 0 disables saving.
-
-# Test harness settings only. Normal example runs ignore this section.
-testing:
-  e2e:
-    output:
-      save_every: 10
-      total_saved_frames: 20
+output:
+  insight:
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Stream i sends video to this port + i.
+    metadata_port_base: 9100    # Stream i sends boxes to this port + i.

@@ -1,145 +1,210 @@
-"""E2E tests for multi-stream-obb-detector (Python)."""
+"""End-to-end tests: RTSP streams reach Insight as video and oriented-box metadata, each on its
+own channel. tests/cpp/test_e2e.cpp runs the same checks in C++."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import math
 import os
-from pathlib import Path
+import re
+import socket
+import subprocess
 import sys
+import threading
+import time
+from pathlib import Path
 
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
-from tests.utils.output_assertions import assert_streamed_frames_are_usable
-from tests.utils.process_assertions import assert_exited_cleanly
 
-
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-LABELS_FILE = EXAMPLE_DIR / "src" / "common" / "dota_label.txt"
-E2E_INSIGHT_HOST = "127.0.0.1"
+LABELS = set((EXAMPLE_DIR / "src" / "common" / "dota_label.txt").read_text().splitlines())
+FRAMES = 150
+# Above the shipped 0.30, so the boxes show that the example applies inference.min_score.
+MIN_SCORE = 0.4
+# The suite's model must keep up with each 30 FPS test stream. Larger variants run slower.
+DEFAULT_MODEL = "yolo26n_obb_w8a8_mpk.tar.gz"
+MIN_STREAM_FPS = 20.0
+# RTP payload types: H.264 96, H.265 98, and RTP/JPEG 26.
+PAYLOAD_TYPES = {"h264": 96, "h265": 98, "mjpeg": 26}
+
+CASES = [
+    pytest.param("h264", 2, id="h264"),
+    pytest.param("h265", 2, id="h265"),
+    pytest.param("mjpeg", 2, id="mjpeg"),
+    # With one source, Core names the samples after the decoder instead of the stream.
+    pytest.param("h264", 1, id="h264-one-stream"),
+]
 
 
-def _model_family(model_path) -> str:
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    return int(value) if value else default
+
+
+def _model_id(model_path: Path) -> str:
     """Registry package files start with their model ID, such as yolov8n_obb_w8a8_mpk.tar.gz."""
-    name = Path(model_path).name
-    return next((family for family in ("yolov8", "yolo11") if name.startswith(family)), "yolo26")
+    return next((family for family in ("yolov8", "yolo11") if model_path.name.startswith(family)),
+                "yolo26")
 
 
-def _runtime_deps_ready() -> bool:
-    return all(importlib.util.find_spec(name) is not None for name in ("cv2", "numpy", "pyneat"))
+def _drain_video(sock: socket.socket, stop: threading.Event, payload_types: set[int]) -> None:
+    """Keep each video packet's RTP payload type until `stop` is set and the socket is empty."""
+    sock.settimeout(0.2)
+    while True:
+        try:
+            payload_types.add(sock.recv(65536)[1] & 0x7F)
+        except TimeoutError:
+            if stop.is_set():
+                return
 
 
-def _env_int_or_default(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    return int(raw) if raw else default
-
-
-def assert_oriented_objects(metadata, labels: set[str]) -> None:
-    """Fail unless every published object is a well-formed oriented box.
-
-    Whether any object is published depends on the stream: the model detects
-    top-down aerial objects, and the CI streams are street scenes. An empty run
-    is therefore not a failure here; the unit tests cover the object values.
-    """
-    for message in metadata.messages:
-        # Insight wraps the array: {"data": {"objects": [...]}, "frame_id": ..., "type": ...}
-        objects = (json.loads(message.payload).get("data") or {}).get("objects")
-        where = f"port {message.port} frame {message.frame_id}"
-        assert isinstance(objects, list), f"{where}: 'data.objects' must be a list"
-        for obj in objects:
-            assert set(obj) == {"id", "label", "confidence", "bbox", "oriented_bbox"}, (
-                f"{where}: unexpected keys {sorted(obj)}"
-            )
-            assert obj["label"] in labels, f"{where}: label {obj['label']!r} is not a DOTA class"
-            assert 0.0 <= obj["confidence"] <= 1.0, f"{where}: confidence out of range"
-            cx, cy, width, height, angle = obj["oriented_bbox"]
-            assert width > 0 and height > 0 and math.isfinite(angle), (
-                f"{where}: degenerate oriented box {obj['oriented_bbox']}"
-            )
-            x, y, extent_w, extent_h = obj["bbox"]
-            # Each published value is rounded to 0.1 px, so the centers can differ by 0.125 px.
-            assert math.isclose(x + extent_w / 2, cx, abs_tol=0.15) and math.isclose(
-                y + extent_h / 2, cy, abs_tol=0.15
-            ), f"{where}: bbox {obj['bbox']} is not centered on the oriented box"
+def _object_problem(obj: dict) -> str:
+    if set(obj) != {"id", "label", "confidence", "bbox", "oriented_bbox"}:
+        return "unexpected keys"
+    if obj["label"] not in LABELS:
+        return "label is not a DOTA class"
+    if not MIN_SCORE <= obj["confidence"] <= 1.0:
+        return "confidence below inference.min_score"
+    cx, cy, width, height, angle = obj["oriented_bbox"]
+    if width <= 0 or height <= 0 or not math.isfinite(angle):
+        return "degenerate oriented box"
+    x, y, extent_w, extent_h = obj["bbox"]
+    # Each value is rounded to 0.1 px, so the centers can differ by up to 0.1 px.
+    if abs(x + extent_w / 2 - cx) > 0.15 or abs(y + extent_h / 2 - cy) > 0.15:
+        return "bbox is not centered on the oriented box"
+    return ""
 
 
 @pytest.mark.e2e
-class TestE2E:
-    @pytest.mark.parametrize(
-        ("codec", "urls_fixture"),
-        [
-            ("h264", "rtsp_h264_urls"),
-            ("h265", "rtsp_h265_urls"),
-            ("mjpeg", "rtsp_mjpeg_urls"),
-        ],
+@pytest.mark.parametrize(("codec", "streams"), CASES)
+def test_streams_reach_their_insight_channels(
+    request,
+    codec,
+    streams,
+    e2e_model_path,
+    tmp_output_dir,
+    test_timeout_ms,
+    e2e_config_writer,
+    skip_unless_e2e_ready,
+):
+    urls = request.getfixturevalue(f"rtsp_{codec}_urls")
+    skip_unless_e2e_ready(
+        len(urls) >= streams, f"SIMANEAT_TEST_RTSP_{codec.upper()}_URLS needs {streams} URLs"
     )
-    def test_multi_stream_insight_and_save_pipeline(
-        self,
-        request,
-        codec,
-        urls_fixture,
-        e2e_model_path,
-        tmp_output_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
-        e2e_config_section,
-        run_until_output_files,
-    ):
-        rtsp_urls = request.getfixturevalue(urls_fixture)
-        skip_unless_e2e_ready(
-            _runtime_deps_ready(),
-            "python runtime dependencies (cv2, numpy, pyneat) are not available",
-        )
-        skip_unless_e2e_ready(
-            len(rtsp_urls) >= 2, f"need at least two RTSP {codec.upper()} URLs for multistream e2e"
-        )
-        output_cfg = e2e_config_section("multi-stream-obb-detector", "testing.e2e.output")
-        total_saved_frames = int(output_cfg["total_saved_frames"])
-        metadata_port_base = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
+    metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
+    video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
+    model_path = Path(e2e_model_path)
+    config_dir = tmp_output_dir.parent
+    config_path = e2e_config_writer(
+        {
+            # Relative to the generated config, so the test runs the app's path join.
+            "model": {
+                "id": _model_id(model_path),
+                "path": os.path.relpath(model_path.resolve(), config_dir.resolve()),
+            },
+            "input": {"source": urls[:streams], "codec": codec},
+            "inference": {"frames": FRAMES, "min_score": MIN_SCORE},
+            # This test is the Insight receiver, so the example sends to loopback.
+            "output": {
+                "insight": {
+                    "host": "127.0.0.1",
+                    "video_port_base": video_port,
+                    "metadata_port_base": metadata_port,
+                }
+            },
+        }
+    )
+    assert config_path.parent == config_dir
 
-        config_path = e2e_config_writer(
-            {
-                "model": {"family": _model_family(e2e_model_path)},
-                "streams": rtsp_urls[:2],
-                "input": {"codec": codec},
-                "output": {
-                    "insight": {
-                        "host": E2E_INSIGHT_HOST,
-                        "video_port_base": _env_int_or_default(
-                            "SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000
-                        ),
-                        "metadata_port_base": metadata_port_base,
-                    },
-                    "debug_dir": str(tmp_output_dir),
-                },
-                "inference": {"frames": 140},
-            }
-        )
-
-        cmd = [sys.executable, str(MAIN_PY), "--config", str(config_path)]
-        with MetadataJsonListener(
-            E2E_INSIGHT_HOST,
-            metadata_port_base,
-            num_ports=2,
-            require_all_ports=True,
-        ) as metadata_listener:
-            result = run_until_output_files(
-                cmd,
-                tmp_output_dir,
-                total_saved_frames,
-                test_timeout_ms / 1000,
-                cwd=str(EXAMPLE_DIR),
+    messages = []
+    errors = []
+    arrivals = {index: [] for index in range(streams)}
+    payload_types = [set() for _ in range(streams)]
+    stop = threading.Event()
+    video_sockets = []
+    drains = []
+    process = None
+    stdout = stderr = ""
+    with MetadataJsonListener("127.0.0.1", metadata_port, num_ports=streams) as listener:
+        try:
+            for index in range(streams):
+                video_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                video_sockets[-1].bind(("127.0.0.1", video_port + index))
+                drains.append(
+                    threading.Thread(
+                        target=_drain_video,
+                        args=(video_sockets[-1], stop, payload_types[index]),
+                        daemon=True,
+                    )
+                )
+                drains[-1].start()
+            process = subprocess.Popen(
+                [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(EXAMPLE_DIR.parents[2]),
             )
-            metadata = metadata_listener.wait_for_messages(5.0)
+            deadline = time.monotonic() + test_timeout_ms / 1000
+            # Read during the run, so no message waits long enough to overflow the socket buffer.
+            while process.poll() is None and time.monotonic() < deadline:
+                result = listener.wait_for_messages(0.2)
+                if result.error and not result.timed_out:
+                    errors.append(result.error)
+                for message in result.messages:
+                    messages.append(message)
+                    arrivals[message.port - metadata_port].append(time.monotonic())
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                    stderr = f"killed after {test_timeout_ms} ms\n"
+                out, err = process.communicate()
+                stdout, stderr = out, stderr + err
+                rest = listener.drain_pending()
+                messages.extend(rest.messages)
+                if rest.error:
+                    errors.append(rest.error)
+            stop.set()
+            for drain in drains:
+                drain.join()
+            for sock in video_sockets:
+                sock.close()
 
-        assert_exited_cleanly(result)
-        assert metadata.success, (
-            f"object-detection metadata was not received on all streams: {metadata.error}"
+    assert process.returncode == 0, f"exit {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    assert not errors, errors
+    boxes = 0
+    for index in range(streams):
+        assert re.search(
+            rf"^\[stream {index}\] rtsp={re.escape(urls[index])} stream=\d+x\d+@\d+ "
+            rf"insight=127\.0\.0\.1 video={video_port + index} metadata={metadata_port + index}$",
+            stdout,
+            re.MULTILINE,
+        ), stdout
+        assert f"[stream {index}] processed={FRAMES}" in stdout, stdout
+        assert payload_types[index] == {PAYLOAD_TYPES[codec]}, (
+            f"stream {index} video: RTP payload types {payload_types[index]}"
         )
-        labels = {line.strip() for line in LABELS_FILE.read_text().splitlines() if line.strip()}
-        assert_oriented_objects(metadata, labels)
-        assert_streamed_frames_are_usable(tmp_output_dir, total_saved_frames, streams=2)
+        stream_messages = [m for m in messages if m.port == metadata_port + index]
+        # UDP on loopback may drop a message under load, so allow a few to go missing.
+        assert len(stream_messages) >= FRAMES * 95 // 100, (
+            f"stream {index}: {len(stream_messages)} of {FRAMES} messages arrived"
+        )
+        for message in stream_messages:
+            assert message.metadata_type == "object-detection"
+            for obj in json.loads(message.payload)["data"]["objects"]:
+                problem = _object_problem(obj)
+                assert not problem, f"stream {index} frame {message.frame_id}: {problem} {obj}"
+                boxes += 1
+        times = arrivals[index][len(arrivals[index]) // 10:]
+        assert len(times) > 10, f"stream {index}: {len(times)} messages arrived during the run"
+        fps = (len(times) - 1) / (times[-1] - times[0])
+        print(f"{codec} stream {index}: {len(stream_messages)} messages, {fps:.1f} results/s")
+        if model_path.name == DEFAULT_MODEL:
+            assert fps >= MIN_STREAM_FPS, f"stream {index}: {fps:.1f} results/s"
+    # No box is not a failure: the model finds objects in top-down aerial video, and the CI
+    # streams show streets. The unit tests check the object values.
+    print(f"{codec}: {boxes} oriented boxes checked")
