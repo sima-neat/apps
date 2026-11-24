@@ -184,6 +184,11 @@ cd apps
 ./build.sh --clean
 ```
 
+The first configure downloads the yaml-cpp 0.8.0 source from github.com. To
+build without network access, set `YAML_CPP_SOURCE_URL` to a local copy of
+that tarball, or `FETCHCONTENT_SOURCE_DIR_YAML_CPP` to its unpacked sources,
+before you run `./build.sh`.
+
 `build.sh` does not run tests. To fetch one example without cloning the
 repository:
 
