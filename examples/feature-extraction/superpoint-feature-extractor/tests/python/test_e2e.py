@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.utils.metadata_json_listener import MetadataJsonListener
+from tests.utils.metadata_json_listener import MetadataJsonListener, MetadataJsonResult
 from tests.utils.rtp_video import drain_video, pairs, rtp_timestamps
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
@@ -21,7 +21,7 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 FRAMES = 100
 # SuperPoint's input frame, which the decoder reports its keypoints in.
 MODEL_SIZE = (640, 480)
-# The decoder keeps at most 600 points per frame (the A65V1 profile's top_k).
+# The decoder keeps at most 600 points per frame, Core's default top_k for every profile.
 MAX_POINTS = 600
 
 
@@ -32,14 +32,18 @@ def _env_int(name: str, default: int) -> int:
 
 @pytest.mark.e2e
 def test_publishes_insight_video_and_feature_points(
-    rtsp_h264_url, e2e_model_path, test_timeout_ms, e2e_config_writer
+    rtsp_h264_url, e2e_model_path, test_timeout_ms, e2e_config_writer, tmp_output_dir
 ):
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
     video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
+    # e2e_config_writer writes the config next to the test's out/ folder. The model path is
+    # relative to that folder, and the app runs from EXAMPLE_DIR, so the run passes only if the
+    # app resolves model.path from its config's folder.
+    model_path = os.path.relpath(Path(e2e_model_path).resolve(), tmp_output_dir.parent.resolve())
+    assert not (EXAMPLE_DIR / model_path).exists(), "model.path also resolves from the cwd"
     config_path = e2e_config_writer(
         {
-            # Absolute, because the example resolves a relative model.path from its config.
-            "model": {"path": str(Path(e2e_model_path).resolve())},
+            "model": {"path": model_path},
             "input": {"source": rtsp_h264_url},
             "inference": {"frames": FRAMES},
             # This test is the Insight receiver, so the example publishes to loopback.
@@ -60,8 +64,6 @@ def test_publishes_insight_video_and_feature_points(
             num_ports=1,
             metadata_type="pose-estimation",
             data_array_key="poses",
-            require_all_ports=True,
-            min_object_count=1,
         ) as listener,
         socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video,
     ):
@@ -70,6 +72,16 @@ def test_publishes_insight_video_and_feature_points(
         stop = threading.Event()
         drain = threading.Thread(target=drain_video, args=(video, stop, headers))
         drain.start()
+        # Read the metadata while the app runs: a socket buffer holds only part of a run's
+        # messages. Each read returns at its first valid message, or times out.
+        reads: list[MetadataJsonResult] = []
+
+        def read_until_stopped() -> None:
+            while not stop.is_set():
+                reads.append(listener.wait_for_messages(0.2))
+
+        read_metadata = threading.Thread(target=read_until_stopped)
+        read_metadata.start()
         try:
             result = subprocess.run(
                 [sys.executable, str(MAIN_PY), "--config", str(config_path)],
@@ -82,13 +94,12 @@ def test_publishes_insight_video_and_feature_points(
         finally:
             stop.set()
             drain.join()
+            read_metadata.join()
         assert result.returncode == 0, (
             f"exited with {result.returncode}\nstdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
         )
-        metadata = listener.wait_for_messages(5.0)
-        following = listener.wait_for_messages(5.0)
-        # The rest of the run's messages, so the checks below see every frame it sent.
+        # The datagrams that arrived after the last read.
         rest = listener.drain_pending()
 
     summary = re.search(
@@ -101,12 +112,15 @@ def test_publishes_insight_video_and_feature_points(
     assert 0 < float(summary.group(1)) <= MAX_POINTS
     width, height = map(int, re.search(r"stream=(\d+)x(\d+)@", result.stdout).groups())
 
-    assert metadata.success, metadata.error
-    assert following.success, following.error
-    first, last = metadata.messages[-1], following.messages[-1]
-    assert first.frame_id and last.frame_id, "metadata without a frame_id"
-    assert int(last.frame_id) > int(first.frame_id)
-    messages = metadata.messages + following.messages + rest.messages
+    errors = [read.error for read in reads if read.error and not read.timed_out]
+    assert not errors and rest.success, errors[:3] or rest.error
+    messages = [message for read in reads for message in read.messages] + rest.messages
+    # Every frame's message arrives, but for the ones the app reports as dropped.
+    dropped = re.search(r"^(\d+) metadata messages dropped$", result.stdout, re.MULTILINE)
+    assert len(messages) == FRAMES - (int(dropped.group(1)) if dropped else 0), len(messages)
+    assert all(message.frame_id for message in messages), "metadata without a frame_id"
+    frame_ids = [int(message.frame_id) for message in messages]
+    assert all(a < b for a, b in zip(frame_ids, frame_ids[1:])), frame_ids[:10]
     points = [
         keypoint
         for message in messages

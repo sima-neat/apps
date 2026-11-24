@@ -29,11 +29,10 @@ bool test_shipped_config_names_the_model_and_usable_values() {
   const fs::path model_path = common_dir / config.string("model.path");
   bool ok = expect_true(model_path.filename() == "superpoint_w8a8_mpk.tar.gz",
                         "model.path names the SuperPoint w8a8 package");
-  // The packaged path reaches prebuilt-apps/models from the config file.
-  ok &= expect_true(
-      fs::absolute(model_path).lexically_normal().parent_path().parent_path().parent_path() ==
-          fs::absolute("models"),
-      "model.path reaches models/ from the config file");
+  // The packaged path reaches prebuilt-apps/models/superpoint/w8a8/ from the config file.
+  ok &= expect_true(fs::absolute(model_path).lexically_normal() ==
+                        fs::absolute("models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz"),
+                    "model.path reaches models/superpoint/w8a8/ from the config file");
   ok &= expect_true(config.string("input.source").rfind("rtsp://", 0) == 0,
                     "input.source is an RTSP URL");
   for (const std::string key :

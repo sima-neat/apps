@@ -31,9 +31,9 @@ def test_shipped_config_names_the_model_and_usable_values():
     config = main_module.Config.load(COMMON_DIR / "config.yaml")
     model_path = COMMON_DIR / config.string("model.path")
     assert model_path.name == "superpoint_w8a8_mpk.tar.gz"
-    # The packaged path reaches prebuilt-apps/models from the config file.
-    assert Path(os.path.normpath(model_path.absolute())).is_relative_to(
-        EXAMPLE_DIR.parents[2].absolute() / "models"
+    # The packaged path reaches prebuilt-apps/models/superpoint/w8a8/ from the config file.
+    assert Path(os.path.normpath(model_path.absolute())) == (
+        EXAMPLE_DIR.parents[2].absolute() / "models" / "superpoint" / "w8a8" / model_path.name
     )
     assert config.string("input.source").startswith("rtsp://")
     for key in ("input.width", "input.height", "input.fps", "input.rtsp.latency_ms",

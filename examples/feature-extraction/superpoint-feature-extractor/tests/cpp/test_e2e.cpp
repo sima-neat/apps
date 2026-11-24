@@ -34,7 +34,7 @@ constexpr int kFrames = 100;
 // SuperPoint's input frame, which the decoder reports its keypoints in.
 constexpr int kModelWidth = 640;
 constexpr int kModelHeight = 480;
-// The decoder keeps at most 600 points per frame (the A65V1 profile's top_k).
+// The decoder keeps at most 600 points per frame, Core's default top_k for every profile.
 constexpr double kMaxPoints = 600.0;
 
 // The completion summary: kFrames frames, an average from 0 (exclusive) to kMaxPoints, 256-value
@@ -54,27 +54,24 @@ bool has_valid_summary(const std::string& text, int video_port) {
 // and bottom tenth; with a letterbox those rows would be padding, and the stretch mapping would
 // leave them empty. This needs a scene with texture near the top and bottom edges, as the test
 // stream has.
-bool valid_points(const std::vector<const std::vector<MetadataJsonMessage>*>& batches, int width,
-                  int height) {
+bool valid_points(const std::vector<MetadataJsonMessage>& messages, int width, int height) {
   bool past_model_frame = false;
   bool top = false;
   bool bottom = false;
-  for (const auto* batch : batches) {
-    for (const auto& message : *batch) {
-      // A named value: a range-for over a member of a temporary would outlive the temporary.
-      const auto payload = nlohmann::json::parse(message.payload);
-      for (const auto& pose : payload.at("data").at("poses")) {
-        for (const auto& point : pose.at("keypoints")) {
-          const int x = point.at("x").get<int>();
-          const int y = point.at("y").get<int>();
-          if (x < 0 || y < 0 || x >= width || y >= height) {
-            std::cerr << "[FAIL] unexpected feature point: " << point.dump() << "\n";
-            return false;
-          }
-          past_model_frame |= x >= kModelWidth || y >= kModelHeight;
-          top |= y < height / 10;
-          bottom |= y >= height - height / 10;
+  for (const auto& message : messages) {
+    // A named value: a range-for over a member of a temporary would outlive the temporary.
+    const auto payload = nlohmann::json::parse(message.payload);
+    for (const auto& pose : payload.at("data").at("poses")) {
+      for (const auto& point : pose.at("keypoints")) {
+        const int x = point.at("x").get<int>();
+        const int y = point.at("y").get<int>();
+        if (x < 0 || y < 0 || x >= width || y >= height) {
+          std::cerr << "[FAIL] unexpected feature point: " << point.dump() << "\n";
+          return false;
         }
+        past_model_frame |= x >= kModelWidth || y >= kModelHeight;
+        top |= y < height / 10;
+        bottom |= y >= height - height / 10;
       }
     }
   }
@@ -101,7 +98,6 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  // Absolute, because the example resolves a relative model.path from its config's folder.
   const std::string models_dir =
       fs::absolute(models_dir_raw != nullptr ? models_dir_raw : "models").string();
   const fs::path model = configured_model_path(kExampleName, models_dir);
@@ -115,8 +111,15 @@ int main(int argc, char** argv) {
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const fs::path test_dir = create_test_output_dir(kExampleName, "rtsp_h264");
   const fs::path config_path = test_dir / "config.yaml";
+  // Relative to the config's folder, which is not the test's working directory, so the run
+  // passes only if the example resolves model.path from its config's folder.
+  const fs::path relative_model = fs::relative(model, test_dir);
+  if (fs::exists(fs::current_path() / relative_model)) {
+    std::cerr << "[FAIL] model.path " << relative_model << " also resolves from the cwd\n";
+    return 1;
+  }
   write_e2e_config(kExampleName, config_path,
-                   {{"model.path", model.string()},
+                   {{"model.path", relative_model.string()},
                     {"input.source", source_url},
                     {"inference.frames", std::to_string(kFrames)},
                     {"output.insight.host", "127.0.0.1"},
@@ -125,11 +128,8 @@ int main(int argc, char** argv) {
 
   MetadataJsonListenerOptions options;
   options.base_port = metadata_port;
-  options.timeout_ms = 5000;
   options.metadata_type = "pose-estimation";
   options.data_array_key = "poses";
-  options.require_all_ports = true;
-  options.min_object_count = 1;
   MetadataJsonListener listener(options);
   if (!listener.ok()) {
     std::cerr << "[FAIL] metadata listener failed: " << listener.error() << "\n";
@@ -153,10 +153,19 @@ int main(int argc, char** argv) {
   std::atomic<bool> stop{false};
   std::vector<RtpHeader> headers;
   std::thread drain([&] { headers = drain_video(video_socket, stop); });
+  // Read the metadata while the example runs: a socket buffer holds only part of a run's
+  // messages.
+  MetadataJsonListenerResult metadata;
+  std::thread read_metadata([&] {
+    while (!stop) {
+      (void)listener.poll_messages(metadata, 100);
+    }
+  });
   const ProcessResult result =
       spawn_and_wait(binary, {"--config", config_path.string()}, timeout_ms);
   stop = true;
   drain.join();
+  read_metadata.join();
   ::close(video_socket);
   remove_dir(test_dir.string());
 
@@ -187,22 +196,38 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const auto metadata = listener.wait_for_messages();
-  const auto following = listener.wait_for_messages();
-  // The rest of the run's messages, so the checks below see every frame it sent.
+  // The datagrams that arrived after the last read.
   const auto rest = listener.drain_pending();
-  if (!metadata.success || !following.success) {
-    std::cerr << "[FAIL] sent no metadata with a feature point: " << metadata.error
-              << following.error << "\n";
+  if (!metadata.success || !metadata.error.empty() || !rest.error.empty()) {
+    std::cerr << "[FAIL] sent no valid metadata: " << metadata.error << rest.error << "\n";
     return 1;
   }
-  if (metadata.messages.back().frame_id.empty() || following.messages.back().frame_id.empty()) {
+  std::vector<MetadataJsonMessage> messages = metadata.messages;
+  messages.insert(messages.end(), rest.messages.begin(), rest.messages.end());
+  // Every frame's message arrives, but for the ones the example reports as dropped.
+  std::smatch dropped;
+  const int dropped_count = std::regex_search(result.stdout_text, dropped,
+                                              std::regex(R"((\d+) metadata messages dropped)"))
+                                ? std::stoi(dropped[1].str())
+                                : 0;
+  if (static_cast<int>(messages.size()) != kFrames - dropped_count) {
+    std::cerr << "[FAIL] received " << messages.size() << " metadata messages, expected "
+              << kFrames - dropped_count << "\n";
+    return 1;
+  }
+  if (std::any_of(messages.begin(), messages.end(),
+                  [](const MetadataJsonMessage& m) { return m.frame_id.empty(); })) {
     std::cerr << "[FAIL] metadata without a frame_id\n";
     return 1;
   }
-  if (std::stoll(following.messages.back().frame_id) <=
-          std::stoll(metadata.messages.back().frame_id) ||
-      !valid_points({&metadata.messages, &following.messages, &rest.messages}, width, height)) {
+  for (size_t i = 1; i < messages.size(); ++i) {
+    if (std::stoll(messages[i].frame_id) <= std::stoll(messages[i - 1].frame_id)) {
+      std::cerr << "[FAIL] metadata frame_id " << messages[i].frame_id << " does not follow "
+                << messages[i - 1].frame_id << "\n";
+      return 1;
+    }
+  }
+  if (!valid_points(messages, width, height)) {
     std::cerr << "[FAIL] did not send progressing feature points on the stream's frame\n";
     return 1;
   }
@@ -213,13 +238,11 @@ int main(int argc, char** argv) {
   }
   // Insight draws each message's points on the video frame its timestamp names.
   const std::set<uint32_t> timestamps = rtp_timestamps(headers);
-  for (const auto* batch : {&metadata.messages, &following.messages, &rest.messages}) {
-    for (const auto& message : *batch) {
-      if (!pairs(message.timestamp_ms, timestamps)) {
-        std::cerr << "[FAIL] sent metadata timestamp " << message.timestamp_ms
-                  << " that no video frame carries\n";
-        return 1;
-      }
+  for (const auto& message : messages) {
+    if (!pairs(message.timestamp_ms, timestamps)) {
+      std::cerr << "[FAIL] sent metadata timestamp " << message.timestamp_ms
+                << " that no video frame carries\n";
+      return 1;
     }
   }
   std::cout << "[OK] sent " << kFrames << " frames of feature points and Insight video\n";
