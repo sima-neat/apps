@@ -36,7 +36,7 @@ Keep runtime inputs explicit:
 - no hidden model defaults that disagree with the README
 - no stale product names in user-facing text
 
-Use the official product names: Neat Library, Neat Development Environment,
+Use the official product names: Neat Library, Palette SDK,
 Model Compiler, and LLiMa.
 
 ## README Contract
@@ -224,7 +224,7 @@ available:
 ./tests/test.sh --e2e --strict
 ```
 
-Compile C++ examples in the Neat Development Environment. Run runtime and e2e
+Compile C++ examples in the Palette SDK. Run runtime and e2e
 checks on supported SiMa hardware. Host checks cover documentation, source
 hygiene, and lightweight static validation.
 
