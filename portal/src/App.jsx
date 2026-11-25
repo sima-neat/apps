@@ -96,10 +96,7 @@ function useDeveloperCenterShell(setThemeState, setUseShellFallback) {
       }
     }, 1200);
     const syncTheme = (event) => {
-      const next = themeFromShellEvent(event);
-      if (next) {
-        setThemeState(next);
-      }
+      setThemeState((current) => themeFromShellEvent(event, current) || current);
     };
 
     window.addEventListener("developer-center-theme-change", syncTheme);

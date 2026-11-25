@@ -90,13 +90,19 @@ export function readInitialTheme({ search, cookie, storage, prefersDark } = brow
 }
 
 /**
- * The theme a developer-center-theme-change event from the shared header sets,
- * or null. The header says persist: false for a theme from the URL
- * (sima-neat/docs#199); an older header doesn't say, and stores it itself.
+ * The theme state after a developer-center-theme-change event from the shared
+ * header, or null to keep current. The header says persist: false for a theme
+ * from the URL (sima-neat/docs#199). An older header doesn't say and stores the
+ * theme itself, so the portal keeps its current persist: a theme from ?theme
+ * stays unstored (Codex on #833).
  */
-export function themeFromShellEvent(event) {
+export function themeFromShellEvent(event, current = { persist: true }) {
   const theme = normalizeTheme(event?.detail?.theme);
-  return theme ? { theme, persist: event.detail.persist !== false } : null;
+  if (!theme) {
+    return null;
+  }
+  const said = event.detail.persist;
+  return { theme, persist: typeof said === "boolean" ? said : current.persist };
 }
 
 function cookieDomain() {

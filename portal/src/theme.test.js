@@ -34,10 +34,16 @@ test("restricted storage and a bad cookie fall through to the next source", () =
   assert.equal(readCookieTheme("sima-neat-theme=%E0%A4%A"), null);
 });
 
-test("the shared header's event: persist false only when it says so", () => {
+test("the shared header's event: persist from the header, or kept when an older header does not say", () => {
   assert.deepEqual(themeFromShellEvent({ detail: { theme: "dark", persist: false } }), { theme: "dark", persist: false });
   assert.deepEqual(themeFromShellEvent({ detail: { theme: "light", persist: true } }), { theme: "light", persist: true });
   assert.deepEqual(themeFromShellEvent({ detail: { theme: "dark" } }), { theme: "dark", persist: true }, "an older header doesn't say");
+  assert.deepEqual(
+    themeFromShellEvent({ detail: { theme: "light" } }, { theme: "dark", persist: false }),
+    { theme: "light", persist: false },
+    "an older header's event keeps a theme from ?theme unstored (Codex on #833)",
+  );
+  assert.deepEqual(themeFromShellEvent({ detail: { theme: "light" } }, { theme: "dark", persist: true }), { theme: "light", persist: true });
   assert.equal(themeFromShellEvent({ detail: { theme: "blue" } }), null);
   assert.equal(themeFromShellEvent({}), null);
 });
