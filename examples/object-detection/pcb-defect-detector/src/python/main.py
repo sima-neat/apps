@@ -24,6 +24,7 @@ for apps_root in Path(__file__).resolve().parents:
 else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
+from sima_examples import image_folder
 from sima_examples.config import Config
 from sima_examples.labels import load_labels
 from utils import images, overlay
@@ -140,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.load(args.config)
     labels = load_labels(Path(config.string("model.labels")))
-    image_paths = images.find_images(Path(config.string("input.source")))
+    image_paths = image_folder.image_paths(Path(config.string("input.source")))
     output_dir = Path(config.string("output.dir"))
     output_dir.mkdir(parents=True, exist_ok=True)
     # Used by both the model and the box decode.

@@ -18,6 +18,7 @@
 
 #include "neat.h"
 #include "sima_examples/config.h"
+#include "sima_examples/image_folder.h"
 #include "sima_examples/labels.h"
 #include "utils/images.h"
 #include "utils/overlay.h"
@@ -156,7 +157,7 @@ int annotate_images(neat::Model::Runner& runner, const std::vector<fs::path>& im
 int run_app(const fs::path& config_path) {
   const auto config = sima_examples::Config::load(config_path);
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
-  const auto images = pcb::find_images(config.string("input.source"));
+  const auto images = sima_examples::image_paths(config.string("input.source"));
   const fs::path output_dir = config.string("output.dir");
   fs::create_directories(output_dir);
   // Used by both the model and the box decode.

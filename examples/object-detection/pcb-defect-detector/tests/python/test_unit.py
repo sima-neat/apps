@@ -36,7 +36,7 @@ def test_shipped_config_names_the_model_labels_and_folders():
                       "spurious_copper"]
     assert len(overlay.CLASS_COLORS) == len(labels)
     # The shipped sample boards run as soon as the model is in place.
-    assert images.find_images(APPS_ROOT / config.string("input.source"))
+    assert main_module.image_folder.image_paths(APPS_ROOT / config.string("input.source"))
     output_dir = config.string("output.dir")
     assert output_dir.startswith("sandbox/")
     # An annotated image written into input.source would be read as a board on the next run.
@@ -53,21 +53,6 @@ def test_test_scope_downloads_the_configured_model():
     config = main_module.Config.load(COMMON_DIR / "config.yaml")
     scope = main_module.Config.load(EXAMPLE_DIR / "tests" / "test-scope.yaml")
     assert scope.string("models.yolo26n_plc.file") == Path(config.string("model.path")).name
-
-
-def test_find_images_keeps_image_files_in_name_order(tmp_path: Path):
-    for name in ("b.PNG", "a.jpg", "c.jpeg", "d.bmp", "notes.txt", "e.gif"):
-        (tmp_path / name).write_bytes(b"")
-    # A folder is not an image, whatever its name ends with.
-    (tmp_path / "archive.jpg").mkdir()
-    assert [path.name for path in images.find_images(tmp_path)] == [
-        "a.jpg", "b.PNG", "c.jpeg", "d.bmp"]
-
-
-def test_find_images_names_the_key_when_the_folder_has_none(tmp_path: Path):
-    (tmp_path / "notes.txt").write_bytes(b"")
-    with pytest.raises(ValueError, match="input.source: no .jpg"):
-        images.find_images(tmp_path)
 
 
 def test_image_problem_names_what_the_model_cannot_take():

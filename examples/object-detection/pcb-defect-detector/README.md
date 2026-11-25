@@ -105,7 +105,7 @@ Dataset and source-model reference:
 
 Five sample boards ship under `assets/datasets/pcb/`, so the example runs with the shipped `${APP_DIR}/src/common/config.yaml` once the model is in place. To inspect your own boards, set:
 
-- `input.source`: the folder of `.jpg`, `.jpeg`, `.png`, or `.bmp` images.
+- `input.source`: the folder of `.jpg`, `.jpeg`, `.png`, or `.bmp` images. The application reads the images directly in it, in file-name order, and not those in subfolders.
 - `output.dir`: the folder for the annotated images, not `input.source`.
 - `app.input_max_width` and `app.input_max_height`: the largest image size, 3840 x 2160 as shipped. A larger image is reported as failed; raise both for larger scans.
 - `inference.min_score`: lower it to show more defects, raise it to show fewer.
@@ -149,7 +149,8 @@ Per-class totals: {<class>: <n>, ...}
 
 - `[ERR] <image>: not a readable image`: the file has an image extension but does not decode. The run continues and exits 1.
 - `[ERR] <image>: <width>x<height> is larger than app.input_max_width x app.input_max_height`: raise both keys to at least the image's size.
-- `[ERR] input.source: no .jpg, .jpeg, .png, or .bmp images in <folder>`: point `input.source` at a folder that holds images.
+- `[ERR] image folder does not exist: <folder>`: set `input.source` to an existing folder; a relative path starts at the working directory.
+- `[ERR] no .jpg, .jpeg, .png, or .bmp files in <folder>`: point `input.source` at a folder that holds images directly, not in subfolders.
 - `[ERR] <output path>: could not be written`: check that `output.dir` is writable. The run continues and exits 1.
 - If no defects are reported, lower `inference.min_score`; if boxes overlap heavily, lower `inference.nms_iou`.
 - Class names in `src/common/pcb_label.txt` follow the model's class order. Loading fails when the file lists a different number of classes than the model.

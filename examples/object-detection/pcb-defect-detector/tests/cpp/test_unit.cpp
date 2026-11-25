@@ -4,14 +4,13 @@
 #include "../../src/cpp/utils/images.h"
 #include "../../src/cpp/utils/overlay.h"
 #include "sima_examples/config.h"
+#include "sima_examples/image_folder.h"
 #include "sima_examples/labels.h"
 #include "sima_examples/testing/test_checks.h"
 
 #include <opencv2/core.hpp>
 
 #include <filesystem>
-#include <fstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -52,7 +51,7 @@ bool test_shipped_config_names_the_model_labels_and_folders() {
                     "model.labels lists the six defect classes in the model's order");
   ok &= expect_true(pcb::kClassColors.size() == labels.size(), "each class has a color");
   // The shipped sample boards run as soon as the model is in place.
-  ok &= expect_true(!pcb::find_images(config.string("input.source")).empty(),
+  ok &= expect_true(!sima_examples::image_paths(config.string("input.source")).empty(),
                     "input.source holds the sample boards");
   const std::string output_dir = config.string("output.dir");
   // An annotated image written into input.source would be read as a board on the next run.
@@ -77,40 +76,6 @@ bool test_test_scope_downloads_the_configured_model() {
   return expect_true(scope.string("models.yolo26n_plc.file") ==
                          fs::path(config.string("model.path")).filename().string(),
                      "test-scope.yaml downloads the model the config names");
-}
-
-bool test_find_images_keeps_image_files_in_name_order() {
-  const fs::path folder = fs::temp_directory_path() / "pcb-find-images-test";
-  fs::remove_all(folder);
-  fs::create_directories(folder);
-  for (const char* name : {"b.PNG", "a.jpg", "c.jpeg", "d.bmp", "notes.txt", "e.gif"}) {
-    std::ofstream(folder / name).put('\0');
-  }
-  // A folder is not an image, whatever its name ends with.
-  fs::create_directories(folder / "archive.jpg");
-  std::vector<std::string> names;
-  for (const auto& path : pcb::find_images(folder)) {
-    names.push_back(path.filename().string());
-  }
-  fs::remove_all(folder);
-  return expect_true(names == std::vector<std::string>{"a.jpg", "b.PNG", "c.jpeg", "d.bmp"},
-                     "find_images keeps the image files in name order");
-}
-
-bool test_find_images_names_the_key_when_the_folder_has_none() {
-  const fs::path folder = fs::temp_directory_path() / "pcb-find-no-images-test";
-  fs::remove_all(folder);
-  fs::create_directories(folder);
-  std::ofstream(folder / "notes.txt").put('\0');
-  std::string error;
-  try {
-    (void)pcb::find_images(folder);
-  } catch (const std::runtime_error& thrown) {
-    error = thrown.what();
-  }
-  fs::remove_all(folder);
-  return expect_true(error.rfind("input.source: no .jpg", 0) == 0,
-                     "an empty folder names input.source: " + error);
 }
 
 bool test_image_problem_names_what_the_model_cannot_take() {
@@ -179,8 +144,6 @@ bool test_draw_boxes_skips_a_box_with_no_area() {
 int main() {
   bool ok = test_shipped_config_names_the_model_labels_and_folders();
   ok &= test_test_scope_downloads_the_configured_model();
-  ok &= test_find_images_keeps_image_files_in_name_order();
-  ok &= test_find_images_names_the_key_when_the_folder_has_none();
   ok &= test_image_problem_names_what_the_model_cannot_take();
   ok &= test_save_image_reports_a_failed_write_instead_of_throwing();
   ok &= test_pixel_rounds_half_up_and_stays_in_the_image();

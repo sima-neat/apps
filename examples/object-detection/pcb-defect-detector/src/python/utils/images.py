@@ -1,4 +1,4 @@
-"""Find the input images, check that the model can take each one, and save the results.
+"""Check that the model can take each image, and save the results.
 Mirrors src/cpp/utils/images.h."""
 
 from __future__ import annotations
@@ -7,19 +7,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
-
-
-def find_images(folder: Path) -> list[Path]:
-    images = sorted(
-        path
-        for path in folder.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-    )
-    if not images:
-        raise ValueError(f"input.source: no .jpg, .jpeg, .png, or .bmp images in {folder}")
-    return images
 
 
 def image_problem(image: np.ndarray | None, max_size: tuple[int, int]) -> str:
