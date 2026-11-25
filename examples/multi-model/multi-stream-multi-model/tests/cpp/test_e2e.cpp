@@ -40,8 +40,9 @@ constexpr const char* kExampleName = "multi-stream-multi-model";
 constexpr int kFrames = 150;
 // Above the shipped 0.30, so the results show that the example applies inference.min_score.
 constexpr double kMinScore = 0.35;
-// Each stream's results per second. Not verified on a DevKit yet.
-constexpr double kMinStreamResultsPerS = 20.0;
+// Each stream's results per second, as a share of the frame rate the app printed for it. The CI
+// streams run at about 20 fps, and a DevKit sent 19.9 results/s on them (e83d42f).
+constexpr double kMinShareOfStreamRate = 0.95;
 
 using Clock = std::chrono::steady_clock;
 
@@ -253,11 +254,10 @@ int run_case(const std::string& binary, const std::string& models_dir,
   std::map<int, std::vector<Clock::time_point>> arrivals;
   const auto read_metadata = [&] {
     const std::size_t before = metadata.messages.size();
-    // Once a message has arrived, poll_messages returns after each datagram, so read until the
-    // sockets are empty.
+    // Wait up to 100 ms for a datagram, then read every one already queued: MetadataSender sends
+    // a message above 1200 bytes, such as a frame's poses, as several chunks.
     listener.poll_messages(metadata, 100);
-    while (listener.poll_messages(metadata, 0)) {
-    }
+    listener.read_ready(metadata);
     for (std::size_t i = before; i < metadata.messages.size(); ++i) {
       arrivals[metadata.messages[i].port - metadata_port].push_back(Clock::now());
     }
@@ -284,14 +284,17 @@ int run_case(const std::string& binary, const std::string& models_dir,
   for (int index = 0; index < streams; ++index) {
     const auto& stream_case = kStreams[static_cast<std::size_t>(index)];
     const std::string stream = "stream " + std::to_string(index);
-    const std::regex start_line(
-        "(^|\n)\\[" + stream + "\\] [a-z0-9-]+ model=" +
-        regex_escape(model_paths[static_cast<std::size_t>(index)]) +
-        " rtsp=" + regex_escape(sources[static_cast<std::size_t>(index)]) +
-        " stream=\\d+x\\d+@\\d+ insight=127\\.0\\.0\\.1 video=" +
-        std::to_string(video_port + index) + " metadata=" + std::to_string(metadata_port + index) +
-        "\n");
-    if (!std::regex_search(result.stdout_text, start_line)) {
+    const std::regex start_line("(^|\n)\\[" + stream + "\\] [a-z0-9-]+ model=" +
+                                regex_escape(model_paths[static_cast<std::size_t>(index)]) +
+                                " rtsp=" + regex_escape(sources[static_cast<std::size_t>(index)]) +
+                                " stream=\\d+x\\d+@(\\d+) insight=127\\.0\\.0\\.1 video=" +
+                                std::to_string(video_port + index) +
+                                " metadata=" + std::to_string(metadata_port + index) + "\n");
+    std::smatch start_match;
+    int stream_fps = 0;
+    if (std::regex_search(result.stdout_text, start_match, start_line)) {
+      stream_fps = std::stoi(start_match[2].str());
+    } else {
       problems.push_back(stream + " did not print its model, source, and ports");
     }
     const std::regex summary_line("(^|\n)\\[" + stream + "\\] processed=" +
@@ -384,8 +387,9 @@ int run_case(const std::string& binary, const std::string& models_dir,
     const double results_per_s = static_cast<double>(times.size() - first - 1) / seconds;
     std::cout << label << " " << stream << ": " << messages << " messages, " << results_per_s
               << " results/s, " << entries << " " << stream_case.key << "\n";
-    if (results_per_s < kMinStreamResultsPerS) {
-      problems.push_back(stream + ": " + std::to_string(results_per_s) + " results/s");
+    if (results_per_s < kMinShareOfStreamRate * stream_fps) {
+      problems.push_back(stream + ": " + std::to_string(results_per_s) + " results/s of a " +
+                         std::to_string(stream_fps) + " fps stream");
     }
   }
   remove_dir(output_dir);

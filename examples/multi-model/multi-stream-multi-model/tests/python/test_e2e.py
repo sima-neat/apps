@@ -26,8 +26,9 @@ LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitli
 FRAMES = 150
 # Above the shipped 0.30, so the results show that the example applies inference.min_score.
 MIN_SCORE = 0.35
-# Each stream's results per second. Not verified on a DevKit yet.
-MIN_STREAM_RESULTS_PER_S = 20.0
+# Each stream's results per second, as a share of the frame rate the app printed for it. The
+# CI streams run at about 20 fps, and a DevKit sent 19.9 results/s on them (e83d42f).
+MIN_SHARE_OF_STREAM_RATE = 0.95
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
 # The shipped config's streams, in order: the package test-scope.yaml downloads for each, the
@@ -194,13 +195,15 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
     assert not errors, errors
     entries_by_stream = {}
     for index, (_, metadata_type, key) in enumerate(STREAMS):
-        assert re.search(
+        start_line = re.search(
             rf"^\[stream {index}\] [a-z0-9-]+ model={re.escape(model_paths[index])} "
-            rf"rtsp={re.escape(sources[index])} stream=\d+x\d+@\d+ insight=127\.0\.0\.1 "
+            rf"rtsp={re.escape(sources[index])} stream=\d+x\d+@(\d+) insight=127\.0\.0\.1 "
             rf"video={video_port + index} metadata={metadata_port + index}$",
             stdout,
             re.MULTILINE,
-        ), stdout
+        )
+        assert start_line, stdout
+        stream_fps = int(start_line.group(1))
         assert re.search(
             rf"^\[stream {index}\] processed={FRAMES} left_out=0$", stdout, re.MULTILINE
         ), stdout
@@ -251,6 +254,6 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
             f"{codec} stream {index}: {len(stream_messages)} messages, "
             f"{results_per_s:.1f} results/s, {len(entries)} {key}"
         )
-        assert results_per_s >= MIN_STREAM_RESULTS_PER_S, (
-            f"stream {index}: {results_per_s:.1f} results/s"
+        assert results_per_s >= MIN_SHARE_OF_STREAM_RATE * stream_fps, (
+            f"stream {index}: {results_per_s:.1f} results/s of a {stream_fps} fps stream"
         )
