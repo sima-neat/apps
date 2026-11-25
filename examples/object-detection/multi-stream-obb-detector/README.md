@@ -163,7 +163,6 @@ The metadata sender does not wait for a full network buffer. It drops the messag
 - Few or no detections: check that the video looks straight down at the ground. Lower `inference.min_score` if objects are missed, and raise it if boxes appear on background.
 - Boxes missing on dense scenes: raise `inference.max_detections`. Each box adds about 150 bytes, up to 160, so about 400 boxes fit in one message. A message over 65507 bytes stops the application with `MetadataSender payload exceeds 65507 bytes`.
 - Insight shows upright boxes: the installed Insight does not draw `oriented_bbox`. Update Insight.
-- MJPEG video fails to reach Insight: MJPEG frames go out as RTP/JPEG, which carries sides in multiples of 8 up to 2040. Neat learns an RTSP stream's frame size only once frames arrive. So a caps check rejects other sizes while running, not when the application starts. Use a stream whose sides are multiples of 8, such as 1280x720 or 1920x1080.
 - No video or boxes in Insight: check the Insight host and the UDP ports.
 
 ## Source Files

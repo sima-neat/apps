@@ -151,10 +151,11 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
   side in 8-pixel units. With MJPEG, `Passthrough` and `FromRaw` fail on other
   sizes. When the size is known at build and the Scheduler provides
   `neatjpegudpsink`, the build fails with `VideoSender MJPEG: RTP/JPEG carries
-  widths and heights in multiples of 8 up to 2040`. `RtspEncodedInput` sets no
-  size on its MJPEG output, so with RTSP MJPEG passthrough the capsfilter
-  `n<index>_rtp_jpeg_dimensions` rejects the frames while running instead. Fix:
-  use a camera mode or stream such as 1280 × 720 or 1920 × 1080.
+  widths and heights in multiples of 8 up to 2040`. RTSP MJPEG passthrough
+  always fits, because the source sends RTP/JPEG too: on a DevKit with Core
+  0.6.2 (`b1f9556c`), a 1276 × 716 RTSP source arrived as 1280 × 720 and passed
+  the capsfilter `n<index>_rtp_jpeg_dimensions`. Fix: use a camera mode or a
+  frame size such as 1280 × 720 or 1920 × 1080.
 - **Encoder settings on MJPEG.** `FromRaw` throws `SimaEncode: MJPEG does not
   accept bitrate, rate control, profile, level, GOP or IDR settings` when one
   of them is set. Changing `encoder.*` after `FromRaw` with MJPEG throws

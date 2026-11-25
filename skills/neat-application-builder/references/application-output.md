@@ -16,7 +16,8 @@ setup belongs to the Insight documentation or the installed Insight skill.
   as 1280x720. Another size fails the sender, with `Passthrough` and `FromRaw` alike. When the
   sender's input has a size at build, as decoded frames do, the build throws
   `VideoSender MJPEG: RTP/JPEG carries widths and heights in multiples of 8 up to 2040`. RTSP
-  MJPEG passthrough has no size at build, so a caps filter rejects the frames while running.
+  MJPEG input always fits, because the source sends RTP/JPEG too: a 1276x716 RTSP source
+  reaches the application as 1280x720.
 - `VideoSenderOptions::FromRaw(SimaEncodeOptions{...})` encodes decoded frames at their input
   resolution, as H.264 by default. It replaces the deprecated `H264RtpUdpFromRaw`.
 - Set `host`, `channel`, and `video_port_base`. The sender uses port `video_port_base + channel`,
