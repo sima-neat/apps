@@ -9,59 +9,11 @@ import {
   matchesFilters,
   portalAssetUrl,
 } from "./catalog";
+import { readCookieTheme, readInitialTheme, storeTheme, themeFromShellEvent } from "./theme";
 
 marked.setOptions({ breaks: false });
 
-const THEME_COOKIE = "sima-neat-theme";
-const THEME_KEYS = ["portal-theme", "theme"];
-const VALID_THEMES = new Set(["light", "dark"]);
 const SHOW_DEVELOPER_CENTER_NAV = import.meta.env.BASE_URL.replace(/\/+$/, "") === "/examples";
-
-function normalizeTheme(value) {
-  return VALID_THEMES.has(value) ? value : null;
-}
-
-function readCookieTheme() {
-  const entry = document.cookie
-    .split("; ")
-    .find((cookie) => cookie.startsWith(`${THEME_COOKIE}=`));
-  return normalizeTheme(entry ? decodeURIComponent(entry.split("=").slice(1).join("=")) : null);
-}
-
-function cookieDomain() {
-  const { hostname } = window.location;
-  if (hostname === "localhost" || /^[\d.]+$/.test(hostname)) {
-    return "";
-  }
-
-  if (hostname.endsWith(".neat.sima.ai") || hostname.endsWith(".neat.paconsultings.com")) {
-    const parts = hostname.split(".");
-    return parts.length > 3 ? parts.slice(1).join(".") : hostname;
-  }
-
-  return "";
-}
-
-function writeCookieTheme(theme) {
-  const domain = cookieDomain();
-  const domainPart = domain ? `; Domain=.${domain}` : "";
-  const securePart = window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `${THEME_COOKIE}=${encodeURIComponent(theme)}; Path=/; Max-Age=31536000; SameSite=Lax${securePart}${domainPart}`;
-}
-
-function readStoredTheme() {
-  for (const key of THEME_KEYS) {
-    const value = normalizeTheme(window.localStorage.getItem(key));
-    if (value) {
-      return value;
-    }
-  }
-  return null;
-}
-
-function writeStoredTheme(theme) {
-  THEME_KEYS.forEach((key) => window.localStorage.setItem(key, theme));
-}
 
 function normalizeMarkdownAssetUrls(markdown = "") {
   const assetPrefixes = ["example-assets", "category-assets"];
@@ -75,19 +27,6 @@ function normalizeMarkdownAssetUrls(markdown = "") {
 
 function renderMarkdown(markdown = "") {
   return marked.parse(normalizeMarkdownAssetUrls(markdown));
-}
-
-function readInitialTheme() {
-  if (typeof window === "undefined") {
-    return "light";
-  }
-
-  const savedTheme = readCookieTheme() || readStoredTheme();
-  if (savedTheme) {
-    return savedTheme;
-  }
-
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 function ensureDeveloperCenterShellStylesheet() {
@@ -127,7 +66,7 @@ function ensureDeveloperCenterShellScript(onLoad, onError) {
   return () => script.removeEventListener("load", onLoad);
 }
 
-function useDeveloperCenterShell(setTheme, setUseShellFallback) {
+function useDeveloperCenterShell(setThemeState, setUseShellFallback) {
   useEffect(() => {
     if (!SHOW_DEVELOPER_CENTER_NAV) {
       return undefined;
@@ -157,10 +96,7 @@ function useDeveloperCenterShell(setTheme, setUseShellFallback) {
       }
     }, 1200);
     const syncTheme = (event) => {
-      const theme = normalizeTheme(event.detail?.theme);
-      if (theme) {
-        setTheme(theme);
-      }
+      setThemeState((current) => themeFromShellEvent(event, current) || current);
     };
 
     window.addEventListener("developer-center-theme-change", syncTheme);
@@ -170,16 +106,19 @@ function useDeveloperCenterShell(setTheme, setUseShellFallback) {
       cleanupScriptListener?.();
       window.removeEventListener("developer-center-theme-change", syncTheme);
     };
-  }, [setTheme, setUseShellFallback]);
+  }, [setThemeState, setUseShellFallback]);
 }
 
 function App() {
   const [catalog, setCatalog] = useState(null);
   const [error, setError] = useState("");
-  const [theme, setTheme] = useState(readInitialTheme);
+  // persist is false while the theme comes from ?theme (see ./theme.js).
+  const [themeState, setThemeState] = useState(() => readInitialTheme());
+  const { theme } = themeState;
   const [useShellFallback, setUseShellFallback] = useState(false);
-  const toggleTheme = () => setTheme((current) => (current === "light" ? "dark" : "light"));
-  useDeveloperCenterShell(setTheme, setUseShellFallback);
+  const toggleTheme = () =>
+    setThemeState((current) => ({ theme: current.theme === "light" ? "dark" : "light", persist: true }));
+  useDeveloperCenterShell(setThemeState, setUseShellFallback);
 
   useEffect(() => {
     let cancelled = false;
@@ -200,16 +139,18 @@ function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    writeStoredTheme(theme);
-    writeCookieTheme(theme);
-  }, [theme]);
+    document.documentElement.dataset.theme = themeState.theme;
+    if (themeState.persist) {
+      storeTheme(themeState.theme);
+    }
+  }, [themeState]);
 
   useEffect(() => {
+    // Another Developer Center tab may have changed the theme; a theme from ?theme stays.
     const syncTheme = () => {
       const cookieTheme = readCookieTheme();
       if (cookieTheme) {
-        setTheme(cookieTheme);
+        setThemeState((current) => (current.persist ? { theme: cookieTheme, persist: true } : current));
       }
     };
 

@@ -180,6 +180,11 @@ jobs:
       - name: Run repository contract tests
         run: python3 -m pytest -c tests/pytest.ini --rootdir=. -v tests/scripts
 
+      # Portal unit tests: plain Node, no dependencies (portal/src/*.test.js).
+      - name: Run portal unit tests
+        working-directory: portal
+        run: npm test
+
   publish-vulcan-artifacts:
     name: Publish to Vulcan
     if: ${{ !inputs.nightly }}

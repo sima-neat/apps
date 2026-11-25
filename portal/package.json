@@ -7,7 +7,8 @@
     "sync-catalog": "python3 ../scripts/generate_catalog.py > public/catalog.json && python3 ../scripts/sync_portal_assets.py",
     "dev": "npm run sync-catalog && vite",
     "build": "npm run sync-catalog && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/*.test.js"
   },
   "dependencies": {
     "marked": "^15.0.7",
