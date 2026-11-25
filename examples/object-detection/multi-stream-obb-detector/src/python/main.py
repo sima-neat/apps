@@ -175,7 +175,7 @@ def decode_boxes(sample: pyneat.Sample) -> pyneat.OrientedDecodeTensors:
     elif sample.kind == pyneat.SampleKind.Tensor:
         tensor = sample.tensor
     else:
-        raise RuntimeError(f"expected a BBOX_OBB_V1 tensor, got {sample.kind}")
+        raise RuntimeError("expected a BBOX_OBB_V1 tensor in the detections sample")
     return pyneat.decode_obb_tensor(tensor)
 
 
@@ -202,13 +202,7 @@ def send_detections(
             index = int(sample.stream_id.removeprefix("stream"))
         if frames and processed[index] >= frames:
             continue
-        boxes = decode_boxes(sample)
-        data = oriented_boxes.detections_json(
-            boxes.geometry.to_numpy(),
-            boxes.scores.to_numpy(),
-            boxes.class_ids.to_numpy(),
-            labels,
-        )
+        data = oriented_boxes.detections_json(decode_boxes(sample), labels)
         timestamp_ms = sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1
         frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
         # A nonblocking send drops the message while the socket buffer is full; the drops are

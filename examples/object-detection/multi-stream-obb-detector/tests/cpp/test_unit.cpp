@@ -7,6 +7,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -14,6 +17,7 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+namespace neat = simaai::neat;
 
 using sima_examples::testing::expect_true;
 
@@ -62,6 +66,33 @@ bool test_shipped_config_names_a_supported_model_input_and_labels() {
   return ok;
 }
 
+// The boxes as decode_obb_tensor returns them from a BBOX_OBB_V1 tensor, the model's output:
+// a 32-byte header, then one 32-byte record per box. Core needs a capacity of at least 1.
+neat::OrientedDecodeTensors decoded_boxes(const nlohmann::json& boxes) {
+  neat::OrientedBoxesHeaderV1 header;
+  header.count = static_cast<std::uint32_t>(boxes.size());
+  header.capacity = std::max<std::uint32_t>(header.count, 1);
+  header.total_bytes = 32 + 32 * header.capacity;
+  std::vector<std::uint8_t> bytes(header.total_bytes, 0);
+  std::memcpy(bytes.data(), &header, sizeof(header));
+  for (std::size_t i = 0; i < boxes.size(); ++i) {
+    const auto& box = boxes[i];
+    neat::OrientedBoxRecordV1 record;
+    record.center_x = box.at("cx").get<float>();
+    record.center_y = box.at("cy").get<float>();
+    record.width = box.at("width").get<float>();
+    record.height = box.at("height").get<float>();
+    record.angle_radians = box.at("angle_radians").get<float>();
+    record.score = box.at("score").get<float>();
+    record.class_id = box.at("class_id").get<std::int32_t>();
+    std::memcpy(bytes.data() + 32 + 32 * i, &record, sizeof(record));
+  }
+  neat::Tensor tensor = neat::Tensor::from_vector(bytes, {static_cast<std::int64_t>(bytes.size())},
+                                                  neat::TensorMemory::CPU);
+  tensor.semantic.detection = neat::DetectionSpec{neat::kDetectionFormatBboxObbV1};
+  return neat::decode_obb_tensor(tensor);
+}
+
 bool test_objects_match_the_shared_fixture() {
   std::ifstream input(kExampleDir / "tests" / "fixtures" / "insight_objects.json");
   if (!input.good()) {
@@ -69,15 +100,9 @@ bool test_objects_match_the_shared_fixture() {
     return false;
   }
   const auto fixture = nlohmann::json::parse(input);
-  std::vector<obb::OrientedBox> boxes;
-  for (const auto& box : fixture.at("boxes")) {
-    // decode_obb_tensor returns float32 values, as the Python test feeds them.
-    const auto f = [&](const char* key) { return static_cast<double>(box.at(key).get<float>()); };
-    boxes.push_back({f("cx"), f("cy"), f("width"), f("height"), f("angle_radians"), f("score"),
-                     box.at("class_id").get<int>()});
-  }
   const auto objects = nlohmann::json::parse(
-      obb::detections_json(boxes, fixture.at("labels").get<std::vector<std::string>>()))["objects"];
+      obb::detections_json(decoded_boxes(fixture.at("boxes")),
+                           fixture.at("labels").get<std::vector<std::string>>()))["objects"];
   const bool ok = expect_true(objects == fixture.at("objects"),
                               "Insight objects match the shared fixture: " + objects.dump());
   if (ok) {
@@ -88,7 +113,8 @@ bool test_objects_match_the_shared_fixture() {
 
 // Insight clears the previous frame's boxes only when it receives the empty list.
 bool test_a_frame_without_detections_sends_an_empty_list() {
-  return expect_true(nlohmann::json::parse(obb::detections_json({}, {"plane"})) ==
+  return expect_true(nlohmann::json::parse(
+                         obb::detections_json(decoded_boxes(nlohmann::json::array()), {"plane"})) ==
                          nlohmann::json{{"objects", nlohmann::json::array()}},
                      "a frame without detections sends an empty list");
 }

@@ -194,32 +194,16 @@ neat::RunOptions run_options() {
 }
 
 // The oriented boxes in a detections sample, already in source-frame pixels.
-std::vector<obb::OrientedBox> decode_boxes(const neat::Sample& sample) {
+neat::OrientedDecodeTensors decode_boxes(const neat::Sample& sample) {
   // Core candidate: decode_obb_tensor takes a Tensor, so each example picks the tensor out of the
   // Sample itself.
-  const neat::Tensor* tensor = nullptr;
   if (sample.kind == neat::SampleKind::TensorSet && !sample.tensors.empty()) {
-    tensor = &sample.tensors.front();
-  } else if (sample.kind == neat::SampleKind::Tensor && sample.tensor.has_value()) {
-    tensor = &*sample.tensor;
-  } else {
-    throw std::runtime_error("expected a BBOX_OBB_V1 tensor in the detections sample");
+    return neat::decode_obb_tensor(sample.tensors.front());
   }
-  const neat::OrientedDecodeTensors result = neat::decode_obb_tensor(*tensor);
-  std::vector<obb::OrientedBox> boxes(static_cast<std::size_t>(result.scores.shape.at(0)));
-  // A frame without detections has no rows to read.
-  if (boxes.empty()) {
-    return boxes;
+  if (sample.kind == neat::SampleKind::Tensor && sample.tensor.has_value()) {
+    return neat::decode_obb_tensor(*sample.tensor);
   }
-  // decode_obb_tensor returns dense CPU tensors: geometry is [N, 5], scores and class IDs [N].
-  const float* geometry = result.geometry.data_ptr<float>();
-  const float* scores = result.scores.data_ptr<float>();
-  const std::int32_t* class_ids = result.class_ids.data_ptr<std::int32_t>();
-  for (std::size_t i = 0; i < boxes.size(); ++i) {
-    const float* row = geometry + i * 5;
-    boxes[i] = {row[0], row[1], row[2], row[3], row[4], scores[i], class_ids[i]};
-  }
-  return boxes;
+  throw std::runtime_error("expected a BBOX_OBB_V1 tensor in the detections sample");
 }
 
 // Send every frame's boxes to its stream's Insight channel until each stream sent `frames`

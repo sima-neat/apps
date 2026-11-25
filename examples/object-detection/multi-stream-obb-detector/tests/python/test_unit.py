@@ -5,9 +5,11 @@ C++.
 from __future__ import annotations
 
 import json
+import struct
 from pathlib import Path
 
 import numpy as np
+import pyneat
 import pytest
 
 from tests.utils.config_cases import load_example_main
@@ -52,18 +54,44 @@ def test_shipped_config_names_a_supported_model_input_and_labels():
     assert config.boolean("input.rtsp.tcp")
 
 
+def _decoded_boxes(boxes: list[dict]):
+    """The boxes as decode_obb_tensor returns them from a BBOX_OBB_V1 tensor, the model's output:
+    a 32-byte header, then one 32-byte record per box. Core needs a capacity of at least 1."""
+    capacity = max(len(boxes), 1)
+    raw = bytearray(
+        struct.pack(
+            "<IHH6I", 0x3156424F, 1, 32, 32 + 32 * capacity, len(boxes), capacity, 32, 32, 0
+        )
+    )
+    for b in boxes:
+        raw += struct.pack(
+            "<6fiI",
+            b["cx"],
+            b["cy"],
+            b["width"],
+            b["height"],
+            b["angle_radians"],
+            b["score"],
+            b["class_id"],
+            0,
+        )
+    raw += bytes(32 * (capacity - len(boxes)))
+    tensor = pyneat.Tensor.from_numpy(
+        np.frombuffer(raw, dtype=np.uint8).copy(), copy=True, memory=pyneat.TensorMemory.CPU
+    )
+    detection = pyneat.DetectionSpec()
+    detection.format = "BBOX_OBB_V1"
+    semantic = tensor.semantic
+    semantic.detection = detection
+    tensor.semantic = semantic
+    return pyneat.decode_obb_tensor(tensor)
+
+
 def test_objects_match_the_shared_fixture():
     fixture = json.loads(OBJECTS_FIXTURE.read_text(encoding="utf-8"))
-    boxes = fixture["boxes"]
-    geometry = np.array(
-        [[b["cx"], b["cy"], b["width"], b["height"], b["angle_radians"]] for b in boxes],
-        dtype=np.float32,
-    )
-    scores = np.array([b["score"] for b in boxes], dtype=np.float32)
-    class_ids = np.array([b["class_id"] for b in boxes], dtype=np.int32)
 
     objects = json.loads(
-        oriented_boxes.detections_json(geometry, scores, class_ids, fixture["labels"])
+        oriented_boxes.detections_json(_decoded_boxes(fixture["boxes"]), fixture["labels"])
     )["objects"]
 
     assert objects == fixture["objects"]
@@ -71,8 +99,6 @@ def test_objects_match_the_shared_fixture():
 
 def test_a_frame_without_detections_sends_an_empty_list():
     """Insight clears the previous frame's boxes only when it receives the empty list."""
-    empty = np.zeros((0,), dtype=np.float32)
-
-    data = oriented_boxes.detections_json(empty, empty, empty.astype(np.int32), ["plane"])
+    data = oriented_boxes.detections_json(_decoded_boxes([]), ["plane"])
 
     assert json.loads(data) == {"objects": []}
