@@ -160,9 +160,10 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
   system memory, so the frames leave SiMa memory. Fix: keep
   `raw_output = true` for frames that go to a model.
 - **A converter in front of a model loses the frame metadata.** Frames from
-  `VideoConvert`, or from `raw_output = false`, fail at the model with
-  `input.meta: GstSimaMeta needs nonnegative frame-id and timestamp`. Fix:
-  convert on the host and push the image to a `Model::Runner`.
+  `VideoConvert`, or from `raw_output = false`, failed at the model on a
+  DevKit with `input.meta: GstSimaMeta needs nonnegative frame-id and
+  timestamp`. Fix: convert on the host and push the image to a
+  `Model::Runner`.
 - **A fractional frame rate in `CapsRaw`.** `fps` is a whole number written
   as `fps/1`, so a rate such as `30000/1001` cannot be set.
 - **The decoded format does not match the model.** A model's preprocessing is

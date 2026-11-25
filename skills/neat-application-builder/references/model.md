@@ -38,8 +38,8 @@ When the user names a model, look for a compiled package in the
 - **A model with one gray input channel** (SuperPoint) takes no NV12: pull the NV12 frames and
   run their Y plane as `GRAY8` through a `Model::Runner`.
 - When frames reach a model through `VideoConvert`, or `SimaDecode` with `raw_output = false`,
-  the model fails with `GstSimaMeta needs nonnegative frame-id and timestamp`. Convert on the
-  host and run a `Model::Runner`.
+  the model failed on a DevKit with `GstSimaMeta needs nonnegative frame-id and timestamp`.
+  Convert on the host and run a `Model::Runner`.
 - `Stretch` applies only with `resize.enable = AutoFlag::On`, a target size, or an
   `interpolation`. Otherwise the image is letterboxed with black padding. `Crop` turns resize
   on by itself.

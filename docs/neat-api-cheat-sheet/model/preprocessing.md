@@ -274,8 +274,8 @@ use `input_specs()` to know what to send.
   with `preset = ImageNet` and otherwise the same options). SuperPoint without
   statistics kept only 20 % to 50 % of its keypoints. Fix: set a
   preset or explicit statistics, and check
-  `preprocess_plan().effective.normalize.enable` is `On`. Since Core 7e5317be,
-  `resolved_preprocess_plan().warnings` then holds
+  `preprocess_plan().effective.normalize.enable` is `On`. Since Core 91b10819
+  (core#1081), `resolved_preprocess_plan().warnings` then holds
   `preprocess.normalize=Auto resolved Off: ...` for an image route.
 - **Mean and stddev alone do not turn normalization on.** With
   `normalize.enable` at `Auto`, the planner turns normalization on only when
@@ -307,8 +307,8 @@ use `input_specs()` to know what to send.
   a target size or an `interpolation` turns resize on by itself. Fix: set
   `resize.enable = On` with the `mode` and `pad_value` your model was trained
   with.
-- **A gray model does not take NV12.** The run fails to start with `Gray
-  output requires Gray/RGB/BGR input; no implicit YUV conversion`. Fix: send
+- **A gray model does not take NV12.** On a DevKit, the run failed to start
+  with `Gray output requires Gray/RGB/BGR input; no implicit YUV conversion`. Fix: send
   the frames' Y plane as a `GRAY8` tensor and set `input_format = GRAY8`.
 - **`COCO_YOLO` overrides your resize mode.** The preset sets `Letterbox` and
   pad 114 even if you set `resize.mode = Stretch`; the plan shows `Letterbox`

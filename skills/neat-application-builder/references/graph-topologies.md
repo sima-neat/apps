@@ -32,10 +32,10 @@ option and show each default. Set only the options whose default does not fit. C
 - Frame rate and caps for H.264:
   - With `auto_caps_from_stream = true` (the default), Neat reads the size and rate from the
     stream and uses `fallback_h264_width` and `fallback_h264_height` when the stream lacks them.
-    `fallback_h264_fps` applies only while neither `source_fps` nor `h264_fps` is set.
+    `fallback_h264_fps` has no effect when `source_fps` or `h264_fps` is set.
   - With `auto_caps_from_stream = false`, Neat takes the rate from `source_fps` or `h264_fps`,
-    and from `fallback_h264_fps` only while neither is set. The size comes from the fallback
-    fields, and the build fails when any is missing.
+    then `fallback_h264_fps`, and the size from `h264_width` and `h264_height`, then the
+    fallback fields. The build fails when the rate or a dimension is still missing.
   - The high-density example sets the fallback fields to the stream's size and rate, turns
     auto caps off when its configuration gives the rate, and leaves them on when it does not.
 - `source_fps` declares the rate for H.265 and MJPEG too. Set it when the stream does not
