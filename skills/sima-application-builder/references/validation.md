@@ -78,4 +78,7 @@ lifecycle behavior changes, exercise stop, cleanup, and restart. When a local wi
 check viewing and closing it on the target.
 
 For a graph failure, read the structured diagnostics in this order: `error_code`, `repro_note`,
-the first terminal entry in `bus`, then `repro_gst_launch` to replay the pipeline.
+the first terminal entry in `bus`, then `repro_gst_launch` to replay the pipeline. In C++ they
+are fields of `NeatError::report()`. A Python `pyneat.NeatError` carries only `error_code`,
+`repro_note`, `pipeline_string`, and `report_json`, so read `bus` and `repro_gst_launch` from
+`json.loads(error.report_json)`.

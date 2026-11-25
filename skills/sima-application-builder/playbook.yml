@@ -6,4 +6,4 @@ description: Build Neat applications in the Palette SDK or on DevKit after choos
 compatibility:
   env_types: [sdk, board]
   env_subtypes: [palette, modalix]
-  min_cli_version: 2.1.1
+  min_cli_version: 2.1.20
