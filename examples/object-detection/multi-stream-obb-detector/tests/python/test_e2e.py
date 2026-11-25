@@ -37,7 +37,8 @@ CASES = [
     pytest.param("h264", 2, id="h264"),
     pytest.param("h265", 2, id="h265"),
     pytest.param("mjpeg", 2, id="mjpeg"),
-    # With one source, Core names the samples after the decoder instead of the stream.
+    # Core candidate: with one source, Core names the sample after the decoder instead
+    # of the link's stream_id, so the index is 0 here.
     pytest.param("h264", 1, id="h264-one-stream"),
 ]
 

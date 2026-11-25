@@ -369,7 +369,8 @@ int main(int argc, char** argv) {
           if (run_case(binary, model_path, source_case, 2, label) != 0) {
             case_rc = 1;
           }
-          // With one source, Core names the samples after the decoder instead of the stream.
+          // Core candidate: with one source, Core names the sample after the decoder instead
+          // of the link's stream_id, so the index is 0 here.
           if (source_case.codec == "h264" &&
               run_case(binary, model_path, source_case, 1, label + "-one-stream") != 0) {
             case_rc = 1;
