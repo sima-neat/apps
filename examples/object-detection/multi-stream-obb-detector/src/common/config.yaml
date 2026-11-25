@@ -1,13 +1,13 @@
 # Oriented-box detection on several aerial RTSP streams with one shared model, shown in Insight.
 model:
   id: yolo26                    # Family of the model in model.path: yolo26, yolov8, or yolo11.
-  # Compiled model package; a relative path starts at this file.
+  # Compiled model package. A relative path starts at this file.
   path: ../../../../../models/yolo26n_obb/w8a8/yolo26n_obb_w8a8_mpk.tar.gz
-  # Class labels, one per line; a relative path starts at the working directory.
+  # Class labels, one per line. A relative path starts at the working directory.
   labels: examples/object-detection/multi-stream-obb-detector/src/common/dota_label.txt
 
 input:
-  source:                       # One RTSP URL per stream; stream i goes to Insight channel i.
+  source:                       # One RTSP URL per stream. Stream i goes to Insight channel i.
     - <rtsp-url-1>
     - <rtsp-url-2>
   codec: h264                   # h264, h265, or mjpeg, for every stream.
@@ -19,7 +19,7 @@ input:
     latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0                     # Frames each stream sends before the app stops; 0 runs until stopped.
+  frames: 0                     # Frames each stream sends before the app stops. 0 runs until stopped.
   min_score: 0.30               # Lowest score a detection needs.
   max_detections: 100           # Oriented boxes kept per frame. Each adds about 150 bytes,
                                 # up to 160, so about 400 boxes fit in one metadata message.

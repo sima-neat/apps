@@ -136,7 +136,7 @@ Stop the application with `Ctrl-C`.
 
 ## Expected Result
 
-The application prints one line per stream with its source, frame size, and Insight ports:
+The application prints one line per stream with its source, frame size, and Insight ports, for example:
 
 ```text
 [stream 0] rtsp=rtsp://<insight-host>:8554/src1 stream=1280x720@30 insight=<insight-host> video=9000 metadata=9100
@@ -145,7 +145,7 @@ The application prints one line per stream with its source, frame size, and Insi
 
 Insight shows each stream on its own channel, with a rotated box and a label around each detected object.
 
-When it stops, the application prints how many frames each stream processed. A positive `inference.frames` stops it after that many frames per stream. With `inference.frames: 300`:
+When it stops, the application prints how many frames each stream processed. A positive `inference.frames` stops it after that many frames per stream. With `inference.frames: 300`, for example:
 
 ```text
 [stream 0] processed=300
