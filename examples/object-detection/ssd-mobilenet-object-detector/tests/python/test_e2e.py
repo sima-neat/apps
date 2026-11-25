@@ -22,6 +22,17 @@ def load_labels(path):
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def run_example(config_path, test_timeout_ms):
+    return subprocess.run(
+        [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+        capture_output=True,
+        text=True,
+        timeout=test_timeout_ms / 1000,
+        cwd=str(EXAMPLE_DIR),
+        check=False,
+    )
+
+
 def _assert_valid_detections(report, expected_images, labels, min_score):
     entries = report["images"]
     assert {entry["image"] for entry in entries} == expected_images
@@ -65,19 +76,7 @@ class TestE2E:
                 "app": {"detections_json": str(detections_path)},
             }
         )
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(MAIN_PY),
-                "--config",
-                str(config_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=test_timeout_ms / 1000,
-            cwd=str(EXAMPLE_DIR),
-            check=False,
-        )
+        result = run_example(config_path, test_timeout_ms)
 
         assert result.returncode == 0, (
             f"main.py exited with code {result.returncode}\n"
@@ -93,3 +92,36 @@ class TestE2E:
         _assert_valid_detections(
             reported, expected_images, labels, config["inference"]["min_score"]
         )
+
+    def test_empty_detections_json_writes_no_report(
+        self,
+        e2e_model_path,
+        test_images_dir,
+        tmp_output_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
+    ):
+        """An empty app.detections_json turns the report off; the annotated PNGs are still saved."""
+        skip_unless_e2e_ready(
+            test_images_dir.exists() and bool(supported_image_files(test_images_dir)),
+            f"test_images_dir has no images to process: {test_images_dir}",
+        )
+
+        config_path = e2e_config_writer(
+            {
+                "input": {"source": str(test_images_dir)},
+                "output": {"dir": str(tmp_output_dir)},
+                "app": {"detections_json": ""},
+            }
+        )
+        result = run_example(config_path, test_timeout_ms)
+
+        assert result.returncode == 0, (
+            f"main.py exited with code {result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert_saved_frames_are_usable(tmp_output_dir, len(supported_image_files(test_images_dir)))
+        written = sorted(tmp_output_dir.parent.rglob("*.json"))
+        assert not written, f"an empty app.detections_json wrote {written}"
+        assert "detections in" not in result.stdout, result.stdout

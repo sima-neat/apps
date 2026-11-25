@@ -1,7 +1,7 @@
 """Detect objects in a folder of images with SSD-MobileNet, saved as annotated PNGs and JSON.
 
 The model runs on one image at a time. Each image is saved with its boxes drawn, and every box
-goes into one JSON report.
+goes into one JSON report, unless app.detections_json is empty.
 """
 
 from __future__ import annotations
@@ -124,9 +124,13 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         runner.close()
 
-    report_path = Path(config.string("app.detections_json"))
-    annotate.write_report(report_path, records)
-    print(f"Done: {len(records)} images processed, detections in {report_path}")
+    # An empty app.detections_json turns the report off.
+    report_path = config.string("app.detections_json")
+    if report_path:
+        annotate.write_report(Path(report_path), records)
+        print(f"Done: {len(records)} images processed, detections in {report_path}")
+    else:
+        print(f"Done: {len(records)} images processed")
     return 0
 
 

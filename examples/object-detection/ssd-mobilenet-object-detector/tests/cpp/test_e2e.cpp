@@ -30,6 +30,47 @@ nlohmann::json load_json(const fs::path& path, std::string& err) {
   }
 }
 
+// An empty app.detections_json turns the report off: the run still saves one PNG per image and
+// writes no JSON file.
+bool test_empty_detections_json_writes_no_report(const std::string& binary,
+                                                 const std::string& model_path,
+                                                 const std::string& input_dir, int timeout) {
+  const std::string out_dir = create_test_output_dir("ssd-mobilenet-object-detector",
+                                                     "test_empty_detections_json_writes_no_report");
+  if (out_dir.empty()) {
+    return false;
+  }
+  const fs::path run_dir = fs::path(out_dir).parent_path();
+  const fs::path config_path = run_dir / "config.yaml";
+  write_e2e_config("ssd-mobilenet-object-detector", config_path,
+                   {{"model.path", model_path},
+                    {"input.source", input_dir},
+                    {"output.dir", out_dir},
+                    {"app.detections_json", ""}});
+  const auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
+  std::string problem;
+  if (r.exit_code != 0) {
+    problem = "exit code " + std::to_string(r.exit_code) + "\nstderr:\n" + r.stderr_text;
+  } else {
+    problem = saved_frames_problem(out_dir, supported_image_count(input_dir));
+  }
+  for (const auto& entry : fs::recursive_directory_iterator(run_dir)) {
+    if (problem.empty() && entry.path().extension() == ".json") {
+      problem = "an empty app.detections_json wrote " + entry.path().string();
+    }
+  }
+  if (problem.empty() && r.stdout_text.find("detections in") != std::string::npos) {
+    problem = "an empty app.detections_json still names a report:\n" + r.stdout_text;
+  }
+  remove_dir(out_dir);
+  if (!problem.empty()) {
+    std::cerr << "[FAIL] " << problem << "\n";
+    return false;
+  }
+  std::cout << "[OK] an empty app.detections_json wrote no report\n";
+  return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -149,5 +190,8 @@ int main(int argc, char** argv) {
   remove_dir(out_dir);
   std::cout << "[OK] ssd-mobilenet-object-detector produced " << output_files
             << " output files and " << detection_count << " valid detections\n";
-  return 0;
+
+  const bool report_off_ok =
+      test_empty_detections_json_writes_no_report(binary, model_path, input_dir, timeout);
+  return report_off_ok ? 0 : 1;
 }

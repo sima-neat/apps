@@ -14,7 +14,7 @@
 
 // Detects objects in a folder of images with SSD-MobileNet, saved as annotated PNGs and JSON.
 // The model runs on one image at a time. Each image is saved with its boxes drawn, and every box
-// goes into one JSON report.
+// goes into one JSON report, unless app.detections_json is empty.
 
 #include "neat.h"
 #include "sima_examples/config.h"
@@ -144,10 +144,15 @@ int run_app(const fs::path& config_path) {
   const nlohmann::json records = annotate_images(runner, paths, labels, max_detections, output_dir);
   runner.close();
 
-  const fs::path report_path = config.string("app.detections_json");
-  annotate::write_report(report_path, records);
-  std::cout << "Done: " << records.size() << " images processed, detections in "
-            << report_path.string() << std::endl;
+  // An empty app.detections_json turns the report off.
+  const std::string report_path = config.string("app.detections_json");
+  if (!report_path.empty()) {
+    annotate::write_report(report_path, records);
+    std::cout << "Done: " << records.size() << " images processed, detections in " << report_path
+              << std::endl;
+  } else {
+    std::cout << "Done: " << records.size() << " images processed" << std::endl;
+  }
   return 0;
 }
 
