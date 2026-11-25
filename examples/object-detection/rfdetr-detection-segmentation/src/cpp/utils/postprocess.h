@@ -12,7 +12,7 @@
 
 namespace rfdetr {
 
-// COCO class IDs 0 to 90, one label each. ID 0 and the "unused" labels name no object.
+// COCO class IDs 0 to 90, one label each. ID 0 and the "N/A" labels name no object.
 constexpr int kNumClasses = 91;
 
 struct PostprocessOptions {

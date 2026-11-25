@@ -1,221 +1,95 @@
-"""Unit tests for detr-object-detector (Python)."""
+"""Unit tests for the DETR object detector: the checks the application leaves to its config, and
+the image folder and annotated images it handles. tests/cpp/test_unit.cpp runs the same checks in
+C++.
+"""
 
-import importlib.util
-import subprocess
-import sys
+from __future__ import annotations
+
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+from tests.utils.config_cases import load_example_main
+
+EXAMPLE_DIR = Path(__file__).resolve().parents[2]
+COMMON_DIR = EXAMPLE_DIR / "src" / "common"
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+
+main_module = load_example_main(EXAMPLE_DIR, "detr_object_detector_main")
+annotate = main_module.annotate
+images = main_module.images
+
+pytestmark = pytest.mark.unit
 
 
-def load_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("detr_object_detector", MAIN_PY)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    # dataclass resolves its annotations through sys.modules.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+def box(x1, y1, x2, y2, score, class_id):
+    return SimpleNamespace(x1=x1, y1=y1, x2=x2, y2=y2, score=score, class_id=class_id)
 
 
-def fake_pyneat(decoded_boxes: list[SimpleNamespace]) -> tuple[SimpleNamespace, list[tuple]]:
-    """A pyneat stand-in with the option fields, tensor factory, and BBOX parser the example uses.
+def test_shipped_config_names_a_supported_model_labels_and_folders():
+    """The checks the application leaves to its config: the values it reads are usable."""
+    config = main_module.Config.load(COMMON_DIR / "config.yaml")
+    model_path = COMMON_DIR / config.string("model.path")
+    assert model_path.name == "detr_resnet_50_w16a16_mpk.tar.gz"
+    # The packaged path reaches prebuilt-apps/models from the config file.
+    assert model_path.resolve().is_relative_to(APPS_ROOT / "models")
+    # DETR scores the 91 COCO class IDs; ID 0 and the other unused IDs are N/A.
+    labels = main_module.load_labels(APPS_ROOT / config.string("model.labels"))
+    assert len(labels) == 91
+    assert labels[0] == "N/A" and labels[1] == "person" and labels[90] == "toothbrush"
+    # Neat's DETR decoder keeps the package's own threshold and cap when either is 0.
+    assert 0 < config.number("inference.min_score") <= 1
+    assert config.integer("inference.max_detections") > 0
+    # The annotated PNGs go to their own folder under sandbox/, never into the input folder.
+    input_dir = (APPS_ROOT / config.string("input.source")).resolve()
+    output_dir = (APPS_ROOT / config.string("output.dir")).resolve()
+    assert images.image_paths(input_dir)
+    assert input_dir != output_dir
+    assert output_dir.is_relative_to(APPS_ROOT / "sandbox")
 
-    Returns the stand-in and the list that records each decode_bbox_tensor call.
-    """
-    decode_calls: list[tuple] = []
 
-    def model_options() -> SimpleNamespace:
-        return SimpleNamespace(
-            preprocess=SimpleNamespace(resize=SimpleNamespace(), color_convert=SimpleNamespace())
-        )
+def test_image_paths_lists_only_images_in_name_order(tmp_path):
+    for name in ("b.PNG", "a.jpg", "c.bmp", "notes.txt", "d.jpeg"):
+        (tmp_path / name).write_bytes(b"")
+    (tmp_path / "e.jpg").mkdir()
+    assert [path.name for path in images.image_paths(tmp_path)] == [
+        "a.jpg",
+        "b.PNG",
+        "c.bmp",
+        "d.jpeg",
+    ]
 
-    def decode_bbox_tensor(
-        tensor: str, width: int, height: int, max_detections: int, strict: bool
-    ) -> SimpleNamespace:
-        decode_calls.append((tensor, width, height, max_detections, strict))
-        return SimpleNamespace(boxes=decoded_boxes)
 
-    fake = SimpleNamespace(
-        ModelOptions=model_options,
-        InputKind=SimpleNamespace(Image="image"),
-        AutoFlag=SimpleNamespace(On="on"),
-        ResizeMode=SimpleNamespace(Stretch="stretch"),
-        ResizeInterpolation=SimpleNamespace(BilinearAntialiased="bilinear-antialiased"),
-        NormalizePreset=SimpleNamespace(ImageNet="imagenet"),
-        PreprocessColorFormat=SimpleNamespace(BGR="bgr", RGB="rgb"),
-        BoxDecodeType=SimpleNamespace(Detr="detr"),
-        PixelFormat=SimpleNamespace(BGR="bgr"),
-        TensorMemory=SimpleNamespace(EV74="ev74"),
-        Tensor=SimpleNamespace(from_numpy=lambda array, **_: "image-tensor"),
-        detections=SimpleNamespace(decode_bbox_tensor=decode_bbox_tensor),
+def test_image_paths_rejects_a_folder_without_images(tmp_path):
+    (tmp_path / "notes.txt").write_bytes(b"")
+    with pytest.raises(ValueError, match="input.source has no"):
+        images.image_paths(tmp_path)
+
+
+def test_largest_image_size_takes_the_widest_and_the_tallest_image(tmp_path):
+    # Neat rejects any image above its input limits, so they must fit the widest and the tallest
+    # image, even when those are different images.
+    landscape, portrait = tmp_path / "landscape.png", tmp_path / "portrait.png"
+    assert cv2.imwrite(str(landscape), np.zeros((30, 64, 3), np.uint8))
+    assert cv2.imwrite(str(portrait), np.zeros((50, 40, 3), np.uint8))
+    assert images.largest_image_size([landscape, portrait]) == (64, 50)
+
+
+def test_output_name_marks_the_detr_result():
+    assert annotate.output_name(Path("in/street.jpg")) == "street_detr.png"
+
+
+def test_draw_detections_draws_the_box_in_its_class_color_on_a_copy():
+    image = np.zeros((60, 80, 3), np.uint8)
+    annotated = annotate.draw_detections(
+        image, [box(9.6, 20.4, 50.0, 55.0, 0.9, 1)], ["N/A", "person"]
     )
-    return fake, decode_calls
-
-
-def box(class_id: int, score: float = 0.9) -> SimpleNamespace:
-    return SimpleNamespace(x1=80.0, y1=30.0, x2=120.0, y2=70.0, score=score, class_id=class_id)
-
-
-def write_config(tmp_path: Path, decode: str) -> Path:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(f"decode:\n{decode}", encoding="utf-8")
-    return config_path
-
-
-@pytest.mark.unit
-class TestConfig:
-    """Config values map to Neat's DETR decoder, and values it would ignore are rejected."""
-
-    def test_config_maps_to_the_detr_decoder(self, tmp_path: Path) -> None:
-        detr = load_module()
-        detr.pyneat, _ = fake_pyneat([])
-        config = detr.load_config(
-            write_config(tmp_path, "  confidence_threshold: 0.6\n  max_draw: 30\n")
-        )
-
-        options = detr.build_model_options(config, 4032, 3024)
-
-        assert options.preprocess.kind == "image"
-        assert options.preprocess.input_max_width == 4032
-        assert options.preprocess.input_max_height == 3024
-        assert options.preprocess.resize.mode == "stretch"
-        assert options.preprocess.resize.interpolation == "bilinear-antialiased"
-        assert options.preprocess.preset == "imagenet"
-        assert options.preprocess.color_convert.input_format == "bgr"
-        assert options.preprocess.color_convert.output_format == "rgb"
-        assert options.decode_type == "detr"
-        assert options.score_threshold == 0.6
-        assert options.top_k == 30
-
-    def test_input_limits_fit_the_largest_image(self) -> None:
-        # Neat rejects any image above its input limits, so they must fit the widest and the
-        # tallest image, even when those are different images.
-        detr = load_module()
-        shapes = {"landscape.jpg": (3024, 4032, 3), "portrait.jpg": (4000, 3000, 3)}
-        detr.cv2 = SimpleNamespace(
-            IMREAD_COLOR=1, imread=lambda path, _flags: np.zeros(shapes[Path(path).name], np.uint8)
-        )
-
-        assert detr.largest_image_size([Path(name) for name in shapes]) == (4032, 4000)
-
-    @pytest.mark.parametrize(
-        ("decode", "message"),
-        [
-            ("  confidence_threshold: 0.0\n", "confidence_threshold"),
-            ("  confidence_threshold: 1.5\n", "confidence_threshold"),
-            ("  max_draw: 0\n", "max_draw"),
-        ],
-    )
-    def test_values_neat_would_ignore_are_rejected(
-        self, tmp_path: Path, decode: str, message: str
-    ) -> None:
-        detr = load_module()
-
-        with pytest.raises(ValueError, match=message):
-            detr.load_config(write_config(tmp_path, decode))
-
-
-@pytest.mark.unit
-class TestDetect:
-    """One image goes through the model, and the decoder's BBOX tensor becomes boxes."""
-
-    def run_detect(
-        self, tmp_path: Path, decoded_boxes: list[SimpleNamespace], person_only: bool
-    ) -> tuple[list[SimpleNamespace], list[tuple], list[list[str]]]:
-        detr = load_module()
-        detr.np = np
-        detr.pyneat, decode_calls = fake_pyneat(decoded_boxes)
-        config = detr.load_config(
-            write_config(tmp_path, f"  max_draw: 50\n  person_only: {str(person_only).lower()}\n")
-        )
-        runner_inputs: list[list[str]] = []
-
-        def run(inputs: list[str]) -> list[str]:
-            runner_inputs.append(inputs)
-            return ["bbox"]
-
-        image_bgr = np.zeros((100, 200, 3), dtype=np.uint8)
-        boxes = detr.detect(SimpleNamespace(run=run), image_bgr, config)
-        return boxes, decode_calls, runner_inputs
-
-    def test_boxes_are_read_in_original_image_pixels(self, tmp_path: Path) -> None:
-        dog = box(class_id=18)
-
-        boxes, decode_calls, runner_inputs = self.run_detect(tmp_path, [dog], person_only=False)
-
-        assert runner_inputs == [["image-tensor"]]
-        assert decode_calls == [("bbox", 200, 100, 50, False)]
-        assert boxes == [dog]
-
-    def test_person_only_keeps_person_detections(self, tmp_path: Path) -> None:
-        detr = load_module()
-        person = box(class_id=detr.PERSON_CLASS_ID)
-
-        boxes, _, _ = self.run_detect(tmp_path, [box(class_id=18), person], person_only=True)
-
-        assert boxes == [person]
-
-    def test_rejects_raw_model_heads(self, tmp_path: Path) -> None:
-        detr = load_module()
-        detr.np = np
-        detr.pyneat, _ = fake_pyneat([])
-        config = detr.load_config(write_config(tmp_path, "  max_draw: 50\n"))
-        runner = SimpleNamespace(run=lambda inputs: ["logits", "boxes"])
-
-        with pytest.raises(RuntimeError, match="one BBOX tensor"):
-            detr.detect(runner, np.zeros((100, 200, 3), dtype=np.uint8), config)
-
-
-@pytest.mark.unit
-class TestLabels:
-    def test_unused_coco_ids_get_a_numbered_label(self) -> None:
-        detr = load_module()
-
-        assert detr.class_name(detr.PERSON_CLASS_ID) == "person"
-        assert detr.class_name(18) == "dog"
-        assert detr.class_name(12) == "class_12"
-        assert detr.class_name(91) == "class_91"
-
-
-@pytest.mark.unit
-class TestArgParsing:
-    """Validate CLI argument parsing for the DETR example."""
-
-    def run_main(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, str(MAIN_PY), *args],
-            capture_output=True,
-            text=True,
-            timeout=20,
-            cwd=str(EXAMPLE_DIR),
-        )
-
-    def test_help(self) -> None:
-        r = self.run_main("--help")
-
-        assert r.returncode == 0
-        assert "--config" in r.stdout
-
-    def test_bad_config_path(self) -> None:
-        r = self.run_main("--config", "/nonexistent/detr-config.yaml")
-
-        assert r.returncode == 2
-        assert "failed to open config file" in r.stderr
-
-    def test_unknown_flag(self) -> None:
-        r = self.run_main("--bogus")
-
-        assert r.returncode == 2
-        assert "unrecognized" in r.stderr.lower()
-
-    def test_max_draw_must_be_positive(self, tmp_path: Path) -> None:
-        r = self.run_main("--config", str(write_config(tmp_path, "  max_draw: 0\n")))
-
-        assert r.returncode == 2
-        assert "decode.max_draw must be >= 1" in r.stderr
+    assert not image.any()
+    # Class 1 is blue in BGR. x1 = 9.6 rounds to 10, and a 2-pixel line there covers columns 9
+    # to 11; truncating to 9 would cover 8 to 10.
+    assert tuple(annotated[40, 11]) == (255, 0, 0)
+    assert tuple(annotated[40, 8]) == (0, 0, 0)
+    assert tuple(annotated[40, 30]) == (0, 0, 0)

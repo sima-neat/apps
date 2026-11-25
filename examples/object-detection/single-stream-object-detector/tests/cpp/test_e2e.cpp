@@ -46,9 +46,15 @@ std::pair<int, int> frame_size(const std::string& url) {
   return {width, height};
 }
 
+// The shared COCO label file, under the apps root.
+fs::path labels_path() {
+  const char* apps_root = env_or_null("APPS_ROOT");
+  return fs::path(apps_root != nullptr ? apps_root : ".") / "support" / "labels" / "coco80.txt";
+}
+
 // The labels of the label file, one per line.
 std::vector<std::string> label_file() {
-  std::ifstream input(example_common_config_path(kExampleName).parent_path() / "coco_label.txt");
+  std::ifstream input(labels_path());
   std::vector<std::string> labels;
   for (std::string line; std::getline(input, line);) {
     labels.push_back(line);
@@ -112,9 +118,8 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   // Only the keys of the case's input type, as the example reads them.
   std::ofstream config(config_path);
-  config << "model:\n  path: " << model_path << "\n  labels: "
-         << fs::absolute(example_common_config_path(kExampleName).parent_path() / "coco_label.txt")
-                .string()
+  config << "model:\n  path: " << model_path
+         << "\n  labels: " << fs::absolute(labels_path()).string()
          << "\ninput:\n  type: " << source_case.type << "\n  source: " << source
          << "\n  width: " << width << "\n  height: " << height << "\n  fps: " << source_case.fps
          << "\n";

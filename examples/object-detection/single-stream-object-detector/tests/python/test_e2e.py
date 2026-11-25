@@ -19,7 +19,8 @@ from tests.utils.pytest_fixtures import usb_camera_cases
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitlines()
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+LABELS = (APPS_ROOT / "support" / "labels" / "coco80.txt").read_text().splitlines()
 FRAMES = 100
 # Above the shipped 0.30, so the scores show that the example applies inference.min_score.
 MIN_SCORE = 0.5

@@ -39,7 +39,7 @@ void require(bool condition, const std::string& message) {
 void require_objects_match_config(const json& objects, const std::set<std::string>& labels) {
   for (const auto& item : objects) {
     require(labels.count(item.at("label").get<std::string>()) == 1,
-            "label not in coco_label.txt: " + item.at("label").dump());
+            "label not in coco80.txt: " + item.at("label").dump());
     const double confidence = item.at("confidence").get<double>();
     require(confidence >= 0.3 && confidence <= 1.0, "confidence below inference.min_score");
   }
@@ -98,8 +98,9 @@ void run_case(const std::string& binary, const std::string& model, const std::st
   const auto config = fs::path(output).parent_path() / "config.yaml";
   const int port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int video = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
+  const char* apps_root = env_or_null("APPS_ROOT");
   const fs::path labels_path =
-      example_common_config_path(kExample).parent_path() / "coco_label.txt";
+      fs::path(apps_root != nullptr ? apps_root : ".") / "support" / "labels" / "coco80.txt";
   const auto label_list = sima_examples::load_labels(labels_path);
   const std::set<std::string> labels(label_list.begin(), label_list.end());
   write_e2e_config(kExample, config,

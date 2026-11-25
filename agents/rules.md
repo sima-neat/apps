@@ -24,7 +24,8 @@ Place each piece of code by the first question it answers yes to:
 | Entrypoint | The Neat flow: models, the whole graph, the run, and its teardown | `main.py`, `main.cpp` |
 | `src/*/utils/` | The example's own logic, such as postprocessing or tracking | RF-DETR `postprocess.*`, the trackers' `tracker.*` |
 | `support/python/sima_examples/`, `support/cpp/sima_examples/` | The shared library: code two or more examples need. It may read and convert Neat data types, such as `Tensor`, `Sample`, and `PullStatus`, and never creates a model, graph, or run | `config`, `labels`, `rtsp_probe`, `stop_signals`, `detection_egress` |
-| `src/common/` | Files one example's C++ and Python share | `config.yaml`, label files |
+| `support/labels/` | Class-label files two or more examples' configs name, one label per line in the model's class-ID order | `coco80.txt`, `coco91.txt` |
+| `src/common/` | Files one example's C++ and Python share, such as the label file of a model only it uses | `config.yaml`, `pcb_label.txt` |
 | Model Registry | Reusable model preparation. Temporary preparation stays in the example's `src/common/` as one development-only flow, outside the packaged runtime | |
 | `tests/utils/`, `support/cpp/sima_examples/testing/` | Test helpers two or more examples' tests use, in Python and C++ | the metadata listener |
 | The example's `tests/python/`, `tests/cpp/` | Test helpers only that example's tests use | high-density `received_metadata_tracker.*` |
@@ -46,7 +47,13 @@ Place each piece of code by the first question it answers yes to:
   entrypoint imports them with `from utils import <module>`.
 - A Python entrypoint finds `support/python` in a folder above itself, as the high-density
   example does. `build.sh` and `scripts/get-example.sh` ship that folder, `support/README.md`,
-  and `support/cpp/sima_examples/` without `testing/` as reference source.
+  `support/labels/`, and `support/cpp/sima_examples/` without `testing/` as reference source.
+- A label file moves from an example's `src/common/` to `support/labels/` when a second
+  example's model uses the same classes in the same class-ID order. An example that keeps a
+  copy deletes it and names the shared file in its own conversion pull request. A config
+  names it as `model.labels: support/labels/<file>`, read from the working directory. A label
+  set with another order or count, such as COCO's 80 classes and its 91 class IDs, is its own
+  file. A class ID that names no class has the line `N/A`.
 - Platform tooling owns provisioning, recovery, and setup of the host, network, mounts,
   devices, and the SDK. Examples start from a prepared system.
 

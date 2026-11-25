@@ -103,8 +103,11 @@ When the user names a model, look for a compiled package in the
     zero-area boxes are kept. With `false`, the box count is capped at `top_k` and zero-area
     boxes are dropped. The high-density example passes `true` with its `top_k`.
 - Class labels come from a label file the application loads, one name per line, in class-ID
-  order. `labels[box.class_id]` names a box. The high-density example loads its
-  `src/common/coco_label.txt` this way.
+  order. `labels[box.class_id]` names a box. The high-density example loads the 80 COCO
+  classes this way.
+  - When a model scores class IDs with gaps, such as the 91 COCO class IDs DETR models score,
+    give every ID a line and write a placeholder such as `N/A` for an ID that names no class.
+    The IDs then still index the file.
 - Oriented-box decoders emit `BBOX_OBB_V1`. [Application output](application-output.md)
   covers drawing them.
 - `decode_superpoint` returns keypoints in model-input pixels until sima-neat/core#1328 is
