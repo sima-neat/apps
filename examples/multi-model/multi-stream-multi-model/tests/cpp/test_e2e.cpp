@@ -329,8 +329,10 @@ int run_case(const std::string& binary, const std::string& models_dir,
                            std::to_string(previous_frame_id));
       }
       previous_frame_id = frame_id;
-      for (const auto& entry :
-           nlohmann::json::parse(message.payload).at("data").at(stream_case.key)) {
+      // A named payload: a range-for over parse(...).at(...) would keep only the reference at()
+      // returns, into a parse result destroyed before the loop.
+      const nlohmann::json payload = nlohmann::json::parse(message.payload);
+      for (const auto& entry : payload.at("data").at(stream_case.key)) {
         if (const std::string problem = entry_problem(stream_case.metadata_type, entry, labels);
             !problem.empty()) {
           problems.push_back(stream + " frame " + message.frame_id + ": " + problem);
