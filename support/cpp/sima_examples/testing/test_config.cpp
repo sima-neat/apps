@@ -3,9 +3,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <filesystem>
+#include <iterator>
 #include <map>
 #include <stdexcept>
-#include <iterator>
 #include <sstream>
 #include <vector>
 
