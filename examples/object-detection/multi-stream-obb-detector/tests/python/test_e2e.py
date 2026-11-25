@@ -175,7 +175,9 @@ def test_streams_reach_their_insight_channels(
             for sock in video_sockets:
                 sock.close()
 
-    assert process.returncode == 0, f"exit {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    # pytest shows this output only when the test fails.
+    print(f"application exit code {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+    assert process.returncode == 0, f"exit code {process.returncode}"
     assert not errors, errors
     boxes = 0
     for index in range(streams):
@@ -184,8 +186,10 @@ def test_streams_reach_their_insight_channels(
             rf"insight=127\.0\.0\.1 video={video_port + index} metadata={metadata_port + index}$",
             stdout,
             re.MULTILINE,
-        ), stdout
-        assert f"[stream {index}] processed={FRAMES}" in stdout, stdout
+        ), f"stream {index} did not print its source and ports"
+        assert f"[stream {index}] processed={FRAMES}" in stdout, (
+            f"stream {index} did not report processed={FRAMES}"
+        )
         assert payload_types[index] == {PAYLOAD_TYPES[codec]}, (
             f"stream {index} video: RTP payload types {payload_types[index]}"
         )

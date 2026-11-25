@@ -227,8 +227,7 @@ int run_case(const std::string& binary, const std::string& model_path,
 
   std::vector<std::string> problems;
   if (const std::string problem = exit_problem(result); !problem.empty()) {
-    problems.push_back(problem + "\nstdout:\n" + result.stdout_text + "\nstderr:\n" +
-                       result.stderr_text);
+    problems.push_back(problem);
   }
   for (const std::string& error : {metadata.error, rest.error}) {
     if (!error.empty()) {
@@ -302,7 +301,12 @@ int run_case(const std::string& binary, const std::string& model_path,
   for (const auto& problem : problems) {
     std::cerr << "[FAIL] " << label << " " << problem << "\n";
   }
-  if (problems.empty()) {
+  if (!problems.empty()) {
+    std::cerr << "[FAIL] " << label << " application exit code " << result.exit_code
+              << "\nstdout:\n"
+              << result.stdout_text << "\nstderr:\n"
+              << result.stderr_text << "\n";
+  } else {
     std::cout << "[OK] " << label << " reached its Insight channels\n";
   }
   return problems.empty() ? 0 : 1;
