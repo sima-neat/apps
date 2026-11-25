@@ -53,8 +53,11 @@ const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
 // The model's one class.
 const std::vector<std::string> kLabels = {"drone"};
 // Frames all streams together may have in the shared model: 4, one stream's default
-// (RealtimeLinkOptions.h). Core's default total, min(4 * streams, 8) (EdgeRouter.cpp), holds more
-// from two streams on. Whether more frames in flight give more results per second is not measured.
+// (RealtimeLinkOptions.h). On four 25 fps streams, 4 and 16 both gave about 12.8 results/s per
+// stream (Vulcan CI runs 45586507970 and 45412976943, on Core develop/0420557512d1 and
+// develop/530580ae4d76), so more frames in flight did not add results. Core's default total is
+// min(4 * streams, 8): GraphBuildSource.cpp (fused_max_inflight_total) sets it for two or more
+// streams, and EdgeRouter.cpp for one.
 constexpr int kMaxInflightTotal = 4;
 
 fs::path parse_args(int argc, char** argv) {
@@ -118,16 +121,12 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
   options.codec = config.choice("input.codec", kRtspCodecs);
   options.tcp = config.boolean("input.rtsp.tcp");
   options.latency_ms = config.integer("input.rtsp.latency_ms");
-  // With input.fps at 0, Core also takes the H.264 caps from the stream: above 60 fps, caps set
-  // from the probed values alone failed to negotiate in some runs. The H.265 path does not read
-  // auto_caps_from_stream (RtspEncodedInput.cpp).
-  options.auto_caps_from_stream = config.integer("input.fps") == 0;
-  // The stream's rate in the encoded caps. With input.fps set, the H.264 explicit caps need it
-  // (RtspEncodedInput.cpp), and H.265 writes it into its caps (H265Depacketize.cpp).
-  options.source_fps = stream.fps;
+  options.source_fps = config.integer("input.fps");
+  options.auto_caps_from_stream = options.source_fps == 0;
   if (options.codec == groups::RtspCodec::H264) {
     options.fallback_h264_width = stream.width;
     options.fallback_h264_height = stream.height;
+    options.fallback_h264_fps = stream.fps;
   }
   return options;
 }
@@ -144,8 +143,8 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
   decode.dec_fps = stream.fps;
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
-  graph.add(
-      neat::nodes::CapsRaw("NV12", stream.width, stream.height, stream.fps, neat::CapsMemory::Any));
+  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, config.integer("input.fps"),
+                                 neat::CapsMemory::Any));
   graph.add(neat::nodes::Output("detector_frame"));
   return graph;
 }

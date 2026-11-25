@@ -34,8 +34,11 @@ DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeTyp
 # The model's one class.
 LABELS = ["drone"]
 # Frames all streams together may have in the shared model: 4, one stream's default
-# (RealtimeLinkOptions.h). Core's default total, min(4 * streams, 8) (EdgeRouter.cpp), holds more
-# from two streams on. Whether more frames in flight give more results per second is not measured.
+# (RealtimeLinkOptions.h). On four 25 fps streams, 4 and 16 both gave about 12.8 results/s per
+# stream (Vulcan CI runs 45586507970 and 45412976943, on Core develop/0420557512d1 and
+# develop/530580ae4d76), so more frames in flight did not add results. Core's default total is
+# min(4 * streams, 8): GraphBuildSource.cpp (fused_max_inflight_total) sets it for two or more
+# streams, and EdgeRouter.cpp for one.
 MAX_INFLIGHT_TOTAL = 4
 PULL_TIMEOUT_MS = 100
 
@@ -91,16 +94,12 @@ def rtsp_options(
     options.codec = config.choice("input.codec", RTSP_CODECS)
     options.tcp = config.boolean("input.rtsp.tcp")
     options.latency_ms = config.integer("input.rtsp.latency_ms")
-    # With input.fps at 0, Core also takes the H.264 caps from the stream: above 60 fps, caps set
-    # from the probed values alone failed to negotiate in some runs. The H.265 path does not read
-    # auto_caps_from_stream (RtspEncodedInput.cpp).
-    options.auto_caps_from_stream = config.integer("input.fps") == 0
-    # The stream's rate in the encoded caps. With input.fps set, the H.264 explicit caps need it
-    # (RtspEncodedInput.cpp), and H.265 writes it into its caps (H265Depacketize.cpp).
-    options.source_fps = stream.fps
+    options.source_fps = config.integer("input.fps")
+    options.auto_caps_from_stream = options.source_fps == 0
     if options.codec == pyneat.RtspCodec.H264:
         options.fallback_h264_width = stream.width
         options.fallback_h264_height = stream.height
+        options.fallback_h264_fps = stream.fps
     return options
 
 
@@ -117,7 +116,7 @@ def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
     graph.add(pyneat.nodes.sima_decode(decode))
     graph.add(
         pyneat.nodes.caps_raw(
-            "NV12", stream.width, stream.height, stream.fps, pyneat.CapsMemory.Any
+            "NV12", stream.width, stream.height, config.integer("input.fps"), pyneat.CapsMemory.Any
         )
     )
     graph.add(pyneat.nodes.output("detector_frame"))
@@ -214,7 +213,7 @@ def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, max_detections: 
     elif sample.kind == pyneat.SampleKind.Tensor:
         bbox = sample.tensor
     else:
-        raise RuntimeError(f"expected a BBOX tensor, got {sample.kind}")
+        raise RuntimeError("expected a BBOX tensor in the detections sample")
     result = pyneat.detections.decode_bbox_tensor(
         bbox, stream.width, stream.height, max_detections, strict=True
     )
@@ -237,7 +236,10 @@ def send_tracks(
         sample = run.pull("detections", PULL_TIMEOUT_MS)
         if sample is None:
             if run.last_error() or not run.running():
-                raise RuntimeError(f"detections output closed: {run.last_error()}")
+                reason = run.last_error()
+                raise RuntimeError(
+                    "detections output closed unexpectedly" + (f": {reason}" if reason else "")
+                )
             continue
 
         # With one source, Core names the sample after the decoder instead of the stream.
@@ -259,7 +261,10 @@ def send_tracks(
         )
         # A nonblocking send drops the message while the socket buffer is full; the drops are
         # counted in the sender's stats and reported when the run ends. Any other failure raises.
-        metadata_senders[index].send_raw_json(payload)
+        try:
+            metadata_senders[index].send_raw_json(payload)
+        except RuntimeError as error:
+            raise RuntimeError(f"metadata send failed: {error}") from error
         processed[index] += 1
     return processed
 

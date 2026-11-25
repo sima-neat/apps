@@ -39,11 +39,11 @@ constexpr const char* kExampleName = "yolo26-tiny-drone-tracker";
 constexpr int kFrames = 150;
 // Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 constexpr double kMinScore = 0.1;
-// Each stream's results per second, about 80% of Vulcan CI run 45412976943 on f4f0e59 (Modalix
-// devkit-3 and devkit-8, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources),
-// which held 4 frames in flight per stream instead of 4 in all. With one or two streams, each
-// stream gave 24.7 to 25.2, the source's rate. With four, each gave 12.8 to 12.9, about 51 in all,
-// which is what the model gives.
+// Each stream's results per second, about 80% of this test in Vulcan CI run 45586507970 on
+// 1f70fac (Modalix devkit-8, firmware 3.0.1_master_B2798, Core develop/0420557512d1, 25 fps
+// sources, 4 frames in flight for all streams). With one or two streams, each stream gave 24.7 to
+// 25.2, the source's rate. With four, each gave 12.7 to 12.9, about 51 in all, which is what the
+// model gives.
 constexpr double kMinResultsPerS = 20.0;
 constexpr double kMinFourStreamResultsPerS = 10.0;
 
@@ -125,7 +125,7 @@ bool pairs(std::int64_t timestamp_ms, const std::set<std::uint32_t>& rtp_timesta
 
 int run_case(const std::string& binary, const std::string& model_path,
              const MultiStreamSourceCase& source_case, int streams, double min_results_per_s,
-             const std::string& label) {
+             bool first_stream_tracks, const std::string& label) {
   const std::string output_dir = create_test_output_dir(
       kExampleName, "test_streams_reach_their_insight_channels_as_video_and_tracks_" + label);
   if (output_dir.empty()) {
@@ -252,6 +252,7 @@ int run_case(const std::string& binary, const std::string& model_path,
 
     int messages = 0;
     int tracks = 0;
+    std::map<std::string, int> messages_per_id;
     long long previous_frame_id = -1;
     std::vector<std::int64_t> unpaired;
     for (const auto& message : metadata.messages) {
@@ -259,29 +260,50 @@ int run_case(const std::string& binary, const std::string& model_path,
         continue;
       }
       ++messages;
+      if (message.frame_id.empty()) {
+        problems.push_back(stream + ": a message lacks frame_id");
+        continue;
+      }
       const long long frame_id = std::stoll(message.frame_id);
       if (frame_id <= previous_frame_id) {
         problems.push_back(stream + ": frame IDs out of order: " + message.frame_id + " after " +
                            std::to_string(previous_frame_id));
       }
       previous_frame_id = frame_id;
-      // These checks cover the tracks the run sent. A stream without drones sends none, and the
-      // count printed below shows how many there were.
+      // The per-track checks cover only the tracks a stream sent. In run 45586507970, stream 1 of
+      // the h264 and h265 cases, CI's second URLs, sent none.
       // Named, because before C++23 a range-for over a member of a temporary reads it after the
       // temporary is destroyed.
       const auto payload = nlohmann::json::parse(message.payload);
+      std::set<std::string> ids;
       for (const auto& track : payload.at("data").at("tracks")) {
         const double confidence = track.at("confidence").get<double>();
-        const int id = std::stoi(track.at("id").get<std::string>());
+        const std::string id_text = track.at("id").get<std::string>();
+        const int id = std::stoi(id_text);
+        // The model has one class, so a class ID other than 0 would arrive as "unknown".
         if (track.at("label") != "drone" || confidence < kMinScore || confidence > 1.0 || id < 1 ||
             id > tracks_started) {
           problems.push_back(stream + " frame " + message.frame_id + ": " + track.dump());
         }
+        ids.insert(id_text);
         ++tracks;
+      }
+      for (const auto& id : ids) {
+        ++messages_per_id[id];
       }
       // Insight draws each message's tracks on the video frame its timestamp names.
       if (!pairs(message.timestamp_ms, rtp_timestamps)) {
         unpaired.push_back(message.timestamp_ms);
+      }
+    }
+    if (index == 0 && first_stream_tracks) {
+      if (tracks == 0) {
+        problems.push_back(stream + " sent no tracks");
+      }
+      // The tracker keeps an ID across frames: some ID is in two or more messages.
+      if (std::none_of(messages_per_id.begin(), messages_per_id.end(),
+                       [](const auto& entry) { return entry.second >= 2; })) {
+        problems.push_back(stream + ": no track ID is in two messages");
       }
     }
     // UDP on loopback may drop a message under load, so allow a few to go missing.
@@ -338,14 +360,17 @@ int main(int argc, char** argv) {
   }
   const MultiStreamSourceCase h264{"h264", rtsp_h264_urls_from_env()};
   const MultiStreamSourceCase h265{"h265", rtsp_h265_urls_from_env()};
-  // With one source, Core names the samples after the decoder instead of the stream.
-  const std::vector<std::tuple<MultiStreamSourceCase, int, double, std::string>> cases = {
-      {h264, 2, kMinResultsPerS, "h264"},
-      {h265, 2, kMinResultsPerS, "h265"},
-      {h264, 1, kMinResultsPerS, "h264-one-stream"},
-      {h264, 4, kMinFourStreamResultsPerS, "h264-four-streams"}};
+  // The bool: whether stream 0 must send tracks. CI's first H.264 and H.265 URLs show objects the
+  // model tracks: in run 45586507970 on 1f70fac, stream 0 sent 273 tracks in 10 track IDs for H.264
+  // and 185 in 10 for H.265. With one source, Core names the samples after the decoder instead of
+  // the stream.
+  const std::vector<std::tuple<MultiStreamSourceCase, int, double, bool, std::string>> cases = {
+      {h264, 2, kMinResultsPerS, true, "h264"},
+      {h265, 2, kMinResultsPerS, true, "h265"},
+      {h264, 1, kMinResultsPerS, false, "h264-one-stream"},
+      {h264, 4, kMinFourStreamResultsPerS, false, "h264-four-streams"}};
   int cases_run = 0;
-  for (const auto& [source_case, streams, min_results_per_s, label] : cases) {
+  for (const auto& [source_case, streams, min_results_per_s, first_stream_tracks, label] : cases) {
     const int needed = streams == 4 ? 1 : streams;
     if (source_case.urls.size() < static_cast<std::size_t>(needed)) {
       record_unavailable_case("SIMANEAT_TEST_RTSP_" +
@@ -355,8 +380,8 @@ int main(int argc, char** argv) {
       continue;
     }
     ++cases_run;
-    if (run_case(binary, model_paths.front(), source_case, streams, min_results_per_s, label) !=
-        0) {
+    if (run_case(binary, model_paths.front(), source_case, streams, min_results_per_s,
+                 first_stream_tracks, label) != 0) {
       rc = 1;
     }
   }

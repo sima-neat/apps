@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -23,23 +24,26 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 FRAMES = 150
 # Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 MIN_SCORE = 0.1
-# Each stream's results per second, about 80% of Vulcan CI run 45412976943 on f4f0e59 (Modalix
-# devkit-3 and devkit-8, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources),
-# which held 4 frames in flight per stream instead of 4 in all. With one or two streams, each
-# stream gave 24.7 to 25.2, the source's rate. With four, each gave 12.8 to 12.9, about 51 in all,
-# which is what the model gives.
+# Each stream's results per second, about 80% of the C++ test in Vulcan CI run 45586507970 on
+# 1f70fac (Modalix devkit-8, firmware 3.0.1_master_B2798, Core develop/0420557512d1, 25 fps
+# sources, 4 frames in flight for all streams). With one or two streams, each stream gave 24.7 to
+# 25.2, the source's rate. With four, each gave 12.7 to 12.9, about 51 in all, which is what the
+# model gives.
 MIN_RESULTS_PER_S = 20.0
 MIN_FOUR_STREAM_RESULTS_PER_S = 10.0
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
 
+# The last value: whether stream 0 must send tracks. CI's first H.264 and H.265 URLs show objects
+# the model tracks: in run 45586507970 on 1f70fac, stream 0 sent 273 tracks in 10 track IDs for
+# H.264 and 185 in 10 for H.265.
 CASES = [
-    pytest.param("h264", 2, MIN_RESULTS_PER_S, id="h264"),
-    pytest.param("h265", 2, MIN_RESULTS_PER_S, id="h265"),
+    pytest.param("h264", 2, MIN_RESULTS_PER_S, True, id="h264"),
+    pytest.param("h265", 2, MIN_RESULTS_PER_S, True, id="h265"),
     # With one source, Core names the samples after the decoder instead of the stream.
-    pytest.param("h264", 1, MIN_RESULTS_PER_S, id="h264-one-stream"),
+    pytest.param("h264", 1, MIN_RESULTS_PER_S, False, id="h264-one-stream"),
     # Four streams of the first URL, the most the README lists, share 4 frames in flight.
-    pytest.param("h264", 4, MIN_FOUR_STREAM_RESULTS_PER_S, id="h264-four-streams"),
+    pytest.param("h264", 4, MIN_FOUR_STREAM_RESULTS_PER_S, False, id="h264-four-streams"),
 ]
 
 
@@ -68,12 +72,13 @@ def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize(("codec", "streams", "min_results_per_s"), CASES)
+@pytest.mark.parametrize(("codec", "streams", "min_results_per_s", "first_stream_tracks"), CASES)
 def test_streams_reach_their_insight_channels_as_video_and_tracks(
     request,
     codec,
     streams,
     min_results_per_s,
+    first_stream_tracks,
     e2e_model_path,
     tmp_output_dir,
     test_timeout_ms,
@@ -198,12 +203,26 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         assert len(stream_messages) >= FRAMES * 95 // 100, (
             f"stream {index}: {len(stream_messages)} of {FRAMES} messages arrived"
         )
+        assert all(m.frame_id for m in stream_messages), f"stream {index}: a message lacks frame_id"
         frame_ids = [int(message.frame_id) for message in stream_messages]
         assert frame_ids == sorted(set(frame_ids)), f"stream {index}: frame IDs out of order"
-        # These checks cover the tracks the run sent. A stream without drones sends none, and the
-        # count printed below shows how many there were.
-        tracks = [t for m in stream_messages for t in json.loads(m.payload)["data"]["tracks"]]
+        # The per-track checks cover only the tracks a stream sent. In run 45586507970, stream 1
+        # of the h264 and h265 cases, CI's second URLs, sent none.
+        per_message = [json.loads(m.payload)["data"]["tracks"] for m in stream_messages]
+        tracks = [track for message_tracks in per_message for track in message_tracks]
+        if index == 0 and first_stream_tracks:
+            assert tracks, "stream 0 sent no tracks"
+            # The tracker keeps an ID across frames: some ID is in two or more messages.
+            messages_per_id = Counter(
+                track_id
+                for message_tracks in per_message
+                for track_id in {track["id"] for track in message_tracks}
+            )
+            assert max(messages_per_id.values()) >= 2, (
+                f"stream 0: no track ID is in two messages: {messages_per_id}"
+            )
         for track in tracks:
+            # The model has one class, so a class ID other than 0 would arrive as "unknown".
             assert track["label"] == "drone", track
             assert MIN_SCORE <= track["confidence"] <= 1.0, track
             assert 1 <= int(track["id"]) <= tracks_started, track
@@ -217,13 +236,11 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         assert len(unpaired) <= len(stream_messages) * 5 // 100, (
             f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}"
         )
-        times = arrivals[index][len(arrivals[index]) // 10:]
+        times = arrivals[index][len(arrivals[index]) // 10 :]
         assert len(times) > 10, f"stream {index}: {len(times)} messages arrived during the run"
         results_per_s = (len(times) - 1) / (times[-1] - times[0])
         print(
             f"{codec} stream {index}: {len(stream_messages)} messages, "
             f"{results_per_s:.1f} results/s, {len(tracks)} tracks in {tracks_started} track IDs"
         )
-        assert results_per_s >= min_results_per_s, (
-            f"stream {index}: {results_per_s:.1f} results/s"
-        )
+        assert results_per_s >= min_results_per_s, f"stream {index}: {results_per_s:.1f} results/s"

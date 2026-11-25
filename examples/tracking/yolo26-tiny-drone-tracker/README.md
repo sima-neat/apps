@@ -172,13 +172,17 @@ Insight shows each stream on its own channel, with a box, an ID, and a trail on 
 
 ## Troubleshooting
 
-- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: the board cannot read that value.
+- `[ERR] failed to probe RTSP frame size: <url>; set input.width and input.height` or `[ERR] failed to probe RTSP frame rate: <url>; set input.fps`: the board cannot read that value.
   The stream is unreachable from the board, or it does not report the value.
-  Verify the URL from the board. For a reachable stream, set the value the message names.
-- `every input.source stream needs the same frame size, because the streams share one model: ...`: the streams differ in size.
+  Verify the URL from the board. For a reachable stream, set the keys the message names.
+- `[ERR] every input.source stream needs the same frame size, because the streams share one model: ...`: the streams differ in size.
   Use streams of one size, or run one application per size.
-- `input.codec: unknown value '<value>' (expected h264, h265)`: set `input.codec` to the streams' codec.
-- `<config> is missing <key>` or `<key> must be <type>`: the config lacks a key or has a value of the wrong type. Compare it with the packaged config.
+- `[ERR] detections output closed unexpectedly: <reason>`: the run stopped, for example because a stream ended or dropped.
+  The reason names the cause. Verify the streams from the board and run again.
+- `[ERR] metadata send failed: <reason>`: a metadata send failed for a reason other than a full socket buffer.
+  Verify `output.insight.host` and `output.insight.metadata_port_base`.
+- `[ERR] input.codec: unknown value '<value>' (expected h264, h265)`: set `input.codec` to the streams' codec.
+- `[ERR] <config> is missing <key>` or `[ERR] <key> must be <type>`: the config lacks a key or has a value of the wrong type. Compare it with the packaged config.
 - Video without tracks: the model finds only small drones in the sky. Check that the video shows them, and check `inference.min_score`.
 - No video or tracks on a channel: verify `output.insight.host` and the ports of that stream.
 
