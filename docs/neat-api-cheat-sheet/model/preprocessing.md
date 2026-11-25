@@ -326,6 +326,7 @@ use `input_specs()` to know what to send.
 
 - [YOLO26 Object Detector](../../../examples/object-detection/yolo26-object-detector/): BGR images, `COCO_YOLO`
 - [Single-Stream Object Detector](../../../examples/object-detection/single-stream-object-detector/): NV12 or NV16 video frames, input capacity set to the frame size
+- [YOLO26 Tiny Drone Tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/): NV12 video frames from up to four streams, input capacity set to the stream size, `COCO_YOLO`
 - [Depth Estimator](../../../examples/depth-estimation/depth-estimator/): `Stretch` with an explicit size and `"BICUBIC"`
 - [PatchCore Anomaly Detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `ImageNet` preset, letterbox for a camera
 - [FastFlow Anomaly Detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/): explicit mean and stddev

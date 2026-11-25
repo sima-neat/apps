@@ -151,6 +151,7 @@ other threads send
 
 - [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/): `pose-estimation`
 - [multi-stream-object-detector](../../../examples/object-detection/multi-stream-object-detector/): `object-detection`, one sender per stream
+- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/): `tracking` with track IDs through `send_raw_json`, one sender per stream
 
 ## Source
 
