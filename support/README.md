@@ -35,7 +35,8 @@ A module in both columns has the same file name, function names, and behavior in
 | `asset_utils` | Downloads sample files | | `asset_utils.h` |
 
 Test helpers live in `support/cpp/sima_examples/testing/` for C++ and `tests/utils/` for
-Python. `validate_config_body` runs an example with `--validate-config-only`, so only the
+Python. C++ `write_e2e_config` writes an e2e config from the shipped one: its scalars, and
+only the lists and lists of mappings the test passes, such as the `model` entries. `validate_config_body` runs an example with `--validate-config-only`, so only the
 examples that still read their config into an `AppConfig` use it. It goes away with the last
 of them.
 

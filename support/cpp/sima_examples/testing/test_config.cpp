@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <map>
 #include <stdexcept>
+#include <iterator>
 #include <sstream>
 #include <vector>
 
@@ -97,6 +98,7 @@ std::string quote_scalar(const std::string& value) {
 struct ConfigNode {
   std::map<std::string, ConfigNode> children;
   std::vector<std::string> list;
+  std::vector<ConfigScalars> entries;
   std::string value;
   bool has_value = false;
 };
@@ -109,10 +111,34 @@ ConfigNode& node_for_key(ConfigNode& root, const std::string& key) {
   return *node;
 }
 
+void write_node(std::ostream& out, const ConfigNode& node, int indent);
+
+// One "- field: value" item per entry, its fields under the dash.
+void write_entries(std::ostream& out, const std::vector<ConfigScalars>& entries, int indent) {
+  for (const auto& entry : entries) {
+    ConfigNode fields;
+    for (const auto& [key, value] : entry) {
+      ConfigNode& field = node_for_key(fields, key);
+      field.value = value;
+      field.has_value = true;
+    }
+    std::ostringstream text;
+    write_node(text, fields, indent + 2);
+    std::string lines = text.str();
+    if (lines.size() > static_cast<std::size_t>(indent)) {
+      lines[static_cast<std::size_t>(indent)] = '-';
+    }
+    out << lines;
+  }
+}
+
 void write_node(std::ostream& out, const ConfigNode& node, int indent) {
   const std::string spaces(static_cast<std::size_t>(indent), ' ');
   for (const auto& [key, child] : node.children) {
-    if (!child.list.empty()) {
+    if (!child.entries.empty()) {
+      out << spaces << key << ":\n";
+      write_entries(out, child.entries, indent + 2);
+    } else if (!child.list.empty()) {
       out << spaces << key << ":\n";
       for (const auto& value : child.list) {
         out << spaces << "  - " << quote_scalar(value) << "\n";
@@ -158,7 +184,7 @@ std::map<std::string, std::string> runtime_scalars_for_e2e(const Config& common)
 }
 
 void write_nested_config(std::ostream& out, const ConfigScalars& values,
-                         const ConfigLists& list_values) {
+                         const ConfigLists& list_values, const ConfigEntries& entry_values) {
   ConfigNode root;
   for (const auto& [key, value] : values) {
     ConfigNode& node = node_for_key(root, key);
@@ -170,6 +196,13 @@ void write_nested_config(std::ostream& out, const ConfigScalars& values,
   for (const auto& [key, values] : list_values) {
     ConfigNode& node = node_for_key(root, key);
     node.list = values;
+    node.has_value = false;
+    node.children.clear();
+  }
+  for (const auto& [key, entries] : entry_values) {
+    ConfigNode& node = node_for_key(root, key);
+    node.entries = entries;
+    node.list.clear();
     node.has_value = false;
     node.children.clear();
   }
@@ -261,7 +294,8 @@ int e2e_int(const std::string& example_name, const std::string& section, const s
 std::filesystem::path write_e2e_config(const std::string& example_name,
                                        const std::filesystem::path& config_path,
                                        const ConfigScalars& overrides,
-                                       const ConfigLists& list_overrides) {
+                                       const ConfigLists& list_overrides,
+                                       const ConfigEntries& entry_overrides) {
   std::map<std::string, std::string> values =
       runtime_scalars_for_e2e(example_common_config(example_name));
   for (const auto& [key, value] : overrides) {
@@ -271,13 +305,20 @@ std::filesystem::path write_e2e_config(const std::string& example_name,
     static_cast<void>(list);
     values.erase(key);
   }
+  for (const auto& [key, entries] : entry_overrides) {
+    static_cast<void>(entries);
+    // The entries replace a mapping at the same key, such as a single model.path.
+    for (auto it = values.begin(); it != values.end();) {
+      it = it->first == key || starts_with(it->first, key + ".") ? values.erase(it) : std::next(it);
+    }
+  }
 
   std::filesystem::create_directories(config_path.parent_path());
   std::ofstream out(config_path);
   if (!out.is_open()) {
     throw std::runtime_error("failed to write e2e config: " + config_path.string());
   }
-  write_nested_config(out, values, list_overrides);
+  write_nested_config(out, values, list_overrides, entry_overrides);
   return config_path;
 }
 
