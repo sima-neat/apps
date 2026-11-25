@@ -20,7 +20,7 @@ That address serves only the API: a browser shows a short JSON status there,
 not a page. Insight is a separate web application that
 `sima-cli neat install apps` installs on the DevKit next to the Studio; you
 start it on the board and open it from any browser on your PC. The PC needs
-nothing but that browser: not the Neat Development Environment, not Docker.
+nothing but that browser: not the Palette SDK, not Docker.
 Releases before 0.6.0 served the Studio's own web page on port `5000`; the
 GenAI tab replaces that page, and the pre-compiled models are still downloaded
 from Hugging Face on the board.
@@ -38,9 +38,9 @@ Once set up, the Studio runs without internet access. The first `setup.sh` run a
 ![Neat GenAI Studio preview](../../../portal/assets/examples/genai/neat-genai-studio/image.png)
 
 ## Prerequisites
-- A Modalix DevKit with `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) installed. `sima-cli neat install apps` installs the Neat Library and Neat Insight on the board; the Neat Development Environment is not required.
+- A Modalix DevKit with `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) installed. `sima-cli neat install apps` installs the Neat Library and Neat Insight on the board; the Palette SDK is not required.
 - The Neat Library's Python environment at `~/pyneat/bin/python`. If it is somewhere else, set `PYNEAT_PYTHON=/path/to/python-with-pyneat` before running the commands below.
-- Neat Insight, the GenAI tab's web UI: on the board (installed with Apps), or on another machine that can reach the board, such as the Neat Development Environment.
+- Neat Insight, the GenAI tab's web UI: on the board (installed with Apps), or on another machine that can reach the board, such as the Palette SDK.
 - A PC with a web browser on the board's network, to open Insight.
 - Internet access on the board for the first `setup.sh` run and for Hugging Face downloads. Behind a firewall or proxy, allow `pypi.org` and `files.pythonhosted.org` (Python packages), `download.pytorch.org` (PyTorch for document search), `huggingface.co` and its download hosts (models and voices), `raw.githubusercontent.com` (English text-to-speech data for Piper, fetched with NLTK), and `docs.sima.ai` (Supertonic's compiled models, through `sima-cli`).
 
@@ -174,7 +174,7 @@ Open the GenAI tab in Insight:
 2. On your PC, open `https://<board-ip>:9900` in any browser (accept the
    certificate warning the first time) and select the **GenAI** tab. Insight
    on the board finds the backend at `https://127.0.0.1:5000` by itself.
-   Insight running elsewhere works too: in the Neat Development Environment
+   Insight running elsewhere works too: in the Palette SDK
    it uses the paired DevKit, and any other Insight takes the board address
    (`https://<board-ip>:5000`) in the tab's settings.
 3. Load a model from the tab's model settings, or download one from Hugging
