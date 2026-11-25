@@ -146,7 +146,7 @@ def rtsp_options(
         options.fallback_h264_width = stream.width
         options.fallback_h264_height = stream.height
         if options.source_fps > 0:
-            # H.264 caps from input.fps and the stream's size, instead of the stream's own.
+            # H.264 caps from input.fps and the stream's size, instead of the caps the stream sends.
             options.auto_caps_from_stream = False
         else:
             # The rate the stream's caps fall back to; with input.fps set it has no effect.
