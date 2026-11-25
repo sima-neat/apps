@@ -1,5 +1,6 @@
 // E2E test: run the binary and validate annotated images plus decoded detections.
 #include "sima_examples/config.h"
+#include "sima_examples/image_folder.h"
 #include "sima_examples/labels.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -147,14 +149,21 @@ int main(int argc, char** argv) {
   const double min_score = config.number("inference.min_score");
   int detection_count = 0;
   try {
-    const auto& images = reported.at("images");
-    if (!images.is_array() || static_cast<int>(images.size()) != output_files) {
-      throw std::runtime_error("report image count does not match annotated output count");
+    std::set<std::string> expected_images;
+    for (const auto& path : sima_examples::image_paths(input_dir)) {
+      expected_images.insert(path.filename().string());
     }
-    for (const auto& image : images) {
+    std::set<std::string> reported_images;
+    for (const auto& image : reported.at("images")) {
+      reported_images.insert(image.at("image").get<std::string>());
+    }
+    if (reported_images != expected_images) {
+      throw std::runtime_error("the report does not name exactly the input images");
+    }
+    for (const auto& image : reported.at("images")) {
       const int width = image.at("width").get<int>();
       const int height = image.at("height").get<int>();
-      if (width <= 0 || height <= 0 || image.at("image").get<std::string>().empty()) {
+      if (width <= 0 || height <= 0) {
         throw std::runtime_error("invalid image record");
       }
       for (const auto& detection : image.at("detections")) {

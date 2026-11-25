@@ -16,10 +16,9 @@ from tests.utils.output_assertions import (
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 APPS_ROOT = EXAMPLE_DIR.parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+sys.path.insert(0, str(APPS_ROOT / "support" / "python"))
 
-
-def load_labels(path):
-    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+from sima_examples.labels import load_labels
 
 
 def run_example(config_path, test_timeout_ms):
