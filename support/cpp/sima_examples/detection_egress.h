@@ -63,8 +63,9 @@ template <typename SampleT> FrameMetadata frame_metadata(const SampleT& sample, 
 
 namespace detail {
 
+// 0 to `limit`, as Core clamps: max(0, min(value, limit)), so NaN gives 0.
 inline double clip(double value, int limit) {
-  return std::min(std::max(value, 0.0), static_cast<double>(limit));
+  return std::max(0.0, std::min(value, static_cast<double>(limit)));
 }
 
 // One box as Insight reads it: [x, y, width, height] in frame pixels. Both corners are clipped to

@@ -1,7 +1,7 @@
 """Build the object-detection and tracking metadata messages that Insight draws over the video.
 
 Mirrors `sima_examples::detection_egress` in support/cpp/sima_examples/detection_egress.h,
-so the C++ and Python examples send the same JSON.
+so the C++ and Python examples send the same JSON values (key order differs).
 """
 
 from __future__ import annotations
@@ -77,6 +77,14 @@ def serialize(
     return _message("object-detection", {"objects": objects}, frame)
 
 
+def track_entries(
+    tracks: Iterable[Track], labels: list[str], frame_w: int, frame_h: int
+) -> list[dict]:
+    """The `data.tracks` entries of a tracking message, for an application that builds its own
+    message: each box with its label and its track ID as `id`."""
+    return [_entry(str(track.track_id), track, labels, frame_w, frame_h) for track in tracks]
+
+
 def serialize_tracks(
     tracks: Iterable[Track],
     labels: list[str],
@@ -89,16 +97,9 @@ def serialize_tracks(
     return _message("tracking", {"tracks": track_entries(tracks, labels, frame_w, frame_h)}, frame)
 
 
-def track_entries(
-    tracks: Iterable[Track], labels: list[str], frame_w: int, frame_h: int
-) -> list[dict]:
-    """The `data.tracks` entries of a tracking message, for an application that builds its own
-    message: each box with its label and its track ID as `id`."""
-    return [_entry(str(track.track_id), track, labels, frame_w, frame_h) for track in tracks]
-
-
 def _clip(value: float, limit: int) -> float:
-    return min(max(float(value), 0.0), float(limit))
+    """0 to `limit`, as Core clamps: max(0, min(value, limit)), so NaN gives 0."""
+    return max(0.0, min(float(value), float(limit)))
 
 
 def _entry(entry_id: str, box: Box, labels: list[str], frame_w: int, frame_h: int) -> dict:

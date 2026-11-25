@@ -168,6 +168,10 @@ CLIPPED = [
     ),
     # int(x2) - int(x1), not int(x2 - x1), which would give 29 x 39.
     pytest.param(Box(10.6, 20.6, 40.4, 60.4, 0.8, 0), [10.0, 20.0, 30.0, 40.0], id="rounding"),
+    # A NaN corner clips to 0, as in Core, instead of failing int().
+    pytest.param(
+        Box(float("nan"), 10.0, 40.0, 50.0, 0.8, 0), [0.0, 10.0, 40.0, 40.0], id="nan-corner"
+    ),
 ]
 
 
