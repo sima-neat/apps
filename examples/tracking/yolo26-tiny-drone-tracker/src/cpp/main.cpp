@@ -89,9 +89,6 @@ neat::Model::Options model_options(const sima_examples::Config& config,
   options.preprocess.input_max_height = stream.height;
   options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
   options.decode_type = neat::BoxDecodeType::YoloV26;
-  // The split heads of a single-class YOLO may not give Core the class count, so
-  // Model::Options::num_classes (model/Model.h) sets it.
-  options.num_classes = static_cast<int>(kLabels.size());
   options.score_threshold = config.number("inference.min_score");
   options.nms_iou_threshold = config.number("inference.nms_iou");
   options.top_k = max_detections;
@@ -189,8 +186,6 @@ neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config
 neat::RunOptions run_options() {
   neat::RunOptions options;
   options.preset = neat::RunPreset::Realtime;
-  // Auto may copy an output when the sink queue backs up (Core RunCoreGraphStart.cpp).
-  options.output_memory = neat::OutputMemory::ZeroCopy;
   return options;
 }
 

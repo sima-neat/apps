@@ -62,9 +62,6 @@ def model_options(
     options.preprocess.input_max_height = stream.height
     options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     options.decode_type = pyneat.BoxDecodeType.YoloV26
-    # The split heads of a single-class YOLO may not give Core the class count, so
-    # Model::Options::num_classes (model/Model.h) sets it.
-    options.num_classes = len(LABELS)
     options.score_threshold = config.number("inference.min_score")
     options.nms_iou_threshold = config.number("inference.nms_iou")
     options.top_k = max_detections
@@ -163,8 +160,6 @@ def metadata_options(config: Config, index: int) -> pyneat.MetadataSenderOptions
 def run_options() -> pyneat.RunOptions:
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Realtime
-    # Auto may copy an output when the sink queue backs up (Core RunCoreGraphStart.cpp).
-    options.output_memory = pyneat.OutputMemory.ZeroCopy
     return options
 
 
