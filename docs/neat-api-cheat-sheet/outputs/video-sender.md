@@ -187,6 +187,9 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 
 - C++ headers: `include/nodes/groups/VideoSender.h`, `include/nodes/sima/SimaEncode.h`, `include/nodes/io/UdpOutput.h`, `include/nodes/groups/RtspCodec.h`
 - Python binding: `python/src/module.cpp`, `VideoSenderOptions`, `VideoSenderRtpOptions`, `VideoSenderEncoderOptions`, `SimaEncodeOptions`, `SimaEncodeType`, `RtspCodec`, `UdpOutputOptions`, `groups.video_sender`, `nodes.sima_encode`, `nodes.udp_output`
-- The MJPEG size check: `src/nodes/io/internal/JpegRtpUdpSink.cpp` and the
-  MJPEG path in `src/nodes/groups/RtspEncodedInput.cpp`, read at Core `530580ae`.
+- The MJPEG size check, read at Core `7e5317be`:
+  `src/nodes/io/internal/JpegRtpUdpSink.cpp` lines 39-47 (the build error only
+  for a sized input) and 18-19 (the running caps filter), and
+  `src/nodes/groups/RtspEncodedInput.cpp` lines 103-115 (the MJPEG path, which
+  sets no size).
 - Core commit: `3f8b8d04`
