@@ -33,9 +33,10 @@ RTSP_CODECS = {"h264": pyneat.RtspCodec.H264, "h265": pyneat.RtspCodec.H265}
 DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeType.H265}
 # The model's one class.
 LABELS = ["drone"]
-# Frames of one stream the shared model holds at once: Core's per-stream default
-# (RealtimeLinkOptions.h), used for the total in detector_link.
-MAX_INFLIGHT_PER_STREAM = 4
+# Frames all streams together may have in the shared model: 4, one stream's default
+# (RealtimeLinkOptions.h). Core's default total, min(4 * streams, 8) (EdgeRouter.cpp), holds more
+# from two streams on. Whether more frames in flight give more results per second is not measured.
+MAX_INFLIGHT_TOTAL = 4
 PULL_TIMEOUT_MS = 100
 
 
@@ -127,14 +128,12 @@ def stream_id(index: int) -> str:
     return f"stream{index}"
 
 
-def detector_link(index: int, streams: int) -> pyneat.GraphLinkOptions:
+def detector_link(index: int) -> pyneat.GraphLinkOptions:
     """Feed the shared model the latest frames of each stream, tagged with the stream's ID."""
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     link.stream_id = stream_id(index)
-    # Core's default total, min(4 * streams, 8), is below 4 per stream from three streams on
-    # (RealtimeLinkOptions.h, EdgeRouter.cpp).
-    link.max_inflight_total = MAX_INFLIGHT_PER_STREAM * streams
+    link.max_inflight_total = MAX_INFLIGHT_TOTAL
     return link
 
 
@@ -286,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
         # A plain link keeps every encoded frame. A dropped one corrupts the decoded frames
         # after it until the next keyframe.
         graph.connect(rtsp, decoder)
-        graph.connect(decoder, detector, detector_link(index, len(sources)))
+        graph.connect(decoder, detector, detector_link(index))
         graph.connect(rtsp, pyneat.groups.video_sender(video_options(config, index)), video_link())
         metadata_senders.append(pyneat.MetadataSender(metadata_options(config, index)))
         trackers.append(tracker.ObjectTracker(tracker_settings(config), stream.fps))

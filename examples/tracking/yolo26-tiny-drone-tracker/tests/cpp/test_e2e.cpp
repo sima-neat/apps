@@ -40,9 +40,10 @@ constexpr int kFrames = 150;
 // Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 constexpr double kMinScore = 0.1;
 // Each stream's results per second, about 80% of Vulcan CI run 45412976943 on f4f0e59 (Modalix
-// devkit-3 and devkit-8, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources).
-// With one or two streams, each stream gave 24.7 to 25.2, the source's rate. With four, each gave
-// 12.8 to 12.9, about 51 in all, which is what the model gives.
+// devkit-3 and devkit-8, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources),
+// which held 4 frames in flight per stream instead of 4 in all. With one or two streams, each
+// stream gave 24.7 to 25.2, the source's rate. With four, each gave 12.8 to 12.9, about 51 in all,
+// which is what the model gives.
 constexpr double kMinResultsPerS = 20.0;
 constexpr double kMinFourStreamResultsPerS = 10.0;
 
@@ -143,8 +144,7 @@ int run_case(const std::string& binary, const std::string& model_path,
               << "\n";
     return 1;
   }
-  // Four streams of the first URL: the most the README lists. From three streams on, Core's default
-  // in-flight total of 8 is below 4 per stream.
+  // Four streams of the first URL, the most the README lists, share 4 frames in flight.
   const std::vector<std::string> urls =
       streams == 4
           ? std::vector<std::string>(4, source_case.urls.front())

@@ -52,9 +52,10 @@ const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
 };
 // The model's one class.
 const std::vector<std::string> kLabels = {"drone"};
-// Frames of one stream the shared model holds at once: Core's per-stream default
-// (RealtimeLinkOptions.h), used for the total in detector_link.
-constexpr int kMaxInflightPerStream = 4;
+// Frames all streams together may have in the shared model: 4, one stream's default
+// (RealtimeLinkOptions.h). Core's default total, min(4 * streams, 8) (EdgeRouter.cpp), holds more
+// from two streams on. Whether more frames in flight give more results per second is not measured.
+constexpr int kMaxInflightTotal = 4;
 
 fs::path parse_args(int argc, char** argv) {
   const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
@@ -154,13 +155,11 @@ std::string stream_id(int index) {
 }
 
 // Feed the shared model the latest frames of each stream, tagged with the stream's ID.
-neat::GraphLinkOptions detector_link(int index, int streams) {
+neat::GraphLinkOptions detector_link(int index) {
   neat::GraphLinkOptions link;
   link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
   link.stream_id = stream_id(index);
-  // Core's default total, min(4 * streams, 8), is below 4 per stream from three streams on
-  // (RealtimeLinkOptions.h, EdgeRouter.cpp).
-  link.max_inflight_total = kMaxInflightPerStream * streams;
+  link.max_inflight_total = kMaxInflightTotal;
   return link;
 }
 
@@ -324,7 +323,7 @@ int run_app(const fs::path& config_path) {
     // A plain link keeps every encoded frame. A dropped one corrupts the decoded frames after it
     // until the next keyframe.
     graph.connect(rtsp, decoder);
-    graph.connect(decoder, detector, detector_link(index, stream_count));
+    graph.connect(decoder, detector, detector_link(index));
     graph.connect(rtsp, groups::VideoSender(video_options(config, index)), video_link());
     std::string error;
     metadata_senders.emplace_back(metadata_options(config, index), &error);

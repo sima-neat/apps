@@ -24,9 +24,10 @@ FRAMES = 150
 # Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 MIN_SCORE = 0.1
 # Each stream's results per second, about 80% of Vulcan CI run 45412976943 on f4f0e59 (Modalix
-# devkit-3 and devkit-8, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources).
-# With one or two streams, each stream gave 24.7 to 25.2, the source's rate. With four, each gave
-# 12.8 to 12.9, about 51 in all, which is what the model gives.
+# devkit-3 and devkit-8, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources),
+# which held 4 frames in flight per stream instead of 4 in all. With one or two streams, each
+# stream gave 24.7 to 25.2, the source's rate. With four, each gave 12.8 to 12.9, about 51 in all,
+# which is what the model gives.
 MIN_RESULTS_PER_S = 20.0
 MIN_FOUR_STREAM_RESULTS_PER_S = 10.0
 # RTP payload types: H.264 96, H.265 98.
@@ -37,8 +38,7 @@ CASES = [
     pytest.param("h265", 2, MIN_RESULTS_PER_S, id="h265"),
     # With one source, Core names the samples after the decoder instead of the stream.
     pytest.param("h264", 1, MIN_RESULTS_PER_S, id="h264-one-stream"),
-    # Four streams of the first URL: the most the README lists. From three streams on, Core's
-    # default in-flight total of 8 is below 4 per stream.
+    # Four streams of the first URL, the most the README lists, share 4 frames in flight.
     pytest.param("h264", 4, MIN_FOUR_STREAM_RESULTS_PER_S, id="h264-four-streams"),
 ]
 
