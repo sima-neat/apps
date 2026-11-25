@@ -14,6 +14,15 @@ import time
 
 import yaml
 
+# The helpers the examples share live in <apps root>/support/python.
+for apps_root in Path(__file__).resolve().parents:
+    if (apps_root / "support" / "python" / "sima_examples").is_dir():
+        sys.path.insert(0, str(apps_root / "support" / "python"))
+        break
+else:
+    raise SystemExit("support/python not found above this example; reinstall the Apps package")
+
+from sima_examples import detection_egress
 from utils.tracker import (
     ClassTrackerConfig,
     MultiClassTracker,
@@ -48,6 +57,8 @@ class AppConfig:
     profile: bool = False
     warmup_frames: int = 30
     tracker_classes: tuple[ClassTrackerConfig, ...] = ()
+    # The labels file's classes in class-id order, which the tracks' class_id indexes.
+    labels: tuple[str, ...] = ()
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
@@ -296,6 +307,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         profile=bool_or(runtime, "profile", False),
         warmup_frames=int_or(runtime, "warmup_frames", 30),
         tracker_classes=parse_class_configs(tracking.get("classes"), labels),
+        labels=tuple(labels),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
@@ -368,32 +380,6 @@ def parse_boxes_strict(payload: bytes, img_w: int, img_h: int, expected_topk: in
             }
         )
     return boxes
-
-
-def build_metadata_tracks(
-    tracks: list[TrackedDetection], frame_w: int, frame_h: int
-) -> list[dict]:
-    metadata_tracks = []
-    for track in tracks:
-        # Clip both endpoints before measuring: a predicted box can extend past
-        # either edge, and clamping only the origin leaves the width too large.
-        x1 = min(max(track.x1, 0.0), float(frame_w))
-        y1 = min(max(track.y1, 0.0), float(frame_h))
-        x2 = min(max(track.x2, 0.0), float(frame_w))
-        y2 = min(max(track.y2, 0.0), float(frame_h))
-        x = int(x1)
-        y = int(y1)
-        w = max(0, int(x2) - x)
-        h = max(0, int(y2) - y)
-        metadata_tracks.append(
-            {
-                "id": str(track.track_id),
-                "label": track.label,
-                "confidence": float(track.score),
-                "bbox": [float(x), float(y), float(max(0, w)), float(max(0, h))],
-            }
-        )
-    return metadata_tracks
 
 
 def rtsp_codec(codec: str):
@@ -553,8 +539,10 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
     )
 
 
-def send_metadata(stream: StreamRuntime, sample, tracks: list[TrackedDetection]) -> None:
-    metadata_tracks = build_metadata_tracks(tracks, stream.frame_w, stream.frame_h)
+def send_metadata(
+    stream: StreamRuntime, sample, tracks: list[TrackedDetection], labels: tuple[str, ...]
+) -> None:
+    metadata_tracks = detection_egress.track_entries(tracks, labels, stream.frame_w, stream.frame_h)
     timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
     stream.metadata_sender.send_metadata(
@@ -692,7 +680,7 @@ def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detecti
     warming_up = stream.processed <= cfg.warmup_frames
     if not warming_up:
         metadata_start = time_ms()
-        send_metadata(stream, sample, tracks)
+        send_metadata(stream, sample, tracks, cfg.labels)
         metadata_end = time_ms()
         if save_frames_enabled(cfg):
             maybe_save_debug_frame(cfg, stream, stream.latest_debug_frame, tracks)
