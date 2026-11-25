@@ -332,8 +332,9 @@ def test_send_results_labels_each_stream_with_its_own_labels(monkeypatch):
     assert [data["objects"][0]["label"] for data in sent] == ["bicycle", "dog"]
 
 
-def run_main(tmp_path: Path, change) -> str:
-    """The last line main.py prints to stderr for the shipped config with `change` applied.
+def run_main(tmp_path: Path, change, last_line: bool = True) -> str:
+    """The last line main.py prints to stderr for the shipped config with `change` applied, or
+    the whole stderr when `last_line` is false.
 
     The frame size and rate are set, so no stream is probed and no source is needed.
     """
@@ -347,7 +348,7 @@ def run_main(tmp_path: Path, change) -> str:
         capture_output=True, text=True, cwd=APPS_ROOT, timeout=60,
     )
     assert result.returncode == 1, result.stdout + result.stderr
-    return result.stderr.strip().splitlines()[-1]
+    return result.stderr.strip().splitlines()[-1] if last_line else result.stderr.strip()
 
 
 def test_model_needs_one_entry_per_stream(tmp_path):
@@ -395,11 +396,14 @@ def test_pose_model_needs_no_labels(tmp_path):
     def missing_model(config):
         config["model"][0]["path"] = "missing_mpk.tar.gz"
 
-    # Core's text for a package that is not there (ModelArchiveLoader.cpp).
-    assert run_main(tmp_path, missing_model) == (
-        "[ERR] invalid_archive: archive path does not exist or is not a regular file: "
+    # Core's error for a package that is not there: a line that names model[0].path, then a hint
+    # (ModelArchiveLoader.cpp, ModelPack.cpp). A DevKit printed the hint line (e83d42f).
+    first, *_, last = run_main(tmp_path, missing_model, last_line=False).splitlines()
+    assert first.startswith("[ERR] ") and first.endswith(
+        "invalid_archive: archive path does not exist or is not a regular file: "
         f"{tmp_path / 'missing_mpk.tar.gz'}"
-    )
+    ), first
+    assert last == "Hint: Re-export the model archive and verify it contains a valid MPK contract."
 
 
 def test_model_ids_select_the_decoder_and_metadata_type():
