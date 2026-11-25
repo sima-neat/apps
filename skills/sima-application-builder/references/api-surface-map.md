@@ -50,7 +50,8 @@ source root. The installed headers are the callable contract and mark deprecated
 
 - Preprocessing options: `include/model/PreprocessPlan.h`, `include/nodes/sima/Preproc.h`
 - Box decoding and detection types: `include/pipeline/DetectionTypes.h`, `BoxDecodeType.h`,
-  `BoxDecodeOptions.h`, `SuperPointTypes.h`, `include/nodes/sima/SimaBoxDecode.h`,
+  `BoxDecodeOptions.h`, `SuperPointTypes.h`, `FeatureTypes.h` (`decode_superpoint`),
+  `include/nodes/sima/SimaBoxDecode.h`,
   `docs/reference/boxdecode_decode_types.md`
 
 ## GenAI
@@ -73,4 +74,6 @@ source root. The installed headers are the callable contract and mark deprecated
 
 Python bindings follow the C++ concepts, but names and helper methods can differ.
 `python/src/module.cpp` is the binding source, and `docs/reference/pythonapi/` documents it
-when the installed docs include it.
+when the installed docs include it. `python/pyneat/_wrappers.py` replaces `Model.run`,
+`Run.push`, and `ModelRunner.push` and adds the NumPy and DLPack helpers. Those calls take a
+list, so a bare `Tensor` or `Sample` raises `TypeError`: pass `[tensor]`.

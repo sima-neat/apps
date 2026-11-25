@@ -8,9 +8,10 @@ Beyond that README:
 
 - Run Core 0.6.0 or later. Earlier Cores cannot identify the board inside a container, and
   containers that share an extraction directory can overwrite each other's unpacked models.
-- Each container unpacks its model archive at startup, into `/tmp` or `SIMA_MPK_EXTRACT_ROOT`.
-  The unpacked model is larger than the archive, and on a tmpfs `/tmp` it takes RAM in every
-  container.
+- Each container unpacks its model archive at startup, into the first writable directory of:
+  `SIMA_MPK_EXTRACT_ROOT`, a mounted NVMe, `/data/simaai/coprocessing/models/`, then `$TMPDIR`
+  (or `/tmp`). A set but unusable `SIMA_MPK_EXTRACT_ROOT` fails the load. The unpacked model is
+  larger than the archive, and on a tmpfs `/tmp` it takes RAM in every container.
 - All containers share one pool of device memory. `resource.device_memory_exhausted` means the
   containers together need fewer streams, a lower resolution, or less buffering.
 - Stop the containers before installing or updating Neat on the DevKit. The installer's EV74

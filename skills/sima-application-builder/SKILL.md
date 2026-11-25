@@ -80,7 +80,8 @@ the public APIs. The project's own rules decide layout, configuration, and packa
   `sima-application-optimizer` skill.
 - Compiling a model belongs to the Model Compiler or LLiMa documentation. To download a model
   that is already compiled, follow [Model](references/model.md).
-- A PCIe host application uses the `simaai::neat::pcie` and `pyneatpcie` APIs and the
-  `neat-pcie-application-builder` skill.
-- Insight viewer setup and device operations belong to the Insight and Neat Development
+- A PCIe host application uses the `simaai::neat::pcie` and `pyneatpcie` APIs on the host,
+  which this skill does not cover. Core's PCIe host installation ships its own skill for them.
+- Insight viewer setup belongs to the `sima-use-neat-insight` skill when it is installed,
+  otherwise to the Insight documentation. Device operations belong to the Neat Development
   Environment documentation.

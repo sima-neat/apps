@@ -30,19 +30,27 @@ Direct in-process calls are the simplest path for embedded logic and tests. Choo
 - Use `prompt` for a single-turn request, with `system_prompt` when needed. Use `messages` for
   chat history, with images attached per message. A request carries one of the two.
 - Use `images` for VLM prompt images. A request carries direct images or cached images, not both.
+  To reuse images across requests, call `VisionLanguageModel::encode(images)` once, then set
+  `use_cached_images = true` on each request (or on the `ChatMessage`) instead of passing
+  `images`. `cached_image_count()` reports how many are cached.
 - Use `audio` or `audio_file` for ASR. Set `language` when the source language is known, or
   leave it `auto`, and choose the `asr_task` the application needs. Check the returned
   language, `no_speech_prob`, and `avg_logprob` before keeping or retrying a transcription.
 - Set `enable_thinking` only for a model that supports reasoning. Read
   `GenerationResult.reasoning` or `TokenSample.reasoning` separately from the answer text.
-- For tool-calling models, set `tools` and `tool_choice` and read the parsed calls from
-  `tool_calls`.
+  `reasoning_effort` (`low` by default, `medium`, or `high`) sets how much the model reasons,
+  independent of `enable_thinking`, and only models whose chat template reads it respond.
+- For tool-calling models, set `tools` and read the parsed calls from `tool_calls`.
+  `tool_choice` accepts only `"auto"` or `"none"`, and any other value fails the request.
 
 ## GenAIServer
 
-1. Create `GenAIServerOptions` when the default host or port does not fit.
+1. Create `GenAIServerOptions`. The defaults are `host = "0.0.0.0"`, every network interface,
+   and `port = 9998`. Set `host = "127.0.0.1"` when only programs on the board call the server.
 2. Construct `GenAIServer` and add one or more model directories with stable served names.
-3. Call `serve()` to block, or `start()` and `stop()` to manage its lifetime.
+3. Call `start()` and `stop()` to manage its lifetime. C++ also has `serve()`, which blocks
+   until `stop()`. Python has no `serve()`: call `start()`, then wait on the application's stop
+   flag.
 4. Manage models with `model_names()` and `remove_model(...)`.
 
 `stop()` also removes the registered models, so add them again before restarting the same
@@ -55,4 +63,5 @@ encrypts traffic.
 ## GenAI in a graph
 
 GenAI graph fragments follow the same named-endpoint rules as other graphs:
-[graph topologies](graph-topologies.md).
+[graph topologies](graph-topologies.md). In Python they are
+`pyneat.genai.graphs.vision_language(...)` and `pyneat.genai.graphs.speech_transcriber(...)`.
