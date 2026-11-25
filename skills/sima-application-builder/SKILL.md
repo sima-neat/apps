@@ -1,9 +1,9 @@
 ---
-name: neat-application-builder
+name: sima-application-builder
 description: Build or change a Neat application with the public C++ or Python APIs. Use for a `Model` on inputs the application supplies, a `Graph` over camera, file, or RTSP sources, multi-stream or multi-model graphs, Insight output, GenAI models, and Docker packaging.
 ---
 
-# Neat Application Builder
+# SiMa Application Builder
 
 Build against the installed Neat Library. Its headers and Python bindings are the callable
 contract, and Core docs and source at the same version explain the behavior. This skill teaches
@@ -77,7 +77,7 @@ the public APIs. The project's own rules decide layout, configuration, and packa
 ## Related work
 
 - Measuring or raising throughput, lowering latency, and removing copies belong to the
-  `neat-application-optimizer` skill.
+  `sima-application-optimizer` skill.
 - Compiling a model belongs to the Model Compiler or LLiMa documentation. To download a model
   that is already compiled, follow [Model](references/model.md).
 - A PCIe host application uses the `simaai::neat::pcie` and `pyneatpcie` APIs and the

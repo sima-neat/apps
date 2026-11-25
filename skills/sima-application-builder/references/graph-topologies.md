@@ -52,7 +52,7 @@ option and show each default. Set only the options whose default does not fit. C
   `decoder_name` only overrides the element name.
 - `num_buffers`, `input_buffers`, `decoder_tuning`, and `memory_opt` trade memory for
   throughput. The high-density example sets all four for many streams, and the RF-DETR example
-  raises only `num_buffers` (to 32) for MJPEG. The `neat-application-optimizer` skill's tuning
+  raises only `num_buffers` (to 32) for MJPEG. The `sima-application-optimizer` skill's tuning
   reference covers them.
 
 The high-density decoder subgraph ends with `nodes::CapsRaw("NV12", width, height, fps,
@@ -189,7 +189,7 @@ Start from the row closest to your stream count and rate.
 | 30 at 20 FPS | 4 | 30 | 4 | 2 | 16 |
 | 60 at 10 FPS | 1 | 8 | 1 | 2 | 4 |
 
-Changing these values for speed belongs to the `neat-application-optimizer` skill.
+Changing these values for speed belongs to the `sima-application-optimizer` skill.
 
 ## Drive the run
 

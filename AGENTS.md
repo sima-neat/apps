@@ -23,8 +23,7 @@ config keys, behavior, tests, publication, and where a lesson goes.
 Claude Code and Codex discover every skill through `.claude/skills/` and `.agents/skills/`,
 which hold one link per skill folder and no copies. A new skill goes in its tree and gets a
 link in both folders. A repository skill's name starts with `apps-` and a customer skill's
-with `neat-application-`, because Claude Code lets a personal skill of the same name hide a
-project skill.
+with `sima-`, because Claude Code lets a personal skill of the same name hide a project skill.
 
 - Repository skills:
   [`apps-add-or-convert-example`](agents/skills/apps-add-or-convert-example/SKILL.md) to add
@@ -35,9 +34,9 @@ project skill.
   [`apps-write-pr-description`](agents/skills/apps-write-pr-description/SKILL.md) for a pull
   request description.
 - Customer skills, used here too:
-  [`neat-application-builder`](skills/neat-application-builder/SKILL.md) to judge how an
+  [`sima-application-builder`](skills/sima-application-builder/SKILL.md) to judge how an
   example uses inputs, graphs, runs, and options, and
-  [`neat-application-optimizer`](skills/neat-application-optimizer/SKILL.md) to judge copies,
+  [`sima-application-optimizer`](skills/sima-application-optimizer/SKILL.md) to judge copies,
   queues, buffers, and throughput.
 
 ## References

@@ -3,7 +3,7 @@
 Each item names what to change and what it affects. The installed headers define every option
 and its default, so read the header before setting one. Core's
 `docs/develop-apps/development-workflow/graph.mdx` and `pipeline.mdx` explain them. The
-`neat-application-builder` skill's graph topologies reference shows how the graphs named here
+`sima-application-builder` skill's graph topologies reference shows how the graphs named here
 are built and gives the high-density example's starting values.
 
 ## Latency or throughput

@@ -1,13 +1,13 @@
 ---
-name: neat-application-optimizer
+name: sima-application-optimizer
 description: Speed up a working Neat application. Use to measure its throughput or latency, raise frames per second or the stream count, lower latency, or remove copies in a C++ or Python application built with the Neat APIs.
 ---
 
-# Neat Application Optimizer
+# SiMa Application Optimizer
 
 Start from an application that produces correct output, and keep it correct. A faster run with
 wrong boxes, labels, video, or metadata is a regression. Building or fixing the application
-belongs to the `neat-application-builder` skill.
+belongs to the `sima-application-builder` skill.
 
 ## Steps
 

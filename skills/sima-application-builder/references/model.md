@@ -39,7 +39,7 @@ When the user names a model, look for a compiled package in the
   Cast, Quant, and Tess adapters stay automatic, and `preprocess.enable = Off` does not select
   MLA-only execution. Core's `model.mdx` covers raw tensor input.
 - Before adding your own preprocessing or postprocessing, check what the route already runs
-  with `execution_plan(...)`. The `neat-application-optimizer` skill describes reading it.
+  with `execution_plan(...)`. The `sima-application-optimizer` skill describes reading it.
 
 ## Detection settings
 

@@ -19,7 +19,7 @@ each finding cites the owning file and section.
    areas the change touches.
 3. Trace each mode the README advertises from source to result: the input, the model, every
    output, and the example's own logic. Individually valid API calls do not prove the topology
-   fits the requirement, so judge it with `skills/neat-application-builder/SKILL.md`. The step
+   fits the requirement, so judge it with `skills/sima-application-builder/SKILL.md`. The step
    is done when every claimed behavior maps to code you read, or is reported missing.
 4. Check every item under Shape and under Evidence, and report each one that fails.
 5. Compare the change with the customer skills and the cheat sheet, as `agents/rules.md`
