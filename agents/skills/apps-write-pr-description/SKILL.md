@@ -69,11 +69,11 @@ and why, and every test and number in it traces to a file or a run.
 - <Venue: what ran and what it showed. Host, SDK build, DevKit, and CI are separate lines.>
 - Not verified: <what did not run, and why>.
 
-## Skill and cheat sheet updates
+## Rule, skill, and knowledge updates
 
-<The customer skill and cheat sheet files changed and the lesson each teaches, as
+<The rule, skill, and cheat sheet files changed and the lesson each teaches, as
 `agents/rules.md` "Skills and cheat sheet" defines, or
-`Skill and cheat sheet updates: none` with the reason.>
+`Rule, skill, and knowledge updates: none` with the reason.>
 
 Refs #<issue>, #<issue>
 ```

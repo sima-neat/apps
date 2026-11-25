@@ -34,15 +34,15 @@ then `agents/coding-style.md` and `agents/rules.md`.
 6. Delete what `agents/coding-style.md` "Functions and state" says no entrypoint reaches,
    including environment variables, profiling paths, and validation that repeats a check the
    config reader makes.
-7. Write the tests with `agents/skills/write-example-tests/SKILL.md`.
+7. Write the tests with `agents/skills/apps-write-example-tests/SKILL.md`.
 8. Update the README for every changed key, argument, and output, in the sections and order
    `CONTRIBUTING.md` "README Contract" sets, and draw or update the graph topology in
    `Concept`. Change only the lines the change affects. The step is done when the graph shows
    every part and link `main` connects.
 9. List what the work taught, and place each lesson as `agents/rules.md` "Skills and cheat
-   sheet" describes. The step is done when each lesson is generalized and written into its
+   sheet" describes. The step is done when each lesson is written, briefly and generally, into its
    file, each one Lift covers is also in `skills/`, or the pull request records
-   `Skill and cheat sheet updates: none` with the reason.
+   `Rule, skill, and knowledge updates: none` with the reason.
 10. Build in the Neat SDK, run the unit and end-to-end tests in both languages on a Modalix
     DevKit, install the branch package with `sima-cli neat install apps@<branch>`, and follow
     the installed README. The step is done when the pull request records each result and marks

@@ -13,7 +13,7 @@ each finding cites the owning file and section.
 ## Steps
 
 1. Read the linked issue and the pull request description. List every behavior the change
-   claims. Check the description against `agents/skills/write-pr-description/SKILL.md` and
+   claims. Check the description against `agents/skills/apps-write-pr-description/SKILL.md` and
    report each section, graph, screenshot, or test row it lacks.
 2. Read `agents/coding-style.md`, `agents/rules.md`, and the `CONTRIBUTING.md` sections for the
    areas the change touches.
@@ -52,7 +52,7 @@ each finding cites the owning file and section.
   follows the order `CONTRIBUTING.md` gives.
 - **Documentation:** read every added, changed, or deleted Markdown file as customer content.
   The README's `Concept` graph matches the parts and links `main` connects.
-- **Tests:** they follow `agents/skills/write-example-tests/SKILL.md`. Each advertised behavior
+- **Tests:** they follow `agents/skills/apps-write-example-tests/SKILL.md`. Each advertised behavior
   maps to an end-to-end assertion in both languages. Stateful examples test failure,
   replacement, stop, cleanup, and restart.
 - **Core candidates:** report each piece of code that works around a missing or broken Core

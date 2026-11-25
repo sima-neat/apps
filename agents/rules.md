@@ -81,7 +81,7 @@ Place each piece of code by the first question it answers yes to:
 
 ## Tests
 
-- `agents/skills/write-example-tests/SKILL.md` decides which tests an example has.
+- `agents/skills/apps-write-example-tests/SKILL.md` decides which tests an example has.
 - Each example's `tests/test-scope.yaml` decides which of its tests run and with which models.
   Register enabled C++ tests with CMake. `build.sh`, `tests/test.sh`, and workflow filters
   name no individual test, so one registration serves local runs and CI.
@@ -139,9 +139,9 @@ Every pull request feeds what its work taught back into these files:
 - **Lift:** a cheat sheet pitfall or behavior that changes how any application should be
   built or tuned, such as `GraphLinkOptions::queue_depth` adding no buffering, also goes into
   the matching skill reference, written in full there.
-- **Generalize:** write a lesson as a rule with its condition: when X, do Y, because Z. It
-  names the condition, not the example where it was found, and holds for any application that
-  meets the condition. A fact that holds only for one example stays in that example's README.
+- **Generalize:** write a lesson brief and to the point, as general as it holds, as a rule
+  with its condition: when X, do Y, because Z. It names the condition, not the example where it
+  was found, and holds for any application that meets the condition. A fact that holds only for one example stays in that example's README.
   A fact about one API, such as a `BoxDecodeType` value or an option default, is stated
   exactly, because it holds wherever that API is used.
 - **Correct:** a statement the work proves wrong is fixed in the same pull request, in
@@ -151,5 +151,5 @@ Every pull request feeds what its work taught back into these files:
 
 Keep routing in `SKILL.md` and detail in `references/`. `version` in `playbook.yml` stays
 unchanged. The pull request description lists each change under
-`Skill and cheat sheet updates`, or writes `Skill and cheat sheet updates: none` with the
+`Rule, skill, and knowledge updates`, or writes `Rule, skill, and knowledge updates: none` with the
 reason.
