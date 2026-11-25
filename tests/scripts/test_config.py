@@ -69,3 +69,52 @@ def test_unknown_value_names_the_key_the_value_and_the_choices(tmp_path):
     with pytest.raises(ValueError) as error:
         lookup("input.codec", "vp8", {"h264": 1, "h265": 2, "mjpeg": 3})
     assert str(error.value) == expected
+
+
+MODELS = (
+    "model:\n"
+    "  - id: yolov8\n    path: a.tar.gz\n    labels: coco.txt\n"
+    "  - id: 5\n    path: b.tar.gz\n"
+)
+
+
+def test_mapping_list_reads_each_entry_by_field(tmp_path):
+    entries = config_file(tmp_path, MODELS).mapping_list("model")
+    assert len(entries) == 2
+    assert entries[0].string("id") == "yolov8"
+    assert entries[0].string("labels") == "coco.txt"
+    assert entries[1].string("path") == "b.tar.gz"
+    assert entries[0].choice("id", {"yolov8": 8}) == 8
+
+
+def test_mapping_list_errors_name_the_entry_and_field(tmp_path):
+    entries = config_file(tmp_path, MODELS).mapping_list("model")
+    with pytest.raises(ValueError) as error:
+        entries[1].string("labels")
+    assert str(error.value) == f"{tmp_path / 'config.yaml'} is missing model[1].labels"
+    with pytest.raises(ValueError) as error:
+        entries[1].string("id")
+    assert str(error.value) == "model[1].id must be a string, got 5"
+    with pytest.raises(ValueError) as error:
+        entries[0].choice("id", {"yolo26": 26})
+    assert str(error.value) == "model[0].id: unknown value 'yolov8' (expected yolo26)"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("input:\n  fps: 30\n", "{config} is missing model"),
+        ("model:\n  path: a.tar.gz\n", "model must be a list of mappings, got a mapping"),
+        ("model: a.tar.gz\n", "model must be a list of mappings, got 'a.tar.gz'"),
+        ("model: []\n", "model must be a non-empty list of mappings"),
+        (
+            "model:\n  - path: a.tar.gz\n  - b.tar.gz\n",
+            "model[1] must be a mapping, got 'b.tar.gz'",
+        ),
+    ],
+)
+def test_mapping_list_rejects_what_is_not_a_list_of_mappings(tmp_path, text, expected):
+    config = config_file(tmp_path, text)
+    with pytest.raises(ValueError) as error:
+        config.mapping_list("model")
+    assert str(error.value) == expected.format(config=tmp_path / "config.yaml")

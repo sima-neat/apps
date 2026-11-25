@@ -28,8 +28,10 @@ const T& lookup(const std::string& key, const std::string& value,
   return it->second;
 }
 
-// The values of one config.yaml, read by dotted key such as "input.rtsp.tcp". Scalars and
-// lists of strings are read; string_list() rejects a list holding anything else.
+// The values of one config.yaml, read by dotted key such as "input.rtsp.tcp". Scalars, lists of
+// strings, and lists of mappings are read; string_list() rejects a list holding anything else.
+// An entry of mapping_list() is a Config too: its getters take a field, such as "path", and its
+// errors name the entry, such as "model[1].path".
 class Config {
 public:
   static Config load(const std::filesystem::path& path);
@@ -54,16 +56,26 @@ public:
   template <typename T>
   [[nodiscard]] const T& choice(const std::string& key,
                                 const std::map<std::string, T>& table) const {
-    return lookup(key, string(key), table);
+    return lookup(prefix_ + key, string(key), table);
   }
+  // A non-empty list of mappings, one Config per entry, such as model[1].
+  [[nodiscard]] std::vector<Config> mapping_list(const std::string& key) const;
 
 private:
+  friend struct ConfigLoader;
+
   std::string require_key(const std::string& key) const;
 
   std::filesystem::path path_;
+  // "model[1]." for an entry of mapping_list("model"), "" for the file itself.
+  std::string prefix_;
   std::unordered_map<std::string, std::string> scalars_;
   std::unordered_map<std::string, std::vector<std::string>> lists_;
   std::set<std::string> lists_with_non_strings_;
+  // Each list that holds a mapping, kept apart from scalars_ so scalars() lists none of them.
+  std::map<std::string, std::vector<Config>> mapping_lists_;
+  // The error mapping_list() throws for a list whose item i is not a mapping.
+  std::map<std::string, std::string> non_mapping_items_;
 };
 
 std::string trim_copy(const std::string& value);

@@ -1,4 +1,5 @@
-"""Read an example's config.yaml by dotted key, such as `input.rtsp.tcp`."""
+"""Read an example's config.yaml by dotted key, such as `input.rtsp.tcp`, and lists of mappings,
+such as one `model` entry per stream."""
 
 from __future__ import annotations
 
@@ -35,12 +36,16 @@ def lookup(key: str, value: str, table: Mapping[str, T]) -> T:
 class Config:
     """The values of one config file. Every key the example reads must be present.
 
+    An entry of `mapping_list` is a Config too: its getters take a field, such as `path`, and
+    its errors name the entry, such as `model[1].path`.
+
     Mirrors `sima_examples::Config` in support/cpp/sima_examples/config.h.
     """
 
-    def __init__(self, path: Path, values: dict[str, Any]) -> None:
+    def __init__(self, path: Path, values: dict[str, Any], prefix: str = "") -> None:
         self.path = path
         self._values = values
+        self._prefix = prefix
 
     @classmethod
     def load(cls, path: Path) -> Config:
@@ -51,6 +56,7 @@ class Config:
         return cls(path, _flatten(raw))
 
     def _value(self, key: str, kind: type, kind_name: str) -> Any:
+        key = self._prefix + key
         if key not in self._values:
             raise ValueError(f"{self.path} is missing {key}")
         value = self._values[key]
@@ -75,7 +81,7 @@ class Config:
 
     def choice(self, key: str, table: Mapping[str, T]) -> T:
         """The `table` entry the string at `key` names, such as a codec name's Neat enum."""
-        return lookup(key, self.string(key), table)
+        return lookup(self._prefix + key, self.string(key), table)
 
     def string_list(self, key: str) -> list[str]:
         """A list of strings; a single string reads as a list of one."""
@@ -83,5 +89,25 @@ class Config:
         if isinstance(values, str):
             return [values]
         if not values or not all(isinstance(value, str) for value in values):
-            raise ValueError(f"{key} must be a non-empty list of strings")
+            raise ValueError(f"{self._prefix + key} must be a non-empty list of strings")
         return values
+
+    def mapping_list(self, key: str) -> list[Config]:
+        """A non-empty list of mappings, one Config per entry, such as `model[1]`."""
+        key = self._prefix + key
+        if key not in self._values:
+            if any(name.startswith(f"{key}.") for name in self._values):
+                raise ValueError(f"{key} must be a list of mappings, got a mapping")
+            raise ValueError(f"{self.path} is missing {key}")
+        values = self._values[key]
+        if not isinstance(values, list):
+            raise ValueError(f"{key} must be a list of mappings, got {values!r}")
+        if not values:
+            raise ValueError(f"{key} must be a non-empty list of mappings")
+        entries = []
+        for index, value in enumerate(values):
+            entry = f"{key}[{index}]."
+            if not isinstance(value, dict):
+                raise ValueError(f"{key}[{index}] must be a mapping, got {value!r}")
+            entries.append(Config(self.path, _flatten(value, entry), entry))
+        return entries
