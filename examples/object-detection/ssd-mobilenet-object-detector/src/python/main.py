@@ -28,12 +28,6 @@ from sima_examples.labels import load_labels
 from utils import annotate
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-# The per-channel mean and stddev each model family was trained with, on pixels scaled to 0-1:
-# TensorFlow SSD-MobileNet V1 and V2, and TorchVision SSDlite-MobileNetV3.
-NORMALIZATION = {
-    "tensorflow_ssd": ([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-    "torchvision_ssdlite": ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-}
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -50,9 +44,10 @@ def model_options(config: Config, num_classes: int, max_detections: int) -> pyne
     # The SSD decoder needs a Stretch resize; Core's default is Letterbox.
     options.preprocess.resize.enable = pyneat.AutoFlag.On
     options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
-    mean, stddev = config.choice("app.preprocessing_profile", NORMALIZATION)
-    options.preprocess.normalize.mean = mean
-    options.preprocess.normalize.stddev = stddev
+    # TensorFlow's SSD-MobileNet V1 and V2 were trained on pixels scaled to -1 to 1: mean 0.5 and
+    # stddev 0.5 per channel, on pixels scaled to 0-1.
+    options.preprocess.normalize.mean = [0.5, 0.5, 0.5]
+    options.preprocess.normalize.stddev = [0.5, 0.5, 0.5]
     options.preprocess.normalize.has_explicit_stats = True
     options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
     options.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB

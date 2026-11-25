@@ -18,8 +18,5 @@ output:
   dir: sandbox/ssd-mobilenet-object-detector  # Folder for the annotated PNGs.
 
 app:
-  # Normalization the model was trained with: tensorflow_ssd for SSD-MobileNet V1 and V2, or
-  # torchvision_ssdlite for SSDlite-MobileNetV3.
-  preprocessing_profile: tensorflow_ssd
   # JSON report of every image's boxes; "" writes no report.
   detections_json: sandbox/ssd-mobilenet-object-detector.json

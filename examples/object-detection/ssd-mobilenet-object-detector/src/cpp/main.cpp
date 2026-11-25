@@ -25,10 +25,8 @@
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
 
-#include <array>
 #include <filesystem>
 #include <iostream>
-#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -37,17 +35,6 @@ namespace fs = std::filesystem;
 namespace neat = simaai::neat;
 
 namespace {
-
-// The per-channel mean and stddev each model family was trained with, on pixels scaled to 0-1:
-// TensorFlow SSD-MobileNet V1 and V2, and TorchVision SSDlite-MobileNetV3.
-struct Normalization {
-  std::array<float, 3> mean;
-  std::array<float, 3> stddev;
-};
-const std::map<std::string, Normalization> kNormalization = {
-    {"tensorflow_ssd", {{0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f}}},
-    {"torchvision_ssdlite", {{0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}}},
-};
 
 fs::path parse_args(int argc, char** argv) {
   const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
@@ -74,9 +61,10 @@ neat::Model::Options model_options(const sima_examples::Config& config, int num_
   // The SSD decoder needs a Stretch resize; Core's default is Letterbox.
   options.preprocess.resize.enable = neat::AutoFlag::On;
   options.preprocess.resize.mode = neat::ResizeMode::Stretch;
-  const Normalization& normalization = config.choice("app.preprocessing_profile", kNormalization);
-  options.preprocess.normalize.mean = normalization.mean;
-  options.preprocess.normalize.stddev = normalization.stddev;
+  // TensorFlow's SSD-MobileNet V1 and V2 were trained on pixels scaled to -1 to 1: mean 0.5 and
+  // stddev 0.5 per channel, on pixels scaled to 0-1.
+  options.preprocess.normalize.mean = {0.5f, 0.5f, 0.5f};
+  options.preprocess.normalize.stddev = {0.5f, 0.5f, 0.5f};
   options.preprocess.normalize.has_explicit_stats = true;
   options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
   options.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;

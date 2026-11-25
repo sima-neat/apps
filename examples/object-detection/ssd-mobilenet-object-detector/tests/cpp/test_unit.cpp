@@ -73,12 +73,10 @@ bool is_inside(const fs::path& path, const fs::path& folder) {
 bool test_shipped_config_names_a_supported_model_labels_and_folders() {
   const fs::path common_dir = "examples/object-detection/ssd-mobilenet-object-detector/src/common";
   const auto config = sima_examples::Config::load(common_dir / "config.yaml");
-  const std::string profile = config.string("app.preprocessing_profile");
-  bool ok = expect_true(profile == "tensorflow_ssd" || profile == "torchvision_ssdlite",
-                        "the shipped preprocessing profile is supported");
   const fs::path model_path = common_dir / config.string("model.path");
-  ok &= expect_true(model_path.filename() == "ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz",
-                    "model.path names the SSD-MobileNetV2 package");
+  bool ok =
+      expect_true(model_path.filename() == "ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz",
+                  "model.path names the SSD-MobileNetV2 package");
   // The packaged path reaches prebuilt-apps/models from the config file.
   ok &= expect_true(is_inside(model_path, "models"), "model.path is under models/");
   // The SSD decoder scores 91 classes: the background, then the 90 COCO IDs.

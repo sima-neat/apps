@@ -30,7 +30,6 @@ def box(x1, y1, x2, y2, score, class_id):
 def test_shipped_config_names_a_supported_model_labels_and_folders():
     """The checks the application leaves to its config: the values it reads are usable."""
     config = main_module.Config.load(COMMON_DIR / "config.yaml")
-    assert config.string("app.preprocessing_profile") in main_module.NORMALIZATION
     model_path = COMMON_DIR / config.string("model.path")
     assert model_path.name == "ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz"
     # The packaged path reaches prebuilt-apps/models from the config file.

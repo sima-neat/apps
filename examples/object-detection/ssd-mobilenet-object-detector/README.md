@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | ssd-mobilenet-object-detector |
-| Model | SSD-MobileNet V1/V2 and SSDlite-MobileNetV3 |
+| Model | SSD-MobileNet V1/V2 |
 
 ## Concept
 
@@ -44,7 +44,7 @@ How does an image move through ssd-mobilenet-object-detector?
 
 The application reads the images one at a time with OpenCV and sends each through `runner.run`, the run that `model.build` creates from the first image. Neat stretches the image to the model's input size, normalizes it, runs the model, and decodes the boxes with `BoxDecodeType::Ssd`, which owns the SSD priors, class scoring, and non-maximum suppression. The application draws each image's boxes on a copy, saves it as a PNG under `output.dir`, and adds its boxes to the report at `app.detections_json`, unless that key is empty.
 
-The application supports 300×300 SSD-MobileNet V1 and V2 and 320×320 SSDlite-MobileNetV3 models; `app.preprocessing_profile` selects the normalization each was trained with.
+The application supports TensorFlow's 300×300 SSD-MobileNet V1 and V2 models and normalizes each image as they were trained, to -1 to 1. A model trained with other statistics needs `normalize.mean` and `normalize.stddev` changed in `model_options`.
 
 ## Preview
 
@@ -91,7 +91,6 @@ Open `${APP_DIR}/src/common/config.yaml`. It reads the downloaded model from `mo
 - `input.source`: the folder of images. The application processes every `.jpg`, `.jpeg`, `.png`, and `.bmp` file directly inside it, in file-name order, and does not search subfolders. The packaged `assets/datasets/coco` folder holds 21 images.
 - `output.dir`: the folder for the annotated PNGs, one per input image. Keep it apart from `input.source`.
 - `app.detections_json`: the JSON report with the class, label, score, and box of every detection. Set it to `""` to write no report.
-- `app.preprocessing_profile`: `tensorflow_ssd` for SSD-MobileNet V1 and V2, or `torchvision_ssdlite` for SSDlite-MobileNetV3.
 
 ## Run
 
