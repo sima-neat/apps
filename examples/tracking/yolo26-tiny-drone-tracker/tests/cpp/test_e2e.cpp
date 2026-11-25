@@ -17,14 +17,19 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -59,6 +64,8 @@ std::string regex_escape(const std::string& text) {
   return std::regex_replace(text, special, R"(\$&)");
 }
 
+using RtpHeader = std::array<unsigned char, 12>;
+
 // Receives one stream's video and keeps each packet's RTP header until `stop` is set. A copy of
 // single-stream's helper: #823 moves it into support/cpp/sima_examples/testing/rtp_video.
 class VideoDrain {
@@ -78,7 +85,7 @@ public:
         for (;;) {
           const auto size = ::recv(fd_, packet.data(), packet.size(), 0);
           if (size >= 12) {
-            std::array<unsigned char, 12> header{};
+            RtpHeader header{};
             std::copy_n(packet.begin(), header.size(), header.begin());
             headers_.push_back(header);
           } else if (stop) {
@@ -100,7 +107,7 @@ public:
     return ok_;
   }
   // Call after `stop` is set.
-  const std::vector<std::array<unsigned char, 12>>& headers() {
+  const std::vector<RtpHeader>& headers() {
     if (thread_.joinable()) {
       thread_.join();
     }
@@ -110,9 +117,84 @@ public:
 private:
   int fd_ = -1;
   bool ok_ = false;
-  std::vector<std::array<unsigned char, 12>> headers_;
+  std::vector<RtpHeader> headers_;
   std::thread thread_;
 };
+
+// The host's UDP counters, from the Udp: lines of /proc/net/snmp.
+std::map<std::string, long long> udp_counters() {
+  std::ifstream file("/proc/net/snmp");
+  std::vector<std::vector<std::string>> rows;
+  for (std::string line; std::getline(file, line) && rows.size() < 2;) {
+    if (line.rfind("Udp:", 0) == 0) {
+      std::istringstream words(line);
+      rows.emplace_back(std::istream_iterator<std::string>(words),
+                        std::istream_iterator<std::string>());
+    }
+  }
+  std::map<std::string, long long> counters;
+  for (std::size_t i = 1; rows.size() == 2 && i < rows[0].size() && i < rows[1].size(); ++i) {
+    counters[rows[0][i]] = std::stoll(rows[1][i]);
+  }
+  return counters;
+}
+
+// Datagrams the kernel dropped for the socket bound to 127.0.0.1:`port`, the last column of
+// /proc/net/udp, or -1 when the socket is not listed.
+long long socket_drops(int port) {
+  char local[16];
+  std::snprintf(local, sizeof(local), "0100007F:%04X", port);
+  std::ifstream file("/proc/net/udp");
+  std::string line;
+  std::getline(file, line);
+  while (std::getline(file, line)) {
+    std::istringstream words(line);
+    const std::vector<std::string> fields{std::istream_iterator<std::string>(words),
+                                          std::istream_iterator<std::string>()};
+    if (fields.size() > 2 && fields[1] == local) {
+      return std::stoll(fields.back());
+    }
+  }
+  return -1;
+}
+
+std::uint32_t rtp_timestamp(const RtpHeader& header) {
+  return static_cast<std::uint32_t>(header[4]) << 24 | static_cast<std::uint32_t>(header[5]) << 16 |
+         static_cast<std::uint32_t>(header[6]) << 8 | header[7];
+}
+
+// What one video socket got: its packets, the packets missing from the RTP sequence, and the
+// frames with a timestamp in the span the metadata covers against the frames the source has in
+// that span.
+std::string video_report(const std::vector<RtpHeader>& headers,
+                         const std::vector<std::int64_t>& timestamps_ms, int fps) {
+  long long missing = 0;
+  for (std::size_t i = 1; i < headers.size(); ++i) {
+    const auto step = static_cast<std::uint16_t>((headers[i][2] << 8 | headers[i][3]) -
+                                                 (headers[i - 1][2] << 8 | headers[i - 1][3]));
+    if (step > 1 && step < 0x8000) {
+      missing += step - 1;
+    }
+  }
+  std::set<std::uint32_t> rtp_timestamps;
+  for (const auto& header : headers) {
+    rtp_timestamps.insert(rtp_timestamp(header));
+  }
+  std::string report = std::to_string(headers.size()) + " RTP packets, " + std::to_string(missing) +
+                       " missing from the RTP sequence, " + std::to_string(rtp_timestamps.size()) +
+                       " frame timestamps";
+  if (timestamps_ms.empty()) {
+    return report;
+  }
+  const auto [first, last] = std::minmax_element(timestamps_ms.begin(), timestamps_ms.end());
+  const auto start = static_cast<std::uint32_t>(*first * 90 - 90);
+  const auto span = static_cast<std::uint32_t>((*last - *first) * 90 + 180);
+  const auto in_span = std::count_if(rtp_timestamps.begin(), rtp_timestamps.end(),
+                                     [&](std::uint32_t rtp) { return rtp - start <= span; });
+  const auto expected = std::llround(static_cast<double>(*last - *first) * fps / 1000.0) + 1;
+  return report + ", " + std::to_string(in_span) + " of the source's " + std::to_string(expected) +
+         " frames from " + std::to_string(*first) + " to " + std::to_string(*last) + " ms";
+}
 
 // Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a video
 // frame's RTP timestamp.
@@ -200,11 +282,25 @@ int run_case(const std::string& binary, const std::string& model_path,
     }
     return false; // The application stops by itself after inference.frames.
   };
+  const auto udp_before = udp_counters();
   const ProcessResult result =
       spawn_until(binary, {"--config", config_path.string()}, read_metadata, timeout_ms);
   const auto rest = listener.drain_pending();
   metadata.messages.insert(metadata.messages.end(), rest.messages.begin(), rest.messages.end());
   stop = true;
+  for (const auto& video : videos) {
+    video->headers();
+  }
+  const auto udp_after = udp_counters();
+  // The host's UDP counters over the run: RcvbufErrors counts datagrams dropped because a
+  // receiving socket's buffer was full.
+  std::string udp_change;
+  for (const std::string name : {"RcvbufErrors", "SndbufErrors"}) {
+    if (udp_before.count(name) != 0 && udp_after.count(name) != 0) {
+      udp_change += (udp_change.empty() ? "" : ", ") + name + " +" +
+                    std::to_string(udp_after.at(name) - udp_before.at(name));
+    }
+  }
 
   std::vector<std::string> problems;
   if (const std::string problem = exit_problem(result); !problem.empty()) {
@@ -220,10 +316,14 @@ int run_case(const std::string& binary, const std::string& model_path,
     const std::string stream = "stream " + std::to_string(index);
     const std::regex start_line("(^|\n)\\[" + stream +
                                 "\\] rtsp=" + regex_escape(urls[static_cast<std::size_t>(index)]) +
-                                " stream=\\d+x\\d+@\\d+ insight=127\\.0\\.0\\.1 video=" +
+                                " stream=\\d+x\\d+@(\\d+) insight=127\\.0\\.0\\.1 video=" +
                                 std::to_string(video_port + index) +
                                 " metadata=" + std::to_string(metadata_port + index) + "\n");
-    if (!std::regex_search(result.stdout_text, start_line)) {
+    std::smatch start;
+    int fps = 0;
+    if (std::regex_search(result.stdout_text, start, start_line)) {
+      fps = std::stoi(start[2]);
+    } else {
       problems.push_back(stream + " did not print its source and ports");
     }
     std::smatch summary;
@@ -241,9 +341,7 @@ int run_case(const std::string& binary, const std::string& model_path,
     std::set<std::uint32_t> rtp_timestamps;
     for (const auto& header : videos[static_cast<std::size_t>(index)]->headers()) {
       payload_types.insert(header[1] & 0x7F);
-      rtp_timestamps.insert(static_cast<std::uint32_t>(header[4]) << 24 |
-                            static_cast<std::uint32_t>(header[5]) << 16 |
-                            static_cast<std::uint32_t>(header[6]) << 8 | header[7]);
+      rtp_timestamps.insert(rtp_timestamp(header));
     }
     if (payload_types != std::set<int>{payload_type(source_case.codec)}) {
       problems.push_back(stream + " video did not arrive with RTP payload type " +
@@ -255,11 +353,13 @@ int run_case(const std::string& binary, const std::string& model_path,
     std::map<std::string, int> messages_per_id;
     long long previous_frame_id = -1;
     std::vector<std::int64_t> unpaired;
+    std::vector<std::int64_t> timestamps_ms;
     for (const auto& message : metadata.messages) {
       if (message.port != metadata_port + index) {
         continue;
       }
       ++messages;
+      timestamps_ms.push_back(message.timestamp_ms);
       if (message.frame_id.empty()) {
         problems.push_back(stream + ": a message lacks frame_id");
         continue;
@@ -311,11 +411,16 @@ int run_case(const std::string& binary, const std::string& model_path,
       problems.push_back(stream + ": " + std::to_string(messages) + " of " +
                          std::to_string(kFrames) + " messages arrived");
     }
+    const std::string video =
+        "video port " + std::to_string(video_port + index) + ": " +
+        video_report(videos[static_cast<std::size_t>(index)]->headers(), timestamps_ms, fps) +
+        ", " + std::to_string(socket_drops(video_port + index)) +
+        " dropped by the socket. Host UDP: " + (udp_change.empty() ? "not read" : udp_change);
     // A frame the video link dropped leaves its message unpaired, so allow 5%, as for the count.
     if (static_cast<int>(unpaired.size()) > messages * 5 / 100) {
       problems.push_back(stream + ": " + std::to_string(unpaired.size()) +
                          " timestamps with no video frame, first " +
-                         std::to_string(unpaired.front()));
+                         std::to_string(unpaired.front()) + ". " + video);
     }
     const auto& times = arrivals[index];
     const std::size_t first = times.size() / 10;
@@ -327,7 +432,8 @@ int run_case(const std::string& binary, const std::string& model_path,
     const double seconds = std::chrono::duration<double>(times.back() - times[first]).count();
     const double results_per_s = static_cast<double>(times.size() - first - 1) / seconds;
     std::cout << label << " " << stream << ": " << messages << " messages, " << results_per_s
-              << " results/s, " << tracks << " tracks in " << tracks_started << " track IDs\n";
+              << " results/s, " << tracks << " tracks in " << tracks_started << " track IDs, "
+              << unpaired.size() << " unpaired. " << video << "\n";
     if (results_per_s < min_results_per_s) {
       problems.push_back(stream + ": " + std::to_string(results_per_s) + " results/s");
     }

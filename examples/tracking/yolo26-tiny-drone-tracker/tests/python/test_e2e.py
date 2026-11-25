@@ -64,6 +64,53 @@ def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes
                 return
 
 
+def _udp_counters() -> dict[str, int]:
+    """The host's UDP counters, from the Udp: lines of /proc/net/snmp."""
+    try:
+        lines = Path("/proc/net/snmp").read_text().splitlines()
+    except OSError:
+        return {}
+    names, values = [line.split()[1:] for line in lines if line.startswith("Udp:")][:2]
+    return dict(zip(names, map(int, values)))
+
+
+def _socket_drops(port: int) -> int | None:
+    """Datagrams the kernel dropped for the socket bound to 127.0.0.1:`port`, the last column of
+    /proc/net/udp."""
+    try:
+        rows = Path("/proc/net/udp").read_text().splitlines()[1:]
+    except OSError:
+        return None
+    for row in rows:
+        fields = row.split()
+        if fields[1] == f"0100007F:{port:04X}":
+            return int(fields[-1])
+    return None
+
+
+def _video_report(headers: list[bytes], timestamps_ms: list[int], fps: int) -> str:
+    """What one video socket got: its packets, the packets missing from the RTP sequence, and the
+    frames with a timestamp in the span the metadata covers against the frames the source has in
+    that span."""
+    missing = 0
+    for previous, current in zip(headers, headers[1:]):
+        step = (int.from_bytes(current[2:4], "big") - int.from_bytes(previous[2:4], "big")) & 0xFFFF
+        if 1 < step < 0x8000:
+            missing += step - 1
+    rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers}
+    first, last = min(timestamps_ms), max(timestamps_ms)
+    start = (first * 90 - 90) & 0xFFFFFFFF
+    in_span = sum(
+        1 for rtp in rtp_timestamps if (rtp - start) & 0xFFFFFFFF <= (last - first) * 90 + 180
+    )
+    expected = round((last - first) * fps / 1000) + 1
+    return (
+        f"{len(headers)} RTP packets, {missing} missing from the RTP sequence, "
+        f"{len(rtp_timestamps)} frame timestamps, {in_span} of the source's {expected} frames "
+        f"from {first} to {last} ms"
+    )
+
+
 def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
     """Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a
     video frame's RTP timestamp."""
@@ -123,6 +170,8 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
     stop = threading.Event()
     video_sockets = []
     drains = []
+    socket_drops: list[int | None] = []
+    udp_before = udp_after = {}
     process = None
     stdout = stderr = ""
     with MetadataJsonListener(
@@ -144,6 +193,7 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
                     )
                 )
                 drains[-1].start()
+            udp_before = _udp_counters()
             process = subprocess.Popen(
                 [sys.executable, str(MAIN_PY), "--config", str(config_path)],
                 stdout=subprocess.PIPE,
@@ -175,6 +225,10 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
             stop.set()
             for drain in drains:
                 drain.join()
+            socket_drops = [
+                _socket_drops(video_port + index) for index in range(len(video_sockets))
+            ]
+            udp_after = _udp_counters()
             for sock in video_sockets:
                 sock.close()
 
@@ -182,13 +236,21 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         f"exit {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     )
     assert not errors, errors
+    # The host's UDP counters over the run: RcvbufErrors counts datagrams dropped because a
+    # receiving socket's buffer was full.
+    udp_change = ", ".join(
+        f"{name} +{udp_after[name] - udp_before[name]}"
+        for name in ("RcvbufErrors", "SndbufErrors")
+        if name in udp_before and name in udp_after
+    )
     for index in range(streams):
-        assert re.search(
-            rf"^\[stream {index}\] rtsp={re.escape(urls[index])} stream=\d+x\d+@\d+ "
+        start = re.search(
+            rf"^\[stream {index}\] rtsp={re.escape(urls[index])} stream=\d+x\d+@(\d+) "
             rf"insight=127\.0\.0\.1 video={video_port + index} metadata={metadata_port + index}$",
             stdout,
             re.MULTILINE,
-        ), stdout
+        )
+        assert start, stdout
         summary = re.search(
             rf"^\[stream {index}\] processed={FRAMES} tracks_started=(\d+)$", stdout, re.MULTILINE
         )
@@ -231,16 +293,23 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         unpaired = [
             m.timestamp_ms for m in stream_messages if not _pairs(m.timestamp_ms, rtp_timestamps)
         ]
+        video = (
+            f"video port {video_port + index}: "
+            f"{_video_report(headers[index], [m.timestamp_ms for m in stream_messages], int(start.group(1)))}, "
+            f"{socket_drops[index]} dropped by the socket. Host UDP: {udp_change or 'not read'}"
+        )
         # A frame the video link dropped leaves its message unpaired, so allow 5%, as for the
         # count.
         assert len(unpaired) <= len(stream_messages) * 5 // 100, (
-            f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}"
+            f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}. "
+            f"{video}"
         )
         times = arrivals[index][len(arrivals[index]) // 10 :]
         assert len(times) > 10, f"stream {index}: {len(times)} messages arrived during the run"
         results_per_s = (len(times) - 1) / (times[-1] - times[0])
         print(
             f"{codec} stream {index}: {len(stream_messages)} messages, "
-            f"{results_per_s:.1f} results/s, {len(tracks)} tracks in {tracks_started} track IDs"
+            f"{results_per_s:.1f} results/s, {len(tracks)} tracks in {tracks_started} track IDs, "
+            f"{len(unpaired)} unpaired. {video}"
         )
         assert results_per_s >= min_results_per_s, f"stream {index}: {results_per_s:.1f} results/s"
