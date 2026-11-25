@@ -72,13 +72,19 @@ public:
   // Wait until timeout for valid metadata matching MetadataJsonListenerOptions.
   MetadataJsonListenerResult wait_for_messages();
 
-  // One poll round of at most poll_ms: reads the datagrams that arrived into `result`
+  // One poll round of at most poll_ms: reads one datagram from each port that has one into `result`
   // and returns true once there is a verdict, either the options' success condition is
   // met or an error was recorded (a datagram that could not be read, or that was not
   // valid metadata). wait_for_messages() is this in a loop; a test that runs the
   // application itself calls it from the readiness callback of spawn_until() instead,
   // and reads `result.success` and `result.error` afterwards.
   bool poll_messages(MetadataJsonListenerResult& result, int poll_ms);
+
+  // Reads, without waiting, every datagram already queued on every port into `result`, and
+  // returns how many it read. Chunk assemblies stay open for the next call. poll_messages()
+  // reads one datagram per port, so a test that reads during the run calls this after it to
+  // keep up with a message sent as several chunks.
+  std::size_t read_ready(MetadataJsonListenerResult& result);
 
   // Drain and validate datagrams already queued on the sockets. Incomplete
   // chunk assemblies are discarded at the end of the drain.
