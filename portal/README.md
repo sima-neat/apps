@@ -10,6 +10,7 @@ The portal reads `catalog.json`, which is generated from the per-example `README
 - metadata filters for category, difficulty, status, model, and tags
 - detail view per example
 - tabbed rendering of README-derived sections
+- light and dark themes, shared with the Developer Center; a page that embeds the portal (such as the Palette Code VS Code extension) can ask for one with `?theme=dark` or `?theme=light`, which wins over the stored theme and is never stored (`src/theme.js`)
 
 ## Prerequisites
 
@@ -109,3 +110,12 @@ The static site output is written to:
 ```bash
 dist/
 ```
+
+## Test
+
+```bash
+cd <apps-repo-root>/portal
+npm test
+```
+
+Runs the unit tests in `src/*.test.js` with Node's test runner; they need no dependencies.
