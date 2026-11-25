@@ -64,6 +64,9 @@ setup belongs to the Insight documentation or the installed Insight skill.
   `pts_ns / 1000000` (milliseconds). `VideoSender` sends RTP timestamps of `pts` on the 90 kHz
   clock with no offset, and Insight multiplies `timestamp` by 90 and matches it to a video frame
   within 1 ms. A negative or missing `timestamp` sends the boxes without pairing.
+  `HttpMjpegDecodedInput` delivers some frames with `pts_ns = -1`, because GStreamer's
+  `multipartdemux` stamps a JPEG part only when it ends in a new HTTP chunk. Send `-1` for
+  those frames, and expect some boxes from an HTTP source to show unpaired.
 - `frame_id` is the `Sample`'s `frame_id` as a string. Insight reports it in its statistics.
 
 ## Oriented boxes
