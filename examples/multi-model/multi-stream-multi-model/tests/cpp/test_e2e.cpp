@@ -40,10 +40,12 @@ constexpr const char* kExampleName = "multi-stream-multi-model";
 constexpr int kFrames = 150;
 // Above the shipped 0.30, so the results show that the example applies inference.min_score.
 constexpr double kMinScore = 0.35;
-// Each stream's results per second, as a share of the frame rate the app printed for it. A DevKit
-// sent 19.9 to 20.0 results/s per stream on the CI streams (e83d42f). That log does not show their
-// rate, so the summary line below prints it.
-constexpr double kMinShareOfStreamRate = 0.95;
+// Each stream's results per second, about 80% of the lowest this test gave in Vulcan CI run
+// 45615743474 on 02572b9 (Modalix devkit-1, firmware 3.0.1_master_B2798, Core
+// develop/0420557512d1): 24.6 to 26.4 on 25 fps sources, 32.3 to 33.2 on a 30 fps source. On
+// e83d42f the same DevKit gave 19.9 to 20.0, and that log does not show the sources' rate. Whether
+// the app keeps up with its sources is measured on a board, not here.
+constexpr double kMinResultsPerS = 19.5;
 
 using Clock = std::chrono::steady_clock;
 
@@ -389,9 +391,9 @@ int run_case(const std::string& binary, const std::string& models_dir,
     std::cout << label << " " << stream << ": " << messages << " messages, " << results_per_s
               << " results/s of " << stream_fps << " fps, " << entries << " " << stream_case.key
               << "\n";
-    if (results_per_s < kMinShareOfStreamRate * stream_fps) {
-      problems.push_back(stream + ": " + std::to_string(results_per_s) + " results/s of a " +
-                         std::to_string(stream_fps) + " fps stream");
+    if (results_per_s < kMinResultsPerS) {
+      problems.push_back(stream + ": " + std::to_string(results_per_s) + " results/s, below " +
+                         std::to_string(kMinResultsPerS));
     }
   }
   remove_dir(output_dir);
