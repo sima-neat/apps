@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
 
@@ -102,6 +103,10 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
     # The app runs from the Apps root, so only a path joined to the config file finds a model.
     assert not any((APPS_ROOT / path).exists() for path in model_paths), model_paths
     sources = [urls[index % len(urls)] for index in range(len(STREAMS))]
+    # The shipped entries, each with its path relative to the generated config, so the test runs
+    # the app's path join. The labels path starts at the working directory, as shipped.
+    shipped = yaml.safe_load((EXAMPLE_DIR / "src" / "common" / "config.yaml").read_text())["model"]
+    models = [dict(entry, path=path) for entry, path in zip(shipped, model_paths)]
     config_path = e2e_config_writer(
         {
             "input": {"source": sources, "codec": codec},
@@ -114,8 +119,7 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
                     "metadata_port_base": metadata_port,
                 }
             },
-            # Relative to the generated config, so the test runs the app's path join.
-            "app": {"model_paths": model_paths},
+            "model": models,
         }
     )
     assert config_path.parent == config_dir

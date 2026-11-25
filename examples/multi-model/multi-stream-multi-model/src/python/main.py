@@ -25,7 +25,7 @@ for apps_root in Path(__file__).resolve().parents:
 else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
-from sima_examples.config import Config, lookup
+from sima_examples.config import Config
 from sima_examples.labels import load_labels
 from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
 from sima_examples.stop_signals import stop_on_signals
@@ -38,8 +38,8 @@ DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeTyp
 DETECTION = "object-detection"
 SEGMENTATION = "segmentation"
 POSE = "pose-estimation"
-# Each app.model_ids value: the BoxDecode type of the package's heads, and the Insight
-# metadata type of its results. YOLO11 packages carry the YOLOv8 heads.
+# Each model id: the BoxDecode type of the package's heads, and the Insight metadata type of its
+# results. YOLO11 packages carry the YOLOv8 heads.
 MODEL_IDS = {
     "yolov8": (pyneat.BoxDecodeType.YoloV8, DETECTION),
     "yolov8-seg": (pyneat.BoxDecodeType.YoloV8Seg, SEGMENTATION),
@@ -70,6 +70,7 @@ class Stream:
 
     info: RtspStreamInfo
     metadata_type: str
+    labels: list[str]
     metadata_sender: pyneat.MetadataSender
     pending: PendingResults
     processed: int = 0
@@ -232,14 +233,21 @@ def stream_info(config: Config, sources: list[str]) -> list[RtspStreamInfo]:
     return [by_url[url] for url in sources]
 
 
-def per_stream(config: Config, key: str, streams: int) -> list[str]:
-    """The list at `key`, which holds one entry per input.source stream."""
-    values = config.string_list(key)
-    if len(values) != streams:
+def per_stream(config: Config, key: str, streams: int) -> list[Config]:
+    """The list of mappings at `key`, which holds one entry per input.source stream."""
+    entries = config.mapping_list(key)
+    if len(entries) != streams:
         raise ValueError(
-            f"{key} has {len(values)} entries and input.source has {streams}: give one per stream"
+            f"{key} has {len(entries)} entries and input.source has {streams}: give one per stream"
         )
-    return values
+    return entries
+
+
+def model_labels(model: Config, metadata_type: str) -> list[str]:
+    """The class labels of a detection or segmentation model. Pose results carry none."""
+    if metadata_type == POSE:
+        return []
+    return load_labels(Path(model.string("labels")))
 
 
 def sample_tensors(sample: pyneat.Sample) -> list[pyneat.Tensor]:
@@ -252,9 +260,7 @@ def sample_tensors(sample: pyneat.Sample) -> list[pyneat.Tensor]:
     raise RuntimeError("expected a tensor result")
 
 
-def metadata_entries(
-    sample: pyneat.Sample, stream: Stream, labels: list[str], max_detections: int
-) -> list[dict]:
+def metadata_entries(sample: pyneat.Sample, stream: Stream, max_detections: int) -> list[dict]:
     """The objects, segments, or poses of one results sample, in the stream's frame pixels."""
     width, height = stream.info.width, stream.info.height
     tensors = sample_tensors(sample)
@@ -262,7 +268,7 @@ def metadata_entries(
         result = pyneat.detections.decode_bbox_tensor(
             tensors[0], width, height, max_detections, strict=True
         )
-        return insight_metadata.objects(result.boxes, labels, width, height)
+        return insight_metadata.objects(result.boxes, stream.labels, width, height)
     # A frame with nothing found decodes to tensors with zero rows.
     entries = []
     if stream.metadata_type == SEGMENTATION:
@@ -270,7 +276,7 @@ def metadata_entries(
             tensors, clamp_to=(width, height), top_k=max_detections, strict=True
         ):
             entries += insight_metadata.segments(
-                item.boxes.to_numpy(), item.masks.to_numpy(), labels, width, height
+                item.boxes.to_numpy(), item.masks.to_numpy(), stream.labels, width, height
             )
         return entries
     for item in pyneat.decode_pose(
@@ -283,7 +289,6 @@ def metadata_entries(
 def send_results(
     run: pyneat.Run,
     streams: list[Stream],
-    labels: list[str],
     max_detections: int,
     frames: int,
     stop: threading.Event,
@@ -315,7 +320,7 @@ def send_results(
             pulled = True
             data, left_out = insight_metadata.data_json(
                 DATA_KEYS[stream.metadata_type],
-                metadata_entries(sample, stream, labels, max_detections),
+                metadata_entries(sample, stream, max_detections),
             )
             # A nonblocking send drops the message while the socket buffer is full; the drops
             # are counted in the sender's stats and reported when the run ends. Any other
@@ -336,12 +341,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.load(args.config)
     sources = config.string_list("input.source")
-    model_paths = per_stream(config, "app.model_paths", len(sources))
-    model_ids = per_stream(config, "app.model_ids", len(sources))
-    # Each stream's BoxDecode type and metadata type, read before the probe and any model load.
-    model_types = [lookup("app.model_ids", model_id, MODEL_IDS) for model_id in model_ids]
+    # Each stream's model, read before the probe and any model load.
+    entries = per_stream(config, "model", len(sources))
+    model_ids = []
+    model_paths = []
+    # Each stream's BoxDecode type and metadata type.
+    model_types = []
+    labels = []
+    for entry in entries:
+        model_ids.append(entry.string("id"))
+        model_paths.append(entry.string("path"))
+        model_types.append(entry.choice("id", MODEL_IDS))
+        labels.append(model_labels(entry, model_types[-1][1]))
     infos = stream_info(config, sources)
-    labels = load_labels(Path(config.string("model.labels")))
     # Used by both the models and the box decode.
     max_detections = config.integer("inference.max_detections")
     # Results each stream sends before the app stops. 0 or less runs until stopped.
@@ -373,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
             Stream(
                 info,
                 metadata_type,
+                labels[index],
                 pyneat.MetadataSender(metadata_options(config, index)),
                 PendingResults(
                     index, model_paths[index], RESULT_DEADLINE_S, FIRST_RESULT_DEADLINE_S
@@ -390,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     stop = stop_on_signals()
     run = graph.build(run_options())
     try:
-        send_results(run, streams, labels, max_detections, frames, stop)
+        send_results(run, streams, max_detections, frames, stop)
     finally:
         run.close()
 

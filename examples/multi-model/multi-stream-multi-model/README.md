@@ -98,16 +98,16 @@ sima-cli models download --id yolo26m --variant w8a8
 unzip -o models/yolo26m/w8a8/yolo26m_w8a8_default.zip -d models/yolo26m/w8a8
 ```
 
-Each download is a ZIP file with the model package and its license. `unzip` puts the model package next to the ZIP file. The packaged `app.model_paths` already points to these four files. A relative path starts at the config file, and `../../../../../models/` from `${APP_DIR}/src/common/` is `prebuilt-apps/models/`.
+Each download is a ZIP file with the model package and its license. `unzip` puts the model package next to the ZIP file. The packaged `model` entries already point to these four files. A relative `path` starts at the config file, and `../../../../../models/` from `${APP_DIR}/src/common/` is `prebuilt-apps/models/`.
 
-| Stream | Task | Model package | `app.model_ids` |
+| Stream | Task | Model package | `id` |
 | --- | --- | --- | --- |
 | 0 | Detection | `models/yolo11s/w8a8/yolo11s_w8a8_mpk.tar.gz` | `yolov8` |
 | 1 | Segmentation | `models/yolo26s_seg/w8a16/yolo26s_seg_w8a16_mpk.tar.gz` | `yolo26-seg` |
 | 2 | Pose | `models/yolo26m_pose/w8a8/yolo26m_pose_w8a8_mpk.tar.gz` | `yolo26-pose` |
 | 3 | Detection | `models/yolo26m/w8a8/yolo26m_w8a8_mpk.tar.gz` | `yolo26` |
 
-These four packages are the tested set. `app.model_ids` names each package's task and head layout. The package does not name its decoder. YOLO11 packages carry the YOLOv8 heads, so they take `yolov8`, `yolov8-seg`, or `yolov8-pose`. YOLO26 packages take `yolo26`, `yolo26-seg`, or `yolo26-pose`.
+These four packages are the tested set. Each entry's `id` names its package's task and head layout. The package does not name its decoder. YOLO11 packages carry the YOLOv8 heads, so they take `yolov8`, `yolov8-seg`, or `yolov8-pose`. YOLO26 packages take `yolo26`, `yolo26-seg`, or `yolo26-pose`.
 
 ## Prepare Insight
 
@@ -117,9 +117,9 @@ In the Insight Web UI, install or pick up to four videos and start one stream pe
 
 Open `${APP_DIR}/src/common/config.yaml` and set:
 
-- `input.source`: one RTSP URL per stream. Stream i runs model i and goes to Insight channel i.
+- `input.source`: one RTSP URL per stream. Stream i runs `model` entry i and goes to Insight channel i.
 - `input.codec`: `h264` or `h265`, the same for every stream.
-- `app.model_paths` and `app.model_ids`: one entry per stream, in `input.source` order. To run fewer streams, remove the same entries from all three lists.
+- `model`: one entry per stream, in `input.source` order. Each entry sets `id` and `path`. A detection or segmentation model also sets `labels`, the class-label file. A relative `labels` path starts at the working directory. To run fewer streams, remove the same entries from `input.source` and `model`.
 - `output.insight.host`. Stream i sends video to `video_port_base` + i and results to `metadata_port_base` + i.
 
 `inference.frames` at 0 or less runs until you stop the application.
@@ -173,12 +173,13 @@ The metadata sender does not wait for a full network buffer. It drops the messag
 ## Troubleshooting
 
 - `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config.
-- `app.model_paths has 3 entries and input.source has 4`: give every list one entry per stream.
-- `app.model_ids: unknown value` lists the values the application takes. Pick the one for the package's task and family.
+- `model has 3 entries and input.source has 4`: give `model` one entry per stream.
+- `model[1].id: unknown value` lists the values the application takes. Pick the one for the package's task and family.
+- `<config> is missing model[0].labels`: a detection or segmentation model needs its class-label file.
 - `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>`: a value left at 0 could not be read. Check that the URL is reachable from the DevKit. For a reachable stream, set the value the message names.
-- `stream <i>: model <path> returned no result for 10 s while its decoder sent frames`: that stream's model stopped. Check its package and its `app.model_ids` entry, then start the application again. The same message with `30 s` means the model never returned its first result.
+- `stream <i>: model <path> returned no result for 10 s while its decoder sent frames`: that stream's model stopped. Check its package and its `id`, then start the application again. The same message with `30 s` means the model never returned its first result.
 - Streams fall below the source rate: the MLA is oversubscribed. Use lighter packages or fewer streams.
-- Boxes appear in about the right places but at the wrong sizes: the `app.model_ids` entry does not match the package's heads. Check it against the table above.
+- Boxes appear in about the right places but at the wrong sizes: the entry's `id` does not match the package's heads. Check it against the table above.
 - A positive `left_out` at exit: a frame's results did not fit one message. Lower `inference.max_detections` or raise `inference.min_score`.
 - No video or results in Insight: check the Insight host and the UDP ports. Make sure no other application sends to the same ports.
 

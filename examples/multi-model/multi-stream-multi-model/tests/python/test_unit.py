@@ -36,9 +36,10 @@ def test_shipped_config_is_usable():
     config = main_module.Config.load(COMMON_DIR / "config.yaml")
     sources = config.string_list("input.source")
     assert 1 <= len(sources) <= 4, "the shipped config lists one to four streams"
-    model_paths = config.string_list("app.model_paths")
-    model_ids = config.string_list("app.model_ids")
-    assert len(model_paths) == len(model_ids) == len(sources), "one model per stream"
+    models = config.mapping_list("model")
+    assert len(models) == len(sources), "one model per stream"
+    model_ids = [model.string("id") for model in models]
+    model_paths = [model.string("path") for model in models]
     assert model_ids == ["yolov8", "yolo26-seg", "yolo26-pose", "yolo26"]
     assert set(model_ids) <= set(main_module.MODEL_IDS)
     for path in model_paths:
@@ -52,8 +53,12 @@ def test_shipped_config_is_usable():
     ]
     assert config.string("input.codec") in main_module.RTSP_CODECS
     assert config.string("input.codec") in main_module.DECODE_TYPES
-    labels = (APPS_ROOT / config.string("model.labels")).read_text().splitlines()
-    assert len(labels) == 80, "the COCO labels the detection and segmentation models score"
+    for model, model_id in zip(models, model_ids):
+        if main_module.MODEL_IDS[model_id][1] == main_module.POSE:
+            continue
+        # The labels path starts at the working directory, the Apps root here.
+        labels = (APPS_ROOT / model.string("labels")).read_text().splitlines()
+        assert len(labels) == 80, "the COCO labels the detection and segmentation models score"
     for key in ("input.width", "input.height", "input.fps", "input.rtsp.latency_ms",
                 "inference.frames", "output.insight.video_port_base",
                 "output.insight.metadata_port_base"):
@@ -247,6 +252,7 @@ def fake_stream(deadline_s: float, first_result_s: float):
     return main_module.Stream(
         info=main_module.RtspStreamInfo(640, 480, 30),
         metadata_type=main_module.DETECTION,
+        labels=LABELS,
         metadata_sender=FakeSender(),
         pending=PendingResults(0, "models/m.tar.gz", deadline_s, first_result_s),
     )
@@ -267,7 +273,7 @@ def test_send_results_stops_a_model_that_stops_returning_results(no_decode):
     )
     stream = fake_stream(0.0, 60.0)
     with pytest.raises(RuntimeError) as error:
-        main_module.send_results(run, [stream], LABELS, 50, 0, stop)
+        main_module.send_results(run, [stream], 50, 0, stop)
     assert str(error.value) == (
         "stream 0: model models/m.tar.gz returned no result for 0 s while its decoder sent frames"
     )
@@ -279,7 +285,7 @@ def test_send_results_stops_a_model_that_never_returns_a_result(no_decode):
     stop = threading.Event()
     run = StoppingRun(stop, "timeout", ("sample", object()), "timeout", "timeout")
     with pytest.raises(RuntimeError) as error:
-        main_module.send_results(run, [fake_stream(60.0, 0.0)], LABELS, 50, 0, stop)
+        main_module.send_results(run, [fake_stream(60.0, 0.0)], 50, 0, stop)
     assert str(error.value) == (
         "stream 0: model models/m.tar.gz returned no result for 0 s while its decoder sent frames"
     )
@@ -289,7 +295,7 @@ def test_send_results_lets_a_paused_camera_wait(no_decode):
     # No frames and no results: the loop keeps waiting until the stop signal.
     stop = threading.Event()
     run = StoppingRun(stop, *["timeout"] * 20)
-    main_module.send_results(run, [fake_stream(0.0, 0.0)], LABELS, 50, 0, stop)
+    main_module.send_results(run, [fake_stream(0.0, 0.0)], 50, 0, stop)
     assert len(run.pulls) == 20
 
 
@@ -297,7 +303,7 @@ def test_send_results_below_zero_frames_runs_until_stopped(no_decode):
     stop = threading.Event()
     run = StoppingRun(stop, *[("sample", RESULT), "timeout"] * 3)
     stream = fake_stream(60.0, 60.0)
-    main_module.send_results(run, [stream], LABELS, 50, -1, stop)
+    main_module.send_results(run, [stream], 50, -1, stop)
     assert len(stream.metadata_sender.sent) == 3
 
 
@@ -305,8 +311,25 @@ def test_send_results_without_a_timestamp_or_frame_id_sends_none(no_decode):
     stop = threading.Event()
     run = StoppingRun(stop, ("sample", SimpleNamespace(pts_ns=-1, frame_id=-1)), "timeout")
     stream = fake_stream(60.0, 60.0)
-    main_module.send_results(run, [stream], LABELS, 50, 1, stop)
+    main_module.send_results(run, [stream], 50, 1, stop)
     assert stream.metadata_sender.sent == [("object-detection", '{"objects":[]}', -1, "")]
+
+
+def test_send_results_labels_each_stream_with_its_own_labels(monkeypatch):
+    box = SimpleNamespace(x1=0.0, y1=0.0, x2=10.0, y2=10.0, score=0.9, class_id=1)
+    monkeypatch.setattr(main_module, "sample_tensors", lambda sample: [object()])
+    monkeypatch.setattr(
+        main_module.pyneat.detections,
+        "decode_bbox_tensor",
+        lambda *args, **kwargs: SimpleNamespace(boxes=[box]),
+    )
+    stop = threading.Event()
+    run = StoppingRun(stop, ("sample", RESULT), "timeout", ("sample", RESULT), "timeout")
+    first, second = fake_stream(60.0, 60.0), fake_stream(60.0, 60.0)
+    second.labels = ["cat", "dog"]
+    main_module.send_results(run, [first, second], 50, 1, stop)
+    sent = [json.loads(stream.metadata_sender.sent[0][1]) for stream in (first, second)]
+    assert [data["objects"][0]["label"] for data in sent] == ["bicycle", "dog"]
 
 
 def run_main(tmp_path: Path, change) -> str:
@@ -327,24 +350,39 @@ def run_main(tmp_path: Path, change) -> str:
     return result.stderr.strip().splitlines()[-1]
 
 
-@pytest.mark.parametrize("key", ["model_paths", "model_ids"])
-def test_per_stream_lists_need_one_entry_per_stream(tmp_path, key):
+def test_model_needs_one_entry_per_stream(tmp_path):
     def drop_one(config):
-        config["app"][key] = config["app"][key][:3]
+        config["model"] = config["model"][:3]
 
     assert run_main(tmp_path, drop_one) == (
-        f"[ERR] app.{key} has 3 entries and input.source has 4: give one per stream"
+        "[ERR] model has 3 entries and input.source has 4: give one per stream"
     )
 
 
-def test_unknown_model_id_names_the_choices(tmp_path):
+def test_unknown_model_id_names_the_entry_and_the_choices(tmp_path):
     def unknown(config):
-        config["app"]["model_ids"][1] = "yolo26-obb"
+        config["model"][1]["id"] = "yolo26-obb"
 
     assert run_main(tmp_path, unknown) == (
-        "[ERR] app.model_ids: unknown value 'yolo26-obb' (expected yolo26, yolo26-pose, "
+        "[ERR] model[1].id: unknown value 'yolo26-obb' (expected yolo26, yolo26-pose, "
         "yolo26-seg, yolov8, yolov8-pose, yolov8-seg)"
     )
+
+
+def test_detection_model_without_labels_names_the_entry(tmp_path):
+    def no_labels(config):
+        del config["model"][0]["labels"]
+
+    assert run_main(tmp_path, no_labels) == (
+        f"[ERR] {tmp_path / 'config.yaml'} is missing model[0].labels"
+    )
+
+
+def test_pose_model_needs_no_labels(tmp_path):
+    # The shipped pose entry has no labels. Every model entry is read before the first model
+    # loads, so the run gets past the config and fails later, on a model the test does not have.
+    assert "labels" not in yaml.safe_load((COMMON_DIR / "config.yaml").read_text())["model"][2]
+    assert "labels" not in run_main(tmp_path, lambda config: None)
 
 
 def test_model_ids_select_the_decoder_and_metadata_type():

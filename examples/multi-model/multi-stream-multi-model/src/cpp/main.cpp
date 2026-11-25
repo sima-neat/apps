@@ -58,8 +58,8 @@ const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
 constexpr const char* kDetection = "object-detection";
 constexpr const char* kSegmentation = "segmentation";
 constexpr const char* kPose = "pose-estimation";
-// Each app.model_ids value: the BoxDecode type of the package's heads, and the Insight metadata
-// type of its results. YOLO11 packages carry the YOLOv8 heads.
+// Each model id: the BoxDecode type of the package's heads, and the Insight metadata type of its
+// results. YOLO11 packages carry the YOLOv8 heads.
 const std::map<std::string, std::pair<neat::BoxDecodeType, std::string>> kModelIds = {
     {"yolov8", {neat::BoxDecodeType::YoloV8, kDetection}},
     {"yolov8-seg", {neat::BoxDecodeType::YoloV8Seg, kSegmentation}},
@@ -91,6 +91,7 @@ constexpr std::chrono::milliseconds kIdleSleep{2};
 struct Stream {
   sima_examples::RtspStreamInfo info;
   std::string metadata_type;
+  std::vector<std::string> labels;
   neat::MetadataSender metadata_sender;
   pending_results::PendingResults pending;
   int processed = 0;
@@ -270,16 +271,25 @@ std::vector<sima_examples::RtspStreamInfo> stream_info(const sima_examples::Conf
   return streams;
 }
 
-// The list at `key`, which holds one entry per input.source stream.
-std::vector<std::string> per_stream(const sima_examples::Config& config, const std::string& key,
-                                    std::size_t streams) {
-  auto values = config.string_list(key);
-  if (values.size() != streams) {
-    throw std::runtime_error(key + " has " + std::to_string(values.size()) +
+// The list of mappings at `key`, which holds one entry per input.source stream.
+std::vector<sima_examples::Config> per_stream(const sima_examples::Config& config,
+                                              const std::string& key, std::size_t streams) {
+  auto entries = config.mapping_list(key);
+  if (entries.size() != streams) {
+    throw std::runtime_error(key + " has " + std::to_string(entries.size()) +
                              " entries and input.source has " + std::to_string(streams) +
                              ": give one per stream");
   }
-  return values;
+  return entries;
+}
+
+// The class labels of a detection or segmentation model. Pose results carry none.
+std::vector<std::string> model_labels(const sima_examples::Config& model,
+                                      const std::string& metadata_type) {
+  if (metadata_type == kPose) {
+    return {};
+  }
+  return sima_examples::load_labels(model.string("labels"));
 }
 
 neat::TensorList sample_tensors(const neat::Sample& sample) {
@@ -308,7 +318,6 @@ template <typename T> std::vector<T> tensor_values(const neat::Tensor& tensor) {
 // The objects, segments, or poses of one results sample, in the stream's frame pixels.
 std::vector<insight_metadata::Entry> metadata_entries(const neat::Sample& sample,
                                                       const Stream& stream,
-                                                      const std::vector<std::string>& labels,
                                                       int max_detections) {
   const int width = stream.info.width;
   const int height = stream.info.height;
@@ -316,7 +325,7 @@ std::vector<insight_metadata::Entry> metadata_entries(const neat::Sample& sample
   if (stream.metadata_type == kDetection) {
     const auto result =
         neat::decode_bbox_tensor(tensors.front(), width, height, max_detections, /*strict=*/true);
-    return insight_metadata::objects(result.boxes, labels, width, height);
+    return insight_metadata::objects(result.boxes, stream.labels, width, height);
   }
   // A frame with nothing found decodes to tensors with zero rows.
   std::vector<insight_metadata::Entry> entries;
@@ -326,7 +335,7 @@ std::vector<insight_metadata::Entry> metadata_entries(const neat::Sample& sample
       const auto segments = insight_metadata::segments(
           tensor_values<float>(item.boxes), tensor_values<std::uint8_t>(item.masks),
           static_cast<int>(item.masks.shape.at(2)), static_cast<int>(item.masks.shape.at(1)),
-          labels, width, height);
+          stream.labels, width, height);
       entries.insert(entries.end(), segments.begin(), segments.end());
     }
     return entries;
@@ -348,7 +357,7 @@ double now_s() {
 // limit) or a stop signal. A stream whose decoded frames arrive with no result for its deadline
 // throws with its model.
 void send_results(neat::Run& run, std::vector<Stream>& streams,
-                  const std::vector<std::string>& labels, int max_detections, int frames,
+                  int max_detections, int frames,
                   const std::atomic<bool>& stop) {
   const auto all_sent = [&] {
     return frames > 0 && std::all_of(streams.begin(), streams.end(),
@@ -378,7 +387,7 @@ void send_results(neat::Run& run, std::vector<Stream>& streams,
       pulled = true;
       const auto [data, left_out] =
           insight_metadata::data_json(kDataKeys.at(stream.metadata_type),
-                                      metadata_entries(sample, stream, labels, max_detections));
+                                      metadata_entries(sample, stream, max_detections));
       // A nonblocking send drops the message while the socket buffer is full; the drops are
       // counted in the sender's stats and reported when the run ends. Any other failure throws.
       std::string send_error;
@@ -400,15 +409,20 @@ void send_results(neat::Run& run, std::vector<Stream>& streams,
 int run_app(const fs::path& config_path) {
   const auto config = sima_examples::Config::load(config_path);
   const auto sources = config.string_list("input.source");
-  const auto model_paths = per_stream(config, "app.model_paths", sources.size());
-  const auto model_ids = per_stream(config, "app.model_ids", sources.size());
-  // Each stream's BoxDecode type and metadata type, read before the probe and any model load.
+  // Each stream's model, read before the probe and any model load.
+  const auto entries = per_stream(config, "model", sources.size());
+  std::vector<std::string> model_ids;
+  std::vector<std::string> model_paths;
+  // Each stream's BoxDecode type and metadata type.
   std::vector<std::pair<neat::BoxDecodeType, std::string>> model_types;
-  for (const auto& model_id : model_ids) {
-    model_types.push_back(sima_examples::lookup("app.model_ids", model_id, kModelIds));
+  std::vector<std::vector<std::string>> labels;
+  for (const auto& entry : entries) {
+    model_ids.push_back(entry.string("id"));
+    model_paths.push_back(entry.string("path"));
+    model_types.push_back(entry.choice("id", kModelIds));
+    labels.push_back(model_labels(entry, model_types.back().second));
   }
   const auto infos = stream_info(config, sources);
-  const auto labels = sima_examples::load_labels(config.string("model.labels"));
   // Used by both the models and the box decode.
   const int max_detections = config.integer("inference.max_detections");
   // Results each stream sends before the app stops. 0 or less runs until stopped.
@@ -437,10 +451,10 @@ int run_app(const fs::path& config_path) {
     std::string error;
     neat::MetadataSender metadata_sender(metadata_options(config, index), &error);
     sima_examples::require(metadata_sender.ok(), error);
-    streams.push_back(Stream{
-        info, metadata_type, std::move(metadata_sender),
-        pending_results::PendingResults(static_cast<int>(index), model_paths[index],
-                                        kResultDeadlineS, kFirstResultDeadlineS)});
+    streams.push_back(
+        Stream{info, metadata_type, labels[index], std::move(metadata_sender),
+               pending_results::PendingResults(static_cast<int>(index), model_paths[index],
+                                               kResultDeadlineS, kFirstResultDeadlineS)});
     std::cout << "[stream " << index << "] " << model_ids[index] << " model=" << model_paths[index]
               << " rtsp=" << url << " stream=" << info.width << "x" << info.height << "@"
               << info.fps << " insight=" << config.string("output.insight.host")
@@ -451,7 +465,7 @@ int run_app(const fs::path& config_path) {
   const std::atomic<bool>& stop = sima_examples::stop_on_signals();
   // The Run's destructor closes it when send_results throws.
   neat::Run run = graph.build(run_options());
-  send_results(run, streams, labels, max_detections, frames, stop);
+  send_results(run, streams, max_detections, frames, stop);
   run.close();
 
   for (std::size_t index = 0; index < streams.size(); ++index) {

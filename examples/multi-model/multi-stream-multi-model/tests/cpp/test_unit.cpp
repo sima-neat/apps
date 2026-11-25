@@ -4,6 +4,8 @@
 // fake Run and checks the MODEL_IDS table and the deadline values. A C++ Run cannot be faked, and
 // kModelIds and the deadlines are private to main.cpp, so here the deadline is tested on
 // PendingResults.observe(), the step the loop takes for each stream in each round.
+// It also tests Config::mapping_list of support/, which tests/scripts/test_config.py tests in
+// Python.
 
 #include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/insight_metadata.h"
 #include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/pending_results.h"
@@ -16,8 +18,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -48,14 +52,31 @@ bool observes(PendingResults& pending, bool frame, bool result, double now_s) {
                      "the round at " + std::to_string(now_s) + " s passes: " + error);
 }
 
-// The last line the example prints to stderr for the shipped config with `lists` set. The frame
-// size and rate are set, so no stream is probed and no source is needed.
+// The shipped model entries, each by field.
+std::vector<ConfigScalars> shipped_models() {
+  std::vector<ConfigScalars> models;
+  for (const auto& model : example_common_config(kExampleName).mapping_list("model")) {
+    ConfigScalars fields = {{"id", model.string("id")}, {"path", model.string("path")}};
+    if (const auto labels = model.string_value("labels")) {
+      fields["labels"] = *labels;
+    }
+    models.push_back(fields);
+  }
+  return models;
+}
+
+// The last line the example prints to stderr for the shipped config with `models` as its model
+// entries. The frame size and rate are set, so no stream is probed and no source is needed.
 std::string run_error(const std::string& binary, const std::string& test_name,
-                      const ConfigLists& lists) {
+                      const std::vector<ConfigScalars>& models) {
   const std::string dir = create_test_scratch_dir(kExampleName, test_name);
   const fs::path config_path = fs::path(dir) / "config.yaml";
-  write_e2e_config(kExampleName, config_path,
-                   {{"input.width", "1280"}, {"input.height", "720"}, {"input.fps", "30"}}, lists);
+  // The writer keeps only the shipped scalars, so the test passes the streams too.
+  write_e2e_config(
+      kExampleName, config_path,
+      {{"input.width", "1280"}, {"input.height", "720"}, {"input.fps", "30"}},
+      {{"input.source", example_common_config(kExampleName).string_list("input.source")}},
+      {{"model", models}});
   const ProcessResult result = spawn_and_wait(binary, {"--config", config_path.string()}, 60000);
   remove_dir(dir);
   std::string text = result.stderr_text;
@@ -74,13 +95,17 @@ bool test_shipped_config_is_usable() {
   const auto sources = config.string_list("input.source");
   bool ok = expect_true(!sources.empty() && sources.size() <= 4U,
                         "the shipped config lists one to four streams");
-  const auto model_paths = config.string_list("app.model_paths");
-  const auto model_ids = config.string_list("app.model_ids");
-  ok &= expect_true(model_paths.size() == sources.size() && model_ids.size() == sources.size(),
-                    "one model per stream");
+  const auto models = config.mapping_list("model");
+  ok &= expect_true(models.size() == sources.size(), "one model per stream");
+  std::vector<std::string> model_ids;
+  std::vector<std::string> model_paths;
+  for (const auto& model : models) {
+    model_ids.push_back(model.string("id"));
+    model_paths.push_back(model.string("path"));
+  }
   ok &= expect_true(model_ids == std::vector<std::string>{"yolov8", "yolo26-seg", "yolo26-pose",
                                                           "yolo26"},
-                    "app.model_ids names the four supported packages");
+                    "the model entries name the four supported packages");
   const std::vector<std::string> files = {
       "yolo11s_w8a8_mpk.tar.gz", "yolo26s_seg_w8a16_mpk.tar.gz", "yolo26m_pose_w8a8_mpk.tar.gz",
       "yolo26m_w8a8_mpk.tar.gz"};
@@ -95,12 +120,20 @@ bool test_shipped_config_is_usable() {
   }
   const std::string codec = config.string("input.codec");
   ok &= expect_true(codec == "h264" || codec == "h265", "the shipped codec is supported");
-  std::ifstream labels_file(config.string("model.labels"));
-  int labels = 0;
-  for (std::string line; std::getline(labels_file, line);) {
-    labels += line.empty() ? 0 : 1;
+  for (std::size_t i = 0; i < models.size(); ++i) {
+    if (model_ids[i] == "yolo26-pose") {
+      ok &= expect_true(!models[i].string_value("labels").has_value(),
+                        "the pose model has no labels");
+      continue;
+    }
+    // The labels path starts at the working directory, the Apps root here.
+    std::ifstream labels_file(models[i].string("labels"));
+    int labels = 0;
+    for (std::string line; std::getline(labels_file, line);) {
+      labels += line.empty() ? 0 : 1;
+    }
+    ok &= expect_true(labels == 80, model_ids[i] + " has the 80 COCO labels it scores");
   }
-  ok &= expect_true(labels == 80, "the COCO labels the detection and segmentation models score");
   for (const std::string key :
        {"input.width", "input.height", "input.fps", "input.rtsp.latency_ms", "inference.frames",
         "output.insight.video_port_base", "output.insight.metadata_port_base"}) {
@@ -314,25 +347,122 @@ bool test_paused_camera_waits_without_a_limit() {
   return ok;
 }
 
-bool test_per_stream_lists_need_one_entry_per_stream(const std::string& binary) {
-  bool ok = true;
-  for (const std::string key : {"app.model_paths", "app.model_ids"}) {
-    const std::string error = run_error(binary, "test_per_stream_lists_need_one_entry_per_stream",
-                                        {{key, {"yolov8", "yolo26-seg", "yolo26-pose"}}});
-    ok &= expect_true(error == "[ERR] " + key +
-                                   " has 3 entries and input.source has 4: give one per stream",
-                      "a short " + key + " fails with its key: " + error);
+// What mapping_list("model") throws for a config of `text`, or "" when it throws nothing.
+std::string mapping_list_error(const std::string& test_name, const std::string& text,
+                               std::string* config_path = nullptr) {
+  const std::string dir = create_test_scratch_dir(kExampleName, test_name);
+  const fs::path path = fs::path(dir) / "config.yaml";
+  std::ofstream(path) << text;
+  if (config_path != nullptr) {
+    *config_path = path.string();
+  }
+  std::string error;
+  try {
+    static_cast<void>(sima_examples::Config::load(path).mapping_list("model"));
+  } catch (const std::runtime_error& thrown) {
+    error = thrown.what();
+  }
+  remove_dir(dir);
+  return error;
+}
+
+const char* const kModels = "model:\n"
+                            "  - id: yolov8\n    path: a.tar.gz\n    labels: coco.txt\n"
+                            "  - id: 5\n    path: b.tar.gz\n";
+
+// The C++ side of tests/scripts/test_config.py: Config::mapping_list in support/.
+bool test_mapping_list_reads_each_entry_by_field() {
+  const std::string dir = create_test_scratch_dir(kExampleName, "mapping_list_reads");
+  const fs::path path = fs::path(dir) / "config.yaml";
+  std::ofstream(path) << kModels;
+  const auto entries = sima_examples::Config::load(path).mapping_list("model");
+  bool ok = expect_true(entries.size() == 2U, "two entries");
+  if (entries.size() == 2U) {
+    ok &= expect_true(entries[0].string("id") == "yolov8" &&
+                          entries[0].string("labels") == "coco.txt" &&
+                          entries[1].string("path") == "b.tar.gz",
+                      "each entry reads by field");
+    ok &= expect_true(entries[0].choice("id", std::map<std::string, int>{{"yolov8", 8}}) == 8,
+                      "choice reads an entry's field");
+    // Python raises "model[1].id must be a string, got 5". C++ reads any scalar as a string.
+    ok &= expect_true(entries[1].string("id") == "5", "C++ reads id: 5 as \"5\"");
+    std::string error;
+    try {
+      static_cast<void>(entries[1].string("labels"));
+    } catch (const std::runtime_error& thrown) {
+      error = thrown.what();
+    }
+    ok &= expect_true(error == path.string() + " is missing model[1].labels",
+                      "a missing field names the entry: " + error);
+    error.clear();
+    try {
+      static_cast<void>(entries[0].choice("id", std::map<std::string, int>{{"yolo26", 26}}));
+    } catch (const std::runtime_error& thrown) {
+      error = thrown.what();
+    }
+    ok &= expect_true(error == "model[0].id: unknown value 'yolov8' (expected yolo26)",
+                      "an unknown value names the entry: " + error);
+  }
+  remove_dir(dir);
+  return ok;
+}
+
+bool test_mapping_list_rejects_what_is_not_a_list_of_mappings() {
+  std::string path;
+  std::string error = mapping_list_error("mapping_list_missing", "input:\n  fps: 30\n", &path);
+  bool ok = expect_true(error == path + " is missing model", "a missing list: " + error);
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"model:\n  path: a.tar.gz\n", "model must be a list of mappings, got a mapping"},
+      {"model: a.tar.gz\n", "model must be a list of mappings, got 'a.tar.gz'"},
+      {"model: []\n", "model must be a non-empty list of mappings"},
+      {"model:\n  - path: a.tar.gz\n  - b.tar.gz\n", "model[1] must be a mapping, got 'b.tar.gz'"},
+  };
+  for (const auto& [text, expected] : cases) {
+    error = mapping_list_error("mapping_list_rejects", text);
+    ok &= expect_true(error == expected, expected + ": " + error);
   }
   return ok;
 }
 
-bool test_unknown_model_id_names_the_choices(const std::string& binary) {
+bool test_model_needs_one_entry_per_stream(const std::string& binary) {
+  auto models = shipped_models();
+  models.pop_back();
+  const std::string error = run_error(binary, "test_model_needs_one_entry_per_stream", models);
+  return expect_true(error ==
+                         "[ERR] model has 3 entries and input.source has 4: give one per stream",
+                     "a short model list fails with its key: " + error);
+}
+
+bool test_unknown_model_id_names_the_entry_and_the_choices(const std::string& binary) {
+  auto models = shipped_models();
+  models[1]["id"] = "yolo26-obb";
   const std::string error =
-      run_error(binary, "test_unknown_model_id_names_the_choices",
-                {{"app.model_ids", {"yolov8", "yolo26-obb", "yolo26-pose", "yolo26"}}});
-  return expect_true(error == "[ERR] app.model_ids: unknown value 'yolo26-obb' (expected yolo26, "
+      run_error(binary, "test_unknown_model_id_names_the_entry_and_the_choices", models);
+  return expect_true(error == "[ERR] model[1].id: unknown value 'yolo26-obb' (expected yolo26, "
                               "yolo26-pose, yolo26-seg, yolov8, yolov8-pose, yolov8-seg)",
-                     "an unknown model ID fails with the choices: " + error);
+                     "an unknown model ID fails with the entry and the choices: " + error);
+}
+
+bool test_detection_model_without_labels_names_the_entry(const std::string& binary) {
+  auto models = shipped_models();
+  models[0].erase("labels");
+  const std::string error =
+      run_error(binary, "test_detection_model_without_labels_names_the_entry", models);
+  const std::string suffix = " is missing model[0].labels";
+  return expect_true(error.rfind("[ERR] ", 0) == 0 && error.size() > suffix.size() &&
+                         error.compare(error.size() - suffix.size(), suffix.size(), suffix) == 0,
+                     "a detection model without labels fails with the entry: " + error);
+}
+
+bool test_pose_model_needs_no_labels(const std::string& binary) {
+  // The shipped pose entry has no labels. Every model entry is read before the first model
+  // loads, so the run gets past the config and fails later, on a model the test does not have.
+  const auto models = shipped_models();
+  bool ok = expect_true(models.at(2).count("labels") == 0, "the shipped pose entry has no labels");
+  const std::string error = run_error(binary, "test_pose_model_needs_no_labels", models);
+  ok &= expect_true(error.find("labels") == std::string::npos,
+                    "a pose model without labels passes the config: " + error);
+  return ok;
 }
 
 } // namespace
@@ -356,7 +486,11 @@ int main(int argc, char** argv) {
   ok &= test_frame_with_its_result_in_one_round_is_not_pending();
   ok &= test_first_result_has_its_own_deadline();
   ok &= test_paused_camera_waits_without_a_limit();
-  ok &= test_per_stream_lists_need_one_entry_per_stream(binary);
-  ok &= test_unknown_model_id_names_the_choices(binary);
+  ok &= test_mapping_list_reads_each_entry_by_field();
+  ok &= test_mapping_list_rejects_what_is_not_a_list_of_mappings();
+  ok &= test_model_needs_one_entry_per_stream(binary);
+  ok &= test_unknown_model_id_names_the_entry_and_the_choices(binary);
+  ok &= test_detection_model_without_labels_names_the_entry(binary);
+  ok &= test_pose_model_needs_no_labels(binary);
   return ok ? 0 : 1;
 }

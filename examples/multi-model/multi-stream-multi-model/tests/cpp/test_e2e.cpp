@@ -185,6 +185,10 @@ int run_case(const std::string& binary, const std::string& models_dir,
   const int streams = static_cast<int>(kStreams.size());
   std::vector<std::string> model_paths;
   std::vector<std::string> sources;
+  // The shipped entries, each with its path relative to the generated config, so the test runs
+  // the app's path join. The labels path starts at the working directory, as shipped.
+  const auto shipped = example_common_config(kExampleName).mapping_list("model");
+  std::vector<ConfigScalars> models;
   for (int index = 0; index < streams; ++index) {
     const fs::path model = fs::path(models_dir) / kStreams[static_cast<std::size_t>(index)].file;
     model_paths.push_back(fs::relative(fs::absolute(model), fs::absolute(config_dir)).string());
@@ -196,6 +200,11 @@ int run_case(const std::string& binary, const std::string& models_dir,
       return 1;
     }
     sources.push_back(source_case.urls[static_cast<std::size_t>(index) % source_case.urls.size()]);
+    const auto& entry = shipped.at(static_cast<std::size_t>(index));
+    models.push_back({{"id", entry.string("id")}, {"path", model_paths.back()}});
+    if (const auto labels = entry.string_value("labels")) {
+      models.back()["labels"] = *labels;
+    }
   }
   write_e2e_config(kExampleName, config_path,
                    {{"input.codec", source_case.codec},
@@ -205,9 +214,7 @@ int run_case(const std::string& binary, const std::string& models_dir,
                     {"output.insight.host", "127.0.0.1"},
                     {"output.insight.video_port_base", std::to_string(video_port)},
                     {"output.insight.metadata_port_base", std::to_string(metadata_port)}},
-                   {{"input.source", sources},
-                    // Relative to the generated config, so the test runs the app's path join.
-                    {"app.model_paths", model_paths}});
+                   {{"input.source", sources}}, {{"model", models}});
 
   MetadataJsonListenerOptions metadata_options;
   metadata_options.host = "127.0.0.1";
