@@ -70,7 +70,7 @@ Each stream's track IDs start at 1.
 
 ## Preview
 
-![YOLO26 tiny-drone tracker preview](../../../portal/assets/examples/tracking/yolo26-tiny-drone-tracker/image.jpg)
+![YOLO26 tiny-drone tracker preview](../../../portal/assets/examples/tracking/yolo26-tiny-drone-tracker/image.png)
 
 ## Prerequisites
 
