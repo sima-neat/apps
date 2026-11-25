@@ -18,19 +18,17 @@
 
 #include "neat.h"
 #include "sima_examples/config.h"
+#include "sima_examples/image_folder.h"
 #include "sima_examples/labels.h"
 #include "utils/annotate.h"
 
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
 
-#include <algorithm>
 #include <array>
-#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <map>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -40,7 +38,6 @@ namespace neat = simaai::neat;
 
 namespace {
 
-const std::set<std::string> kImageSuffixes = {".jpg", ".jpeg", ".png", ".bmp"};
 // The per-channel mean and stddev each model family was trained with, on pixels scaled to 0-1:
 // TensorFlow SSD-MobileNet V1 and V2, and TorchVision SSDlite-MobileNetV3.
 struct Normalization {
@@ -91,25 +88,6 @@ neat::Model::Options model_options(const sima_examples::Config& config, int num_
   return options;
 }
 
-// The images directly in folder, in file-name order.
-std::vector<fs::path> image_paths(const fs::path& folder) {
-  std::vector<fs::path> paths;
-  for (const auto& entry : fs::directory_iterator(folder)) {
-    std::string suffix = entry.path().extension().string();
-    std::transform(suffix.begin(), suffix.end(), suffix.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (entry.is_regular_file() && kImageSuffixes.count(suffix) > 0) {
-      paths.push_back(entry.path());
-    }
-  }
-  if (paths.empty()) {
-    throw std::runtime_error("input.source has no .jpg, .jpeg, .png, or .bmp files: " +
-                             folder.string());
-  }
-  std::sort(paths.begin(), paths.end());
-  return paths;
-}
-
 cv::Mat read_image(const fs::path& path) {
   cv::Mat image = cv::imread(path.string(), cv::IMREAD_COLOR);
   if (image.empty()) {
@@ -154,7 +132,7 @@ int run_app(const fs::path& config_path) {
   const int max_detections = config.integer("inference.max_detections");
   // One label per class the model scores, background first, so they also give the class count.
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
-  const auto paths = image_paths(config.string("input.source"));
+  const auto paths = sima_examples::image_paths(config.string("input.source"));
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
   neat::Model model(model_path.string(),
                     model_options(config, static_cast<int>(labels.size()), max_detections));

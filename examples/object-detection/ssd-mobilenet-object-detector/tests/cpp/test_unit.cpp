@@ -1,9 +1,11 @@
 // Unit tests for the SSD-MobileNet object detector: the checks the application leaves to its
 // config, and the annotated images and report it writes. tests/python/test_unit.py runs the same
-// checks in Python.
+// checks in Python. This file also tests the shared C++ image_folder, as agents/rules.md "Tests"
+// says; tests/scripts/test_image_folder.py runs the same cases in Python.
 
 #include "../../src/cpp/utils/annotate.h"
 #include "sima_examples/config.h"
+#include "sima_examples/image_folder.h"
 #include "sima_examples/labels.h"
 #include "sima_examples/testing/test_checks.h"
 
@@ -11,6 +13,8 @@
 #include <opencv2/core.hpp>
 
 #include <filesystem>
+#include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -29,6 +33,35 @@ struct Box {
   float score = 0.0f;
   int class_id = 0;
 };
+
+// An empty scratch folder holding an empty file for each of names.
+fs::path scratch_folder(const std::string& test_name, const std::vector<std::string>& names) {
+  const fs::path folder = fs::temp_directory_path() / ("ssd-mobilenet-" + test_name);
+  fs::remove_all(folder);
+  fs::create_directories(folder);
+  for (const auto& name : names) {
+    std::ofstream(folder / name).put('\0');
+  }
+  return folder;
+}
+
+std::vector<std::string> file_names(const std::vector<fs::path>& paths) {
+  std::vector<std::string> names;
+  for (const auto& path : paths) {
+    names.push_back(path.filename().string());
+  }
+  return names;
+}
+
+// The message image_paths throws for folder, or "" when it returns.
+std::string image_paths_error(const fs::path& folder) {
+  try {
+    (void)sima_examples::image_paths(folder);
+  } catch (const std::runtime_error& error) {
+    return error.what();
+  }
+  return "";
+}
 
 bool is_inside(const fs::path& path, const fs::path& folder) {
   const fs::path relative =
@@ -104,6 +137,55 @@ bool test_draw_detections_draws_the_box_in_its_class_color_on_a_copy() {
   return ok;
 }
 
+bool test_image_paths_matches_suffixes_in_any_case() {
+  const fs::path folder = scratch_folder(
+      "image-suffixes", {"a.jpg", "b.JPEG", "c.Png", "d.BMP", "e.gif", "f.txt", "jpg"});
+  const auto names = file_names(sima_examples::image_paths(folder));
+  fs::remove_all(folder);
+  return expect_true(names == std::vector<std::string>{"a.jpg", "b.JPEG", "c.Png", "d.BMP"},
+                     "image_paths matches .jpg, .jpeg, .png, and .bmp in any case");
+}
+
+bool test_image_paths_lists_images_in_file_name_order() {
+  // The order is by character code, so 10.jpg comes before 2.jpg and B.png before a.png.
+  const fs::path folder =
+      scratch_folder("image-order", {"c.bmp", "b.jpg", "a.png", "B.png", "2.jpg", "10.jpg"});
+  const auto names = file_names(sima_examples::image_paths(folder));
+  fs::remove_all(folder);
+  return expect_true(
+      names == std::vector<std::string>{"10.jpg", "2.jpg", "B.png", "a.png", "b.jpg", "c.bmp"},
+      "image_paths lists the images in file-name order");
+}
+
+bool test_image_paths_skips_subfolders_and_their_files() {
+  const fs::path folder = scratch_folder("image-subfolders", {"a.jpg"});
+  // A folder is not an image, whatever its name ends with, and images inside one are skipped.
+  fs::create_directories(folder / "archive.jpg");
+  fs::create_directories(folder / "more");
+  std::ofstream(folder / "more" / "b.jpg").put('\0');
+  const auto names = file_names(sima_examples::image_paths(folder));
+  fs::remove_all(folder);
+  return expect_true(names == std::vector<std::string>{"a.jpg"},
+                     "image_paths skips subfolders and the files in them");
+}
+
+bool test_image_paths_names_the_folder_when_it_has_no_images() {
+  const fs::path folder = scratch_folder("image-none", {"notes.txt"});
+  fs::create_directories(folder / "archive.jpg");
+  const std::string error = image_paths_error(folder);
+  fs::remove_all(folder);
+  return expect_true(error == "no .jpg, .jpeg, .png, or .bmp files in " + folder.string(),
+                     "a folder with no images is named: " + error);
+}
+
+bool test_image_paths_names_a_missing_folder() {
+  const fs::path folder = fs::temp_directory_path() / "ssd-mobilenet-image-absent";
+  fs::remove_all(folder);
+  const std::string error = image_paths_error(folder);
+  return expect_true(error == "image folder does not exist: " + folder.string(),
+                     "a missing folder is named: " + error);
+}
+
 } // namespace
 
 int main() {
@@ -111,5 +193,10 @@ int main() {
   ok &= test_output_name_keeps_the_source_extension();
   ok &= test_detections_record_lists_each_box_with_its_label();
   ok &= test_draw_detections_draws_the_box_in_its_class_color_on_a_copy();
+  ok &= test_image_paths_matches_suffixes_in_any_case();
+  ok &= test_image_paths_lists_images_in_file_name_order();
+  ok &= test_image_paths_skips_subfolders_and_their_files();
+  ok &= test_image_paths_names_the_folder_when_it_has_no_images();
+  ok &= test_image_paths_names_a_missing_folder();
   return ok ? 0 : 1;
 }

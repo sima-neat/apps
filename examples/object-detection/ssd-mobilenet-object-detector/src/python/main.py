@@ -23,11 +23,11 @@ else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
 from sima_examples.config import Config
+from sima_examples.image_folder import image_paths
 from sima_examples.labels import load_labels
 from utils import annotate
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
 # The per-channel mean and stddev each model family was trained with, on pixels scaled to 0-1:
 # TensorFlow SSD-MobileNet V1 and V2, and TorchVision SSDlite-MobileNetV3.
 NORMALIZATION = {
@@ -62,18 +62,6 @@ def model_options(config: Config, num_classes: int, max_detections: int) -> pyne
     options.nms_iou_threshold = config.number("inference.nms_iou")
     options.top_k = max_detections
     return options
-
-
-def image_paths(folder: Path) -> list[Path]:
-    """The images directly in `folder`, in file-name order."""
-    paths = sorted(
-        path
-        for path in folder.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
-    )
-    if not paths:
-        raise ValueError(f"input.source has no .jpg, .jpeg, .png, or .bmp files: {folder}")
-    return paths
 
 
 def read_image(path: Path) -> np.ndarray:

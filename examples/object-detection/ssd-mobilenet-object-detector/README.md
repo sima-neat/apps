@@ -129,7 +129,8 @@ packaged `assets/datasets/coco` folder. Both implementations print this format.
 
 ## Troubleshooting
 
-- `input.source has no .jpg, .jpeg, .png, or .bmp files`: point `input.source` at a folder that holds images directly, not in subfolders.
+- `image folder does not exist`: set `input.source` to an existing folder; a relative path starts at the working directory.
+- `no .jpg, .jpeg, .png, or .bmp files in <folder>`: point `input.source` at a folder that holds images directly, not in subfolders.
 - If boxes look vertically squished or shifted toward the image center, the resize mode is wrong. SSD models need a stretch resize, which the example sets.
 - If detections are missing but the application runs, lower `inference.min_score`: INT8 quantization can lower the scores of weak detections.
 - If the model fails to load, check that `model.path` points to the downloaded `_mpk.tar.gz` file; a relative path starts at the config file.
