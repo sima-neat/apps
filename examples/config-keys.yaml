@@ -5,7 +5,9 @@
 # setting that is not listed, add it here in the same pull request.
 # tests/scripts/test_config_keys.py checks the config files of every converted example.
 #
-# Types: string, integer, number, boolean, string_list (a list of strings, or one string).
+# Types: string, integer, number, boolean, string_list (a list of strings, or one string), and
+# mapping_list (a non-empty list of mappings, whose keys are the registered keys its fields list,
+# without their prefix).
 
 model.path:
   type: string
@@ -16,6 +18,10 @@ model.id:
 model.labels:
   type: string
   meaning: Class-label file with one label per line. A relative path starts at the working directory.
+model:
+  type: mapping_list
+  fields: [model.id, model.path, model.labels]
+  meaning: One model per stream, for an example that runs a different model on each stream. Entry i is the model of stream i of input.source. Each field means the same as the registered model.<field>. An example with one model sets model.path, model.id, and model.labels instead.
 
 input.type:
   type: string
