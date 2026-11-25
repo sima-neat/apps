@@ -63,20 +63,20 @@ template <typename SampleT> FrameMetadata frame_metadata(const SampleT& sample, 
 
 namespace detail {
 
-// One box as Insight reads it: [x, y, width, height] in frame pixels, clamped to the frame.
+inline double clip(double value, int limit) {
+  return std::min(std::max(value, 0.0), static_cast<double>(limit));
+}
+
+// One box as Insight reads it: [x, y, width, height] in frame pixels. Both corners are clipped to
+// the frame before the size is measured, so a box past an edge gets its visible width, and a box
+// outside the frame gets zero size.
 template <typename BoxT>
 nlohmann::json entry(std::string entry_id, const BoxT& box, const std::vector<std::string>& labels,
                      int frame_w, int frame_h) {
-  const int x1 = std::max(0, static_cast<int>(box.x1));
-  const int y1 = std::max(0, static_cast<int>(box.y1));
-  int width = std::max(0, static_cast<int>(box.x2 - box.x1));
-  int height = std::max(0, static_cast<int>(box.y2 - box.y1));
-  if (x1 + width > frame_w) {
-    width = frame_w - x1;
-  }
-  if (y1 + height > frame_h) {
-    height = frame_h - y1;
-  }
+  const int x1 = static_cast<int>(clip(box.x1, frame_w));
+  const int y1 = static_cast<int>(clip(box.y1, frame_h));
+  const int width = std::max(0, static_cast<int>(clip(box.x2, frame_w)) - x1);
+  const int height = std::max(0, static_cast<int>(clip(box.y2, frame_h)) - y1);
   const std::string& label = box.class_id >= 0 && box.class_id < static_cast<int>(labels.size())
                                  ? labels[static_cast<std::size_t>(box.class_id)]
                                  : kUnknownLabel;
@@ -85,8 +85,8 @@ nlohmann::json entry(std::string entry_id, const BoxT& box, const std::vector<st
       {"label", label},
       {"confidence", box.score},
       {"bbox",
-       {static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(std::max(0, width)),
-        static_cast<float>(std::max(0, height))}},
+       {static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(width),
+        static_cast<float>(height)}},
   };
 }
 
@@ -126,17 +126,26 @@ std::string serialize(const BoxRange& boxes, const std::vector<std::string>& lab
   return detail::message("object-detection", {{"objects", std::move(objects)}}, frame);
 }
 
-// The tracking message: each box with its label and its track ID (`track_id`), which Insight
-// colors and draws with a trail.
+// The `data.tracks` entries of a tracking message, for an application that builds its own
+// message: each box with its label and its track ID (`track_id`) as `id`.
 template <typename TrackRange>
-std::string serialize_tracks(const TrackRange& tracks, const std::vector<std::string>& labels,
-                             int frame_w, int frame_h, const FrameMetadata& frame) {
+nlohmann::json track_entries(const TrackRange& tracks, const std::vector<std::string>& labels,
+                             int frame_w, int frame_h) {
   nlohmann::json entries = nlohmann::json::array();
   for (const auto& track : tracks) {
     entries.push_back(
         detail::entry(std::to_string(track.track_id), track, labels, frame_w, frame_h));
   }
-  return detail::message("tracking", {{"tracks", std::move(entries)}}, frame);
+  return entries;
+}
+
+// The tracking message: each box with its label and its track ID (`track_id`), which Insight
+// colors and draws with a trail.
+template <typename TrackRange>
+std::string serialize_tracks(const TrackRange& tracks, const std::vector<std::string>& labels,
+                             int frame_w, int frame_h, const FrameMetadata& frame) {
+  return detail::message("tracking", {{"tracks", track_entries(tracks, labels, frame_w, frame_h)}},
+                         frame);
 }
 
 } // namespace sima_examples::detection_egress

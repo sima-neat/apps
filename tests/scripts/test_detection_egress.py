@@ -10,6 +10,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 APPS_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(APPS_ROOT / "support" / "python"))
 
@@ -66,7 +68,7 @@ def test_message_matches_the_cpp_envelope():
                     "id": "obj_1",
                     "label": "person",
                     "confidence": 0.75,
-                    "bbox": [10.0, 0.0, 25.0, 22.0],
+                    "bbox": [10.0, 0.0, 25.0, 20.0],
                 },
                 {
                     "id": "obj_2",
@@ -78,7 +80,7 @@ def test_message_matches_the_cpp_envelope():
                     "id": "obj_3",
                     "label": "unknown",
                     "confidence": 0.25,
-                    "bbox": [105.0, 10.0, 0.0, 8.0],
+                    "bbox": [100.0, 10.0, 0.0, 8.0],
                 },
             ]
         },
@@ -148,3 +150,42 @@ def test_tracking_message_matches_the_cpp_envelope():
             {"id": "12", "label": "unknown", "confidence": 0.5, "bbox": [90.0, 80.0, 10.0, 15.0]},
         ]
     }
+
+
+# Boxes on a 640x480 frame and the [x, y, width, height] Insight gets: both corners are clipped
+# to the frame first, then the size is measured. multi-stream-tracker's tests use the first three.
+# high-density's C++ unit test checks the same boxes.
+CLIPPED = [
+    pytest.param(Box(-44.59, 10.0, 136.98, 90.0, 0.8, 0), [0.0, 10.0, 136.0, 80.0], id="left-edge"),
+    pytest.param(
+        Box(600.0, 400.0, 700.0, 500.0, 0.8, 0), [600.0, 400.0, 40.0, 80.0], id="right-bottom-edge"
+    ),
+    pytest.param(
+        Box(-200.0, -200.0, -10.0, -10.0, 0.8, 0), [0.0, 0.0, 0.0, 0.0], id="outside-top-left"
+    ),
+    pytest.param(
+        Box(700.0, 10.0, 760.0, 50.0, 0.8, 0), [640.0, 10.0, 0.0, 40.0], id="outside-right"
+    ),
+    # int(x2) - int(x1), not int(x2 - x1), which would give 29 x 39.
+    pytest.param(Box(10.6, 20.6, 40.4, 60.4, 0.8, 0), [10.0, 20.0, 30.0, 40.0], id="rounding"),
+]
+
+
+@pytest.mark.parametrize(("box", "bbox"), CLIPPED)
+def test_box_is_clipped_to_the_frame_before_its_size_is_measured(box, bbox):
+    message = json.loads(detection_egress.serialize([box], LABELS, 640, 480, FRAME))
+    assert message["data"]["objects"][0]["bbox"] == bbox
+
+
+@pytest.mark.parametrize(("box", "bbox"), CLIPPED)
+def test_track_entries_clip_as_boxes_do(box, bbox):
+    track = Track(box.x1, box.y1, box.x2, box.y2, 0.8, 1, track_id=5)
+    assert detection_egress.track_entries([track], LABELS, 640, 480) == [
+        {"id": "5", "label": LABELS[1], "confidence": 0.8, "bbox": bbox}
+    ]
+
+
+def test_tracking_message_holds_the_track_entries():
+    tracks = [Track(10.0, 20.0, 40.0, 60.0, 0.75, 0, track_id=7)]
+    message = json.loads(detection_egress.serialize_tracks(tracks, LABELS, 640, 480, FRAME))
+    assert message["data"] == {"tracks": detection_egress.track_entries(tracks, LABELS, 640, 480)}

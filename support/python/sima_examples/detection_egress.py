@@ -86,24 +86,35 @@ def serialize_tracks(
 ) -> str:
     """The tracking message: each box with its label and its track ID, which Insight colors and
     draws with a trail."""
-    entries = [
-        _entry(str(track.track_id), track, labels, frame_w, frame_h) for track in tracks
-    ]
-    return _message("tracking", {"tracks": entries}, frame)
+    return _message("tracking", {"tracks": track_entries(tracks, labels, frame_w, frame_h)}, frame)
+
+
+def track_entries(
+    tracks: Iterable[Track], labels: list[str], frame_w: int, frame_h: int
+) -> list[dict]:
+    """The `data.tracks` entries of a tracking message, for an application that builds its own
+    message: each box with its label and its track ID as `id`."""
+    return [_entry(str(track.track_id), track, labels, frame_w, frame_h) for track in tracks]
+
+
+def _clip(value: float, limit: int) -> float:
+    return min(max(float(value), 0.0), float(limit))
 
 
 def _entry(entry_id: str, box: Box, labels: list[str], frame_w: int, frame_h: int) -> dict:
-    """One box as Insight reads it: [x, y, width, height] in frame pixels, clamped to the frame."""
-    x1 = max(0, int(box.x1))
-    y1 = max(0, int(box.y1))
-    width = min(max(0, int(box.x2 - box.x1)), frame_w - x1)
-    height = min(max(0, int(box.y2 - box.y1)), frame_h - y1)
+    """One box as Insight reads it: [x, y, width, height] in frame pixels. Both corners are
+    clipped to the frame before the size is measured, so a box past an edge gets its visible
+    width, and a box outside the frame gets zero size."""
+    x1 = int(_clip(box.x1, frame_w))
+    y1 = int(_clip(box.y1, frame_h))
+    width = max(0, int(_clip(box.x2, frame_w)) - x1)
+    height = max(0, int(_clip(box.y2, frame_h)) - y1)
     label = labels[box.class_id] if 0 <= box.class_id < len(labels) else UNKNOWN_LABEL
     return {
         "id": entry_id,
         "label": label,
         "confidence": box.score,
-        "bbox": [float(x1), float(y1), float(max(0, width)), float(max(0, height))],
+        "bbox": [float(x1), float(y1), float(width), float(height)],
     }
 
 
