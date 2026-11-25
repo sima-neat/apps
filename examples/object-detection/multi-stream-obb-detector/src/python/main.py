@@ -259,10 +259,16 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         run.close()
 
+    # Core candidate: Core forwards fd 1 through a detached thread (start_stdio_filter) that the
+    # process exit can stop before it writes the last lines. flush=True puts each line into the
+    # pipe earlier, which narrows the race but does not close it.
     for index, sender in enumerate(metadata_senders):
-        print(f"[stream {index}] processed={processed[index]}")
+        print(f"[stream {index}] processed={processed[index]}", flush=True)
         if sender.stats().send_failures:
-            print(f"[stream {index}] {sender.stats().send_failures} metadata messages dropped")
+            print(
+                f"[stream {index}] {sender.stats().send_failures} metadata messages dropped",
+                flush=True,
+            )
     return 0
 
 

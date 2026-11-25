@@ -73,6 +73,15 @@ setup belongs to the Insight documentation or the installed Insight skill.
 Oriented-box decoders emit `BBOX_OBB_V1`, which the axis-aligned `SimaRender` rejects. Draw
 oriented boxes in application code or send them as metadata.
 
+## Result lines on stdout
+
+- Once Core starts GStreamer, it forwards stdout and stderr through a detached thread, unless
+  `SIMA_GST_SUPPRESS_DEVICE_LOGS=0` is set. When stdout is a pipe or a file, a line still in the
+  stdout buffer at exit can be lost, and the exit code is still 0.
+- Flush each result line when you print it: `std::endl` in C++, `print(..., flush=True)` in
+  Python. This narrows the race but does not close it, so a test that reads the last lines can
+  still miss them. `src/gst/GstInit.cpp` (`start_stdio_filter`) holds the forwarding.
+
 ## Local display
 
 For a local window, check the selected GStreamer sink or OpenCV backend on the target. The
