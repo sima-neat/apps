@@ -124,7 +124,11 @@ export function storeTheme(theme) {
   const domain = cookieDomain();
   const domainPart = domain ? `; Domain=.${domain}` : "";
   const securePart = window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `${THEME_COOKIE}=${encodeURIComponent(theme)}; Path=/; Max-Age=31536000; SameSite=Lax${securePart}${domainPart}`;
+  try {
+    document.cookie = `${THEME_COOKIE}=${encodeURIComponent(theme)}; Path=/; Max-Age=31536000; SameSite=Lax${securePart}${domainPart}`;
+  } catch {
+    // Restricted embedding: localStorage may still hold it.
+  }
   THEME_KEYS.forEach((key) => {
     try {
       window.localStorage.setItem(key, theme);

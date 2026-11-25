@@ -1,7 +1,7 @@
 // node --test portal/src/ (sima-neat/apps#776)
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readCookieTheme, readInitialTheme, readStoredTheme, themeFromShellEvent, urlTheme } from "./theme.js";
+import { readCookieTheme, readInitialTheme, readStoredTheme, storeTheme, themeFromShellEvent, urlTheme } from "./theme.js";
 
 const storage = (values = {}) => ({ getItem: (key) => (key in values ? values[key] : null) });
 const STORED_LIGHT = { cookie: "sima-neat-theme=light", storage: storage({ "portal-theme": "light", theme: "light" }) };
@@ -65,4 +65,25 @@ test("a browser that refuses localStorage and the cookie still gets ?theme (Code
   assert.deepEqual(readInitialTheme(), { theme: "dark", persist: false });
   fakeWindow.location.search = "";
   assert.deepEqual(readInitialTheme(), { theme: "light", persist: true }, "falls back to the system preference");
+});
+
+test("storing the theme survives a refused cookie and still writes localStorage (Codex on #833)", (t) => {
+  const stored = new Map();
+  const fakeDocument = {};
+  Object.defineProperty(fakeDocument, "cookie", {
+    set() {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    },
+  });
+  globalThis.window = {
+    location: { hostname: "localhost", protocol: "https:" },
+    localStorage: { setItem: (key, value) => stored.set(key, value) },
+  };
+  globalThis.document = fakeDocument;
+  t.after(() => {
+    delete globalThis.window;
+    delete globalThis.document;
+  });
+  assert.doesNotThrow(() => storeTheme("dark"));
+  assert.equal(stored.get("portal-theme"), "dark");
 });
