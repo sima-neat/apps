@@ -85,7 +85,6 @@ neat::Model::Options model_options(const sima_examples::RtspStreamInfo& stream) 
   // which names no profile, but would follow a package that does. The 600-point limit is
   // Core's default top_k for every profile.
   options.superpoint.profile = neat::SuperPointProfile::A65V1;
-  options.processcvu.post_run_target = "A65";
   return options;
 }
 

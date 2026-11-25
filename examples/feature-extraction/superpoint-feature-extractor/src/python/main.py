@@ -56,7 +56,6 @@ def model_options(stream: RtspStreamInfo) -> pyneat.ModelOptions:
     # which names no profile, but would follow a package that does. The 600-point limit is
     # Core's default top_k for every profile.
     options.superpoint.profile = pyneat.SuperPointProfile.A65V1
-    options.processcvu.post_run_target = "A65"
     return options
 
 

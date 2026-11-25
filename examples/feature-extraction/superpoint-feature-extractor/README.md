@@ -92,14 +92,14 @@ Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/gett
 - The `w8a8` build calibrates on HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/main/models/superpoint/model.yaml)). The `w8a16` and `w16a16` build profiles need no calibration images.
 - The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`.
 
-Copy that file to the DevKit, into `models/superpoint/w8a8/` under `prebuilt-apps/`. In the commands below, `<path>` is the folder that holds `superpoint_w8a8_mpk.tar.gz`. From `prebuilt-apps/`:
+If you compiled the model on another machine, copy it to the DevKit first, for example with `scp superpoint_w8a8_mpk.tar.gz <user>@<devkit-ip>:<path>/`.
+
+Then copy the file into `models/superpoint/w8a8/` under `prebuilt-apps/`. In the commands below, `<path>` is the folder on the DevKit that holds `superpoint_w8a8_mpk.tar.gz`. From `prebuilt-apps/`:
 
 ```bash
 mkdir -p models/superpoint/w8a8
 cp <path>/superpoint_w8a8_mpk.tar.gz models/superpoint/w8a8/
 ```
-
-If you compiled the model on another machine, copy it to the DevKit first, for example with `scp superpoint_w8a8_mpk.tar.gz <user>@<devkit-ip>:<path>/`.
 
 The packaged `model.path` already points to it. A relative `model.path` starts at the config file. From `${APP_DIR}/src/common/`, `../../../../../models/` is `prebuilt-apps/models/`. For another build profile, set `model.path` to its package, or to the absolute path of the `.tar.gz` file.
 
@@ -154,7 +154,8 @@ Insight shows the video with a dot on every feature point.
 - A missing or incompatible SuperPoint contract fails during model construction.
 - Verify the Insight host and UDP ports if the video or the points are absent.
 - `frame size <W>x<H> differs from the stream's <W>x<H>` appears when the stream changes resolution during the run. The stream must keep one size. Restart the application after a change.
-- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>` appears when a value left at 0 cannot be read. Either the source is unreachable from the board, or it does not report that value. Verify the URL from the board itself. For a reachable source, set the value the message names.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>` appears when a value left at 0 cannot be read. Verify the URL from the board itself, since the source may be unreachable from it.
+- A reachable source that does not report its size or rate needs that value set. Set `input.width`, `input.height`, or `input.fps`, as the message names.
 
 ## Source Files
 
