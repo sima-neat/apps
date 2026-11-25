@@ -131,17 +131,23 @@ std::string coherence_problem(const std::string& name, const cv::Mat& depth) {
 }
 
 // Pearson correlation of the app's depth with the FP32 reference over the image content, or the
-// problem.
+// problem. Leaves has_reference false, with no problem, when this image has no reference depth:
+// the fixtures cover the bundled assets/datasets-test/coco images, and a custom
+// SIMANEAT_APPS_TEST_INPUT_DIR holds other images, to which only the coherence checks apply. A
+// reference that is present but not the expected size is a broken fixture, and is a problem.
 std::string reference_correlation(const fs::path& image_path, const cv::Mat& depth,
-                                  double& correlation) {
+                                  double& correlation, bool& has_reference) {
+  has_reference = false;
   const fs::path reference_path = reference_dir() / (image_path.stem().string() + ".png");
+  if (!fs::is_regular_file(reference_path)) {
+    return "";
+  }
   const cv::Mat reference = cv::imread(reference_path.string(), cv::IMREAD_UNCHANGED);
   if (reference.empty() || reference.rows != kReferenceHeight ||
       reference.cols != kReferenceWidth) {
     std::ostringstream out;
-    out << "no " << kReferenceWidth << "x" << kReferenceHeight << " reference depth for "
-        << image_path.filename().string() << " at " << reference_path.string()
-        << "; this check needs the assets/datasets-test/coco images";
+    out << reference_path.string() << " is not a " << kReferenceWidth << "x" << kReferenceHeight
+        << " reference depth map";
     return out.str();
   }
 
@@ -171,6 +177,7 @@ std::string reference_correlation(const fs::path& image_path, const cv::Mat& dep
   a -= cv::mean(a)[0];
   b -= cv::mean(b)[0];
   correlation = a.dot(b) / std::sqrt(a.dot(a) * b.dot(b));
+  has_reference = true;
   return "";
 }
 
@@ -219,6 +226,7 @@ int run_model_case(const std::string& binary, const std::string& model_path,
   report << std::fixed << std::setprecision(4);
   double total = 0.0;
   double lowest = 1.0;
+  int compared = 0;
   std::string problem;
   for (const fs::path& image_path : images) {
     const fs::path output = fs::path(out_dir) / (image_path.stem().string() + ".png");
@@ -228,14 +236,19 @@ int run_model_case(const std::string& binary, const std::string& model_path,
       problem = coherence_problem(output.filename().string(), depth);
     }
     double correlation = 0.0;
+    bool has_reference = false;
     if (problem.empty()) {
-      problem = reference_correlation(image_path, depth, correlation);
+      problem = reference_correlation(image_path, depth, correlation, has_reference);
     }
     if (!problem.empty()) {
       break;
     }
+    if (!has_reference) {
+      continue;
+    }
     report << " " << image_path.filename().string() << "=" << correlation;
     total += correlation;
+    ++compared;
     lowest = std::min(lowest, correlation);
     if (correlation < kMinImageCorrelation) {
       std::ostringstream out;
@@ -255,7 +268,17 @@ int run_model_case(const std::string& binary, const std::string& model_path,
     return 1;
   }
 
-  const double mean = total / static_cast<double>(images.size());
+  // A custom SIMANEAT_APPS_TEST_INPUT_DIR can hold images with no reference depth. The coherence
+  // checks above still ran on every one; only the FP32 floors need a reference.
+  if (compared == 0) {
+    std::cout << "[DEPTH] " << fs::path(model_path).filename().string() << ": " << images.size()
+              << " coherent depth maps. None of these images has a reference depth in "
+              << reference_dir().filename().string() << ", so the FP32 comparison was skipped\n";
+    std::cout << "[OK] " << label << ": " << images.size() << " coherent depth maps\n";
+    return 0;
+  }
+
+  const double mean = total / static_cast<double>(compared);
   std::cout << "[DEPTH] " << fs::path(model_path).filename().string()
             << ": correlation with the FP32 reference mean=" << std::fixed << std::setprecision(4)
             << mean << " min=" << lowest << report.str() << "\n";
@@ -264,8 +287,8 @@ int run_model_case(const std::string& binary, const std::string& model_path,
               << " < " << kMinMeanCorrelation << "\n";
     return 1;
   }
-  std::cout << "[OK] " << label << ": " << images.size()
-            << " coherent depth maps that agree with the FP32 reference\n";
+  std::cout << "[OK] " << label << ": " << compared << " of " << images.size()
+            << " coherent depth maps agree with the FP32 reference\n";
   return 0;
 }
 
@@ -294,6 +317,22 @@ int main(int argc, char** argv) {
     env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
                 "directory with test images (assets/datasets-test/coco is empty or missing)");
     return kSkipCode;
+  }
+
+  // The fixtures are committed, so a missing set is a broken checkout rather than a custom image
+  // directory. Per-image absence is handled in reference_correlation.
+  bool any_reference = false;
+  if (fs::is_directory(reference_dir())) {
+    for (const auto& entry : fs::directory_iterator(reference_dir())) {
+      if (entry.is_regular_file() && entry.path().extension() == ".png") {
+        any_reference = true;
+        break;
+      }
+    }
+  }
+  if (!any_reference) {
+    std::cerr << "[FAIL] no reference depth fixtures at " << reference_dir().string() << "\n";
+    return 1;
   }
 
   for (const std::string& model_path : model_paths) {

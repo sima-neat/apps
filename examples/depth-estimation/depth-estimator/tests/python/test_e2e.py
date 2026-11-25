@@ -78,17 +78,31 @@ def assert_depth_map_is_coherent(path: Path, depth) -> None:
     )
 
 
-def reference_correlation(image_path: Path, depth) -> float:
+def reference_depth_for(image_path: Path):
+    """The FP32 reference depth for an image, or None when this image set has no reference.
+
+    The fixtures cover the bundled assets/datasets-test/coco images. A custom
+    SIMANEAT_APPS_TEST_INPUT_DIR holds other images, which have no reference, so only the
+    coherence checks apply to them. A reference that is present but not the expected size is a
+    broken fixture rather than a custom image set, and fails.
+    """
+    import cv2
+
+    reference_path = REFERENCE_DIR / f"{image_path.stem}.png"
+    if not reference_path.is_file():
+        return None
+    reference = cv2.imread(str(reference_path), cv2.IMREAD_UNCHANGED)
+    assert reference is not None and reference.shape == (REFERENCE_HEIGHT, REFERENCE_WIDTH), (
+        f"{reference_path} is not a {REFERENCE_WIDTH}x{REFERENCE_HEIGHT} reference depth map"
+    )
+    return reference
+
+
+def reference_correlation(image_path: Path, depth, reference) -> float:
     """Pearson correlation of the app's depth with the FP32 reference over the image content."""
     import cv2
     import numpy as np
 
-    reference_path = REFERENCE_DIR / f"{image_path.stem}.png"
-    reference = cv2.imread(str(reference_path), cv2.IMREAD_UNCHANGED)
-    assert reference is not None and reference.shape == (REFERENCE_HEIGHT, REFERENCE_WIDTH), (
-        f"no {REFERENCE_WIDTH}x{REFERENCE_HEIGHT} reference depth for {image_path.name} at "
-        f"{reference_path}; this check needs the assets/datasets-test/coco images"
-    )
     gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
     x, y, w, h = cv2.boundingRect(cv2.findNonZero((gray > CONTENT_THRESHOLD).astype(np.uint8)))
     rows, cols = gray.shape
@@ -144,6 +158,10 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
+        assert REFERENCE_DIR.is_dir() and any(REFERENCE_DIR.glob("*.png")), (
+            f"no reference depth fixtures at {REFERENCE_DIR}"
+        )
+
         images = supported_image_files(test_images_dir)
         assert_saved_frames_are_usable(tmp_output_dir, len(images))
         correlations = {}
@@ -152,15 +170,30 @@ class TestE2E:
             assert output.is_file(), f"no depth map saved for {image_path.name}"
             depth = colormap_depth(output)
             assert_depth_map_is_coherent(output, depth)
-            correlations[image_path.name] = reference_correlation(image_path, depth)
+            reference = reference_depth_for(image_path)
+            if reference is not None:
+                correlations[image_path.name] = reference_correlation(image_path, depth, reference)
 
-        mean = sum(correlations.values()) / len(correlations)
+        mean = sum(correlations.values()) / len(correlations) if correlations else 0.0
         with capsys.disabled():
-            print(
-                f"\n[DEPTH] {e2e_model_path.name}: correlation with the FP32 reference "
-                f"mean={mean:.4f} min={min(correlations.values()):.4f} "
-                + " ".join(f"{name}={value:.4f}" for name, value in correlations.items())
-            )
+            if correlations:
+                print(
+                    f"\n[DEPTH] {e2e_model_path.name}: correlation with the FP32 reference "
+                    f"mean={mean:.4f} min={min(correlations.values()):.4f} "
+                    + " ".join(f"{name}={value:.4f}" for name, value in correlations.items())
+                )
+            else:
+                print(
+                    f"\n[DEPTH] {e2e_model_path.name}: {len(images)} coherent depth maps. None of "
+                    f"these images has a reference depth in {REFERENCE_DIR.name}, so the FP32 "
+                    f"comparison was skipped"
+                )
+
+        # A custom SIMANEAT_APPS_TEST_INPUT_DIR can hold images with no reference depth. The
+        # coherence checks above still ran on every one; only the FP32 floors need a reference.
+        if not correlations:
+            return
+
         low = {name: value for name, value in correlations.items() if value < MIN_IMAGE_CORRELATION}
         assert not low, f"depth maps disagree with the FP32 reference: {low}"
         assert mean >= MIN_MEAN_CORRELATION, (
