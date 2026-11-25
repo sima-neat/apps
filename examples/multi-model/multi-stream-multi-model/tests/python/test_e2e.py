@@ -61,6 +61,44 @@ def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes
                 return
 
 
+def _udp_rcvbuf_errors() -> int | None:
+    """RcvbufErrors of the Udp: line of /proc/net/snmp: datagrams the kernel dropped because a
+    UDP socket's receive buffer was full, for every UDP socket of the host. None without the
+    file."""
+    try:
+        rows = [
+            line.split()
+            for line in Path("/proc/net/snmp").read_text().splitlines()
+            if line.startswith("Udp:")
+        ]
+    except OSError:
+        return None
+    return int(rows[1][rows[0].index("RcvbufErrors")])
+
+
+def _video_report(headers: list[list[bytes]], rcvbufs: list[int], drops_before: int | None) -> str:
+    """What each video port received, to tell packets the test's sockets dropped from frames the
+    app did not send. A gap in the RTP sequence numbers is a packet sent and not received."""
+    lines = []
+    for index, port_headers in enumerate(headers):
+        sequence = [int.from_bytes(header[2:4], "big") for header in port_headers]
+        missing = sum((b - a - 1) & 0xFFFF for a, b in zip(sequence, sequence[1:]))
+        timestamps = {int.from_bytes(header[4:8], "big") for header in port_headers}
+        lines.append(
+            f"video port {index}: {len(port_headers)} RTP packets, {missing} sequence numbers "
+            f"missing between them, {len(timestamps)} RTP timestamps for {FRAMES} frames, "
+            f"SO_RCVBUF {rcvbufs[index]}"
+        )
+    drops_after = _udp_rcvbuf_errors()
+    drops = "unknown" if None in (drops_before, drops_after) else drops_after - drops_before
+    try:
+        rmem_max = Path("/proc/sys/net/core/rmem_max").read_text().strip()
+    except OSError:
+        rmem_max = "unknown"
+    lines.append(f"Udp RcvbufErrors during the run, all sockets: {drops}; rmem_max {rmem_max}")
+    return "\n".join(lines)
+
+
 def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
     """Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a
     video frame's RTP timestamp."""
@@ -137,7 +175,9 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
     headers: list[list[bytes]] = [[] for _ in range(streams)]
     stop = threading.Event()
     video_sockets = []
+    rcvbufs = []
     drains = []
+    drops_before = None
     process = None
     stdout = stderr = ""
     with MetadataJsonListener(
@@ -150,6 +190,7 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
             for index in range(streams):
                 video_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
                 video_sockets[-1].bind(("127.0.0.1", video_port + index))
+                rcvbufs.append(video_sockets[-1].getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))
                 drains.append(
                     threading.Thread(
                         target=_drain_video,
@@ -158,6 +199,7 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
                     )
                 )
                 drains[-1].start()
+            drops_before = _udp_rcvbuf_errors()
             process = subprocess.Popen(
                 [sys.executable, str(MAIN_PY), "--config", str(config_path)],
                 stdout=subprocess.PIPE,
@@ -196,6 +238,7 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         f"exit {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     )
     assert not errors, errors
+    video_report = _video_report(headers, rcvbufs, drops_before)
     entries_by_stream = {}
     for index, (_, metadata_type, key) in enumerate(STREAMS):
         start_line = re.search(
@@ -248,7 +291,8 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         # A frame the video link dropped leaves its message unpaired, so allow 5%, as for the
         # count.
         assert len(unpaired) <= len(stream_messages) * 5 // 100, (
-            f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}"
+            f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}\n"
+            f"{video_report}"
         )
         times = arrivals[index][len(arrivals[index]) // 10:]
         assert len(times) > 10, f"stream {index}: {len(times)} messages arrived during the run"
