@@ -87,3 +87,27 @@ test("storing the theme survives a refused cookie and still writes localStorage 
   assert.doesNotThrow(() => storeTheme("dark"));
   assert.equal(stored.get("portal-theme"), "dark");
 });
+
+test("reading the stored theme survives a refused cookie or localStorage (Codex on #833)", (t) => {
+  const fakeDocument = {};
+  Object.defineProperty(fakeDocument, "cookie", {
+    get() {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    },
+  });
+  globalThis.document = fakeDocument;
+  t.after(() => {
+    delete globalThis.document;
+  });
+  assert.equal(readCookieTheme(), null);
+  globalThis.window = {};
+  Object.defineProperty(globalThis.window, "localStorage", {
+    get() {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    },
+  });
+  t.after(() => {
+    delete globalThis.window;
+  });
+  assert.equal(readStoredTheme(), null, "and a refused localStorage");
+});

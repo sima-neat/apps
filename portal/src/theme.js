@@ -26,7 +26,16 @@ export function urlTheme(search) {
   }
 }
 
-export function readCookieTheme(cookie = document.cookie) {
+/** read(), or fallback when the browser refuses it (sandboxed or privacy-restricted embedding). */
+function safely(read, fallback) {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
+export function readCookieTheme(cookie = safely(() => document.cookie, "")) {
   const entry = cookie
     .split("; ")
     .find((item) => item.startsWith(`${THEME_COOKIE}=`));
@@ -40,7 +49,10 @@ export function readCookieTheme(cookie = document.cookie) {
   }
 }
 
-export function readStoredTheme(storage = window.localStorage) {
+export function readStoredTheme(storage = safely(() => window.localStorage, null)) {
+  if (!storage) {
+    return null;
+  }
   for (const key of THEME_KEYS) {
     try {
       const value = normalizeTheme(storage.getItem(key));
@@ -52,15 +64,6 @@ export function readStoredTheme(storage = window.localStorage) {
     }
   }
   return null;
-}
-
-/** read(), or fallback when the browser refuses it (sandboxed or privacy-restricted embedding). */
-function safely(read, fallback) {
-  try {
-    return read();
-  } catch {
-    return fallback;
-  }
 }
 
 function browserSources() {
