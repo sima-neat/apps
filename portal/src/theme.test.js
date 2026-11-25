@@ -41,3 +41,22 @@ test("the shared header's event: persist false only when it says so", () => {
   assert.equal(themeFromShellEvent({ detail: { theme: "blue" } }), null);
   assert.equal(themeFromShellEvent({}), null);
 });
+
+test("a browser that refuses localStorage and the cookie still gets ?theme (Codex on #833)", (t) => {
+  const refuse = () => {
+    throw new DOMException("The operation is insecure.", "SecurityError");
+  };
+  const fakeWindow = { location: { search: "?theme=dark" }, matchMedia: () => ({ matches: false }) };
+  Object.defineProperty(fakeWindow, "localStorage", { get: refuse });
+  const fakeDocument = {};
+  Object.defineProperty(fakeDocument, "cookie", { get: refuse });
+  globalThis.window = fakeWindow;
+  globalThis.document = fakeDocument;
+  t.after(() => {
+    delete globalThis.window;
+    delete globalThis.document;
+  });
+  assert.deepEqual(readInitialTheme(), { theme: "dark", persist: false });
+  fakeWindow.location.search = "";
+  assert.deepEqual(readInitialTheme(), { theme: "light", persist: true }, "falls back to the system preference");
+});

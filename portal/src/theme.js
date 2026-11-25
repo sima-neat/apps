@@ -54,15 +54,25 @@ export function readStoredTheme(storage = window.localStorage) {
   return null;
 }
 
+/** read(), or fallback when the browser refuses it (sandboxed or privacy-restricted embedding). */
+function safely(read, fallback) {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
 function browserSources() {
   if (typeof window === "undefined") {
     return { search: "", cookie: "", storage: null, prefersDark: false };
   }
+  // Each source on its own: a refused cookie or localStorage must not stop ?theme.
   return {
-    search: window.location.search,
-    cookie: document.cookie,
-    storage: window.localStorage,
-    prefersDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
+    search: safely(() => window.location.search, ""),
+    cookie: safely(() => document.cookie, ""),
+    storage: safely(() => window.localStorage, null),
+    prefersDark: safely(() => window.matchMedia("(prefers-color-scheme: dark)").matches, false),
   };
 }
 
