@@ -38,8 +38,11 @@ constexpr int kFrames = 150;
 // Above the shipped 0.30, so the boxes, when the streams show any, show that the example applies
 // inference.min_score.
 constexpr double kMinScore = 0.4;
-// The suite's model must keep up with each 30 FPS test stream. Larger variants run slower.
+// The rate check runs on the suite's model only. Larger variants run slower.
 constexpr const char* kDefaultModel = "yolo26n_obb_w8a8_mpk.tar.gz";
+// Each stream's results per second, about 80% of Vulcan CI run 45418480248 on 5baed52 (Modalix
+// devkit-1, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources). With one or
+// two streams, each stream gave 24.6 to 25.2, the source's rate.
 constexpr double kMinStreamFps = 20.0;
 
 using Clock = std::chrono::steady_clock;
