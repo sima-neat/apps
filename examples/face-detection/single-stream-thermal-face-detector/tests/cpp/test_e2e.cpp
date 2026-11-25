@@ -1,6 +1,7 @@
-// End-to-end test: the RTSP stream's faces reach Insight as pose-estimation metadata, and the
-// application stops cleanly when interrupted. A local UDP listener stands in for Insight, so only
-// an RTSP H.264 source (SIMANEAT_TEST_RTSP_H264_URL) and the model are needed.
+// End-to-end test: the RTSP stream's faces reach Insight as pose-estimation metadata, next to
+// H.264 video that the metadata's timestamps pair with, and the application stops cleanly when
+// interrupted. Local UDP listeners stand in for Insight, so only an RTSP H.264 source
+// (SIMANEAT_TEST_RTSP_H264_URL) and the model are needed.
 #include "sima_examples/labels.h"
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/test_config.h"
@@ -8,10 +9,21 @@
 
 #include <nlohmann/json.hpp>
 
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -48,6 +60,31 @@ std::string poses_problem(const nlohmann::json& poses, const std::string& label)
     }
   }
   return "";
+}
+
+// Each video packet's RTP header, kept until `stop` is set and the socket is empty.
+std::vector<std::array<unsigned char, 12>> drain_video(int socket, const std::atomic<bool>& stop) {
+  const timeval timeout{0, 200000};
+  ::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  std::vector<std::array<unsigned char, 12>> headers;
+  std::array<unsigned char, 65536> packet{};
+  while (true) {
+    if (::recv(socket, packet.data(), packet.size(), 0) >= 12) {
+      headers.emplace_back();
+      std::copy_n(packet.begin(), 12, headers.back().begin());
+    } else if (stop) {
+      return headers;
+    }
+  }
+}
+
+// Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a video
+// frame's RTP timestamp.
+bool pairs(int64_t timestamp_ms, const std::set<uint32_t>& rtp_timestamps) {
+  const auto ticks = static_cast<uint32_t>(timestamp_ms * 90);
+  return std::any_of(rtp_timestamps.begin(), rtp_timestamps.end(), [ticks](uint32_t rtp) {
+    return (ticks > rtp ? ticks - rtp : rtp - ticks) <= 90;
+  });
 }
 } // namespace
 
@@ -108,15 +145,38 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  const int video_socket = ::socket(AF_INET, SOCK_DGRAM, 0);
+  sockaddr_in video_address{};
+  video_address.sin_family = AF_INET;
+  video_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  video_address.sin_port = htons(static_cast<uint16_t>(video_port));
+  if (video_socket < 0 || ::bind(video_socket, reinterpret_cast<sockaddr*>(&video_address),
+                                 sizeof(video_address)) != 0) {
+    if (video_socket >= 0) {
+      ::close(video_socket);
+    }
+    std::cerr << "[FAIL] could not bind Insight video port\n";
+    remove_dir(output_dir);
+    return 1;
+  }
+
   // The application runs until stopped (frames = 0). Once the listener has a verdict,
   // the metadata it asked for or a datagram that was not valid metadata, the harness
   // interrupts the application and the result carries how it shut down; the shipped
   // config's finite run is the Python suite's.
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   MetadataJsonListenerResult metadata;
+  std::atomic<bool> stop{false};
+  std::vector<std::array<unsigned char, 12>> headers;
+  std::thread drain([&] { headers = drain_video(video_socket, stop); });
   const ProcessResult result = spawn_until(
       binary, {"--config", config_path.string()},
       [&] { return metadata_listener.poll_messages(metadata, 250); }, timeout_ms);
+  stop = true;
+  drain.join();
+  ::close(video_socket);
+  // The rest of the run's messages, so the checks below see every frame it sent.
+  const auto rest = metadata_listener.drain_pending();
 
   int rc = 0;
   const std::string exit_problem_text = exit_problem(result);
@@ -136,10 +196,29 @@ int main(int argc, char** argv) {
               "face_label.txt")
               .front();
       std::string problem;
-      for (const auto& message : metadata.messages) {
+      std::vector<MetadataJsonMessage> messages = metadata.messages;
+      messages.insert(messages.end(), rest.messages.begin(), rest.messages.end());
+      for (const auto& message : messages) {
         if (problem.empty()) {
           problem =
               poses_problem(nlohmann::json::parse(message.payload).at("data").at("poses"), label);
+        }
+      }
+      // The example encodes the decoded frames as H.264 (RTP payload type 96) for Insight.
+      if (problem.empty() && (headers.empty() || (headers.front()[0] >> 6) != 2 ||
+                              (headers.front()[1] & 0x7F) != 96)) {
+        problem = "no RTP video with payload type 96 reached Insight";
+      }
+      // Insight draws each message's poses on the video frame its timestamp names.
+      std::set<uint32_t> rtp_timestamps;
+      for (const auto& header : headers) {
+        rtp_timestamps.insert(static_cast<uint32_t>(header[4]) << 24 | header[5] << 16 |
+                              header[6] << 8 | header[7]);
+      }
+      for (const auto& message : messages) {
+        if (problem.empty() && !pairs(message.timestamp_ms, rtp_timestamps)) {
+          problem = "metadata timestamp " + std::to_string(message.timestamp_ms) +
+                    " that no video frame carries";
         }
       }
       if (!problem.empty()) {
