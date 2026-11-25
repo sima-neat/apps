@@ -1,0 +1,4 @@
+interface:
+  display_name: "SiMa Application Optimizer"
+  short_description: "Measure and speed up Neat Library applications"
+  default_prompt: "Use $sima-application-optimizer to measure this Neat application and raise its throughput without changing its output."

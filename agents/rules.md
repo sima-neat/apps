@@ -77,7 +77,7 @@ Place each piece of code by the first question it answers yes to:
 
 - The C++ and Python implementations match in models, thresholds, outputs, and metadata.
 - A change to topology, queue policy, copies, buffer counts, or worker counts starts from a
-  measurement, as `skills/neat-application-optimizer/SKILL.md` describes, and keeps the
+  measurement, as `skills/sima-application-optimizer/SKILL.md` describes, and keeps the
   output correct.
 - Real-time visualization uses Insight, with video and metadata sent through the Neat APIs.
   Offline and batch examples may read files and save or display results.
@@ -88,7 +88,7 @@ Place each piece of code by the first question it answers yes to:
 
 ## Tests
 
-- `agents/skills/write-example-tests/SKILL.md` decides which tests an example has.
+- `agents/skills/apps-write-example-tests/SKILL.md` decides which tests an example has.
 - Each example's `tests/test-scope.yaml` decides which of its tests run and with which models.
   Register enabled C++ tests with CMake. `build.sh`, `tests/test.sh`, and workflow filters
   name no individual test, so one registration serves local runs and CI.
@@ -118,7 +118,7 @@ Place each piece of code by the first question it answers yes to:
 
 ## Skills and cheat sheet
 
-`skills/neat-application-builder` and `skills/neat-application-optimizer` teach customers'
+`skills/sima-application-builder` and `skills/sima-application-optimizer` teach customers'
 agents the public Neat APIs for any project: inputs, graph topologies, runs, options, and
 tuning. sima-cli ships only `skills/`, so `skills/` links Core paths and public URLs, never
 `agents/`, `docs/neat-api-cheat-sheet/`, or other repository files.
@@ -139,16 +139,16 @@ Every pull request feeds what its work taught back into these files:
   | The finding is about | It goes in |
   |---|---|
   | An API option, default, error, or behavior | Its page in `docs/neat-api-cheat-sheet/`, following `docs/neat-api-cheat-sheet/TEMPLATE.md` |
-  | A node, link, or topology pattern, and when to choose it | `skills/neat-application-builder/references/` |
-  | A tuning choice, with its measurement | `skills/neat-application-optimizer/references/tuning.md` |
+  | A node, link, or topology pattern, and when to choose it | `skills/sima-application-builder/references/` |
+  | A tuning choice, with its measurement | `skills/sima-application-optimizer/references/tuning.md` |
   | How this repository's examples are written, tested, or reviewed | `agents/` |
 
 - **Lift:** a cheat sheet pitfall or behavior that changes how any application should be
   built or tuned, such as `GraphLinkOptions::queue_depth` adding no buffering, also goes into
   the matching skill reference, written in full there.
-- **Generalize:** write a lesson as a rule with its condition: when X, do Y, because Z. It
-  names the condition, not the example where it was found, and holds for any application that
-  meets the condition. A fact that holds only for one example stays in that example's README.
+- **Generalize:** write a lesson brief and to the point, as general as it holds, as a rule
+  with its condition: when X, do Y, because Z. It names the condition, not the example where it
+  was found, and holds for any application that meets the condition. A fact that holds only for one example stays in that example's README.
   A fact about one API, such as a `BoxDecodeType` value or an option default, is stated
   exactly, because it holds wherever that API is used.
 - **Correct:** a statement the work proves wrong is fixed in the same pull request, in
@@ -158,5 +158,5 @@ Every pull request feeds what its work taught back into these files:
 
 Keep routing in `SKILL.md` and detail in `references/`. `version` in `playbook.yml` stays
 unchanged. The pull request description lists each change under
-`Skill and cheat sheet updates`, or writes `Skill and cheat sheet updates: none` with the
+`Rule, skill, and knowledge updates`, or writes `Rule, skill, and knowledge updates: none` with the
 reason.
