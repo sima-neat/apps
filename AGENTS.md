@@ -16,7 +16,7 @@ config keys, behavior, tests, publication, and where a lesson goes.
 | `skills/` | customers' agents | alone, through sima-cli | customer skills for building and tuning a Neat application |
 
 `skills/` stands alone for its reader: it links Core paths and public URLs, never `agents/`,
-`docs/neat-api-cheat-sheet/`, or another file of this repository. A test checks it.
+`docs/neat-api-cheat-sheet/`, or another file of this repository.
 
 ## Skills
 
