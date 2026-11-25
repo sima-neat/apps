@@ -197,7 +197,8 @@ def send_detections(
                 raise RuntimeError(f"detections output closed: {run.last_error()}")
             continue
 
-        # With one source, Core names the sample after the decoder instead of the stream.
+        # Core candidate: with one source, Core names the sample after the decoder instead of the
+        # link's stream_id, so the index is 0 here.
         index = 0
         if len(metadata_senders) > 1:
             index = int(sample.stream_id.removeprefix("stream"))

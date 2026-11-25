@@ -222,7 +222,8 @@ std::vector<int> send_detections(neat::Run& run,
       continue;
     }
 
-    // With one source, Core names the sample after the decoder instead of the stream.
+    // Core candidate: with one source, Core names the sample after the decoder instead of the
+    // link's stream_id, so the index is 0 here.
     std::size_t index = 0;
     if (metadata_senders.size() > 1) {
       index = std::stoul(sample.stream_id.substr(std::string("stream").size()));
