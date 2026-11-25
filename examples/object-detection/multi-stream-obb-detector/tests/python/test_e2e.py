@@ -22,10 +22,9 @@ EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 LABELS = set((EXAMPLE_DIR / "src" / "common" / "dota_label.txt").read_text().splitlines())
 FRAMES = 150
-# Above the shipped 0.30, so the boxes, when the streams show any, show that the example applies
-# inference.min_score.
+# Above the shipped 0.30, so the boxes show that the example applies inference.min_score.
 MIN_SCORE = 0.4
-# The rate check runs on the suite's model only. Larger variants run slower.
+# The box and rate checks run on the suite's model only. Larger variants run slower.
 DEFAULT_MODEL = "yolo26n_obb_w8a8_mpk.tar.gz"
 # Each stream's results per second, about 80% of Vulcan CI run 45418480248 on 5baed52 (Modalix
 # devkit-1, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources). With one or
@@ -182,6 +181,7 @@ def test_streams_reach_their_insight_channels(
     print(f"application exit code {process.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}")
     assert process.returncode == 0, f"exit code {process.returncode}"
     assert not errors, errors
+    default_model = model_path.name == DEFAULT_MODEL
     boxes = 0
     for index in range(streams):
         assert re.search(
@@ -201,6 +201,14 @@ def test_streams_reach_their_insight_channels(
         assert len(stream_messages) >= FRAMES * 95 // 100, (
             f"stream {index}: {len(stream_messages)} of {FRAMES} messages arrived"
         )
+        # Each result names its frame and carries its timestamp, so Insight can pair it with video.
+        frame_ids = [int(m.frame_id) if m.frame_id.isdigit() else -1 for m in stream_messages]
+        assert all(b > a for a, b in zip([-1, *frame_ids], frame_ids)), (
+            f"stream {index}: frame IDs must increase: {[m.frame_id for m in stream_messages]}"
+        )
+        assert all(m.timestamp_ms >= 0 for m in stream_messages), (
+            f"stream {index}: timestamps {[m.timestamp_ms for m in stream_messages]}"
+        )
         for message in stream_messages:
             assert message.metadata_type == "object-detection"
             for obj in json.loads(message.payload)["data"]["objects"]:
@@ -211,10 +219,11 @@ def test_streams_reach_their_insight_channels(
         assert len(times) > 10, f"stream {index}: {len(times)} messages arrived during the run"
         fps = (len(times) - 1) / (times[-1] - times[0])
         print(f"{codec} stream {index}: {len(stream_messages)} messages, {fps:.1f} results/s")
-        if model_path.name == DEFAULT_MODEL:
+        if default_model:
             assert fps >= MIN_STREAM_FPS, f"stream {index}: {fps:.1f} results/s"
-    # No box is not a failure: the model finds objects in top-down aerial video, and the CI
-    # streams show streets. Still, the C++ cases in CI run 45418480248 checked 1265 boxes on
-    # h264, 680 on h264-one-stream, 810 on h265, and 242 on mjpeg. The unit tests check the
-    # object values.
+    # The model is trained on top-down aerial video, and the CI streams show streets. Its boxes
+    # there are still enough to check: the C++ cases in CI run 45584903721 on d291e61 checked 1265
+    # boxes on h264, 680 on h264-one-stream, 848 on h265, and 141 on mjpeg.
     print(f"{codec}: {boxes} oriented boxes checked")
+    if default_model:
+        assert boxes > 0, "no oriented boxes arrived"

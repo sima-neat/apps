@@ -24,6 +24,7 @@
 #include <memory>
 #include <regex>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,10 +36,9 @@ namespace {
 
 constexpr const char* kExampleName = "multi-stream-obb-detector";
 constexpr int kFrames = 150;
-// Above the shipped 0.30, so the boxes, when the streams show any, show that the example applies
-// inference.min_score.
+// Above the shipped 0.30, so the boxes show that the example applies inference.min_score.
 constexpr double kMinScore = 0.4;
-// The rate check runs on the suite's model only. Larger variants run slower.
+// The box and rate checks run on the suite's model only. Larger variants run slower.
 constexpr const char* kDefaultModel = "yolo26n_obb_w8a8_mpk.tar.gz";
 // Each stream's results per second, about 80% of Vulcan CI run 45418480248 on 5baed52 (Modalix
 // devkit-1, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources). With one or
@@ -238,6 +238,7 @@ int run_case(const std::string& binary, const std::string& model_path,
     }
   }
   const auto labels = read_labels();
+  const bool default_model = fs::path(model_path).filename() == kDefaultModel;
   int boxes = 0;
   for (int index = 0; index < streams; ++index) {
     const std::string stream = "stream " + std::to_string(index);
@@ -259,11 +260,26 @@ int run_case(const std::string& binary, const std::string& model_path,
                          std::to_string(payload_type(source_case.codec)));
     }
     int messages = 0;
+    long long previous_frame_id = -1;
+    std::string identity_problem;
     for (const auto& message : metadata.messages) {
       if (message.port != metadata_port + index) {
         continue;
       }
       ++messages;
+      // Each result names its frame and carries its timestamp, so Insight can pair it with video.
+      long long frame_id = -1;
+      try {
+        frame_id = std::stoll(message.frame_id);
+      } catch (const std::exception&) {
+      }
+      if (identity_problem.empty() && (frame_id <= previous_frame_id || message.timestamp_ms < 0)) {
+        identity_problem = stream + " frame '" + message.frame_id + "' after " +
+                           std::to_string(previous_frame_id) + ", timestamp " +
+                           std::to_string(message.timestamp_ms) +
+                           ": frame IDs must increase and timestamps must not be negative";
+      }
+      previous_frame_id = frame_id;
       if (message.metadata_type != "object-detection") {
         problems.push_back(stream + " frame " + message.frame_id + ": type " +
                            message.metadata_type);
@@ -276,6 +292,9 @@ int run_case(const std::string& binary, const std::string& model_path,
         }
         ++boxes;
       }
+    }
+    if (!identity_problem.empty()) {
+      problems.push_back(identity_problem);
     }
     // UDP on loopback may drop a message under load, so allow a few to go missing.
     if (messages < kFrames * 95 / 100) {
@@ -293,15 +312,17 @@ int run_case(const std::string& binary, const std::string& model_path,
     const double fps = static_cast<double>(times.size() - first - 1) / seconds;
     std::cout << label << " " << stream << ": " << messages << " messages, " << fps
               << " results/s\n";
-    if (fs::path(model_path).filename() == kDefaultModel && fps < kMinStreamFps) {
+    if (default_model && fps < kMinStreamFps) {
       problems.push_back(stream + ": " + std::to_string(fps) + " results/s");
     }
   }
-  // No box is not a failure: the model finds objects in top-down aerial video, and the CI
-  // streams show streets. Still, the C++ cases in CI run 45418480248 checked 1265 boxes on
-  // h264, 680 on h264-one-stream, 810 on h265, and 242 on mjpeg. The unit tests check the
-  // object values.
+  // The model is trained on top-down aerial video, and the CI streams show streets. Its boxes
+  // there are still enough to check: the C++ cases in CI run 45584903721 on d291e61 checked 1265
+  // boxes on h264, 680 on h264-one-stream, 848 on h265, and 141 on mjpeg.
   std::cout << label << ": " << boxes << " oriented boxes checked\n";
+  if (default_model && boxes == 0) {
+    problems.push_back("no oriented boxes arrived");
+  }
   remove_dir(output_dir);
   for (const auto& problem : problems) {
     std::cerr << "[FAIL] " << label << " " << problem << "\n";
