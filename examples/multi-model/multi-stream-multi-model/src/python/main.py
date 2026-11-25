@@ -56,12 +56,24 @@ RESULT_DEADLINE_S = 10.0
 # The same for the first result, which also waits for Core to build the rest of the pipeline on
 # the first frame (EdgeRouter.cpp). Not measured on a DevKit.
 FIRST_RESULT_DEADLINE_S = 30.0
-# Decoded frames each stream's decoder keeps. 12 as before the conversion, not re-measured with
-# this graph.
+# Decoded frames each stream's decoder keeps. Before the conversion, 12 covered the host queue's
+# 4, the model's 4, and 4 to decode into. Here they bound the frames the model and frames_<i>
+# hold, because Core does not hold the model to 4 (frames_graph). Not re-measured with this graph.
 DECODER_BUFFERS = 12
 # The pull loop polls every output without waiting, and sleeps this long after a round that
 # pulled no result.
 IDLE_SLEEP_S = 0.002
+
+
+@dataclass
+class StreamModel:
+    """One stream's model entry, as the config sets it."""
+
+    id: str
+    path: str
+    decode_type: pyneat.BoxDecodeType
+    metadata_type: str
+    labels: list[str]
 
 
 @dataclass
@@ -150,7 +162,7 @@ def rtsp_options(
             # H.264 caps from input.fps and the stream's size, instead of the caps the stream sends.
             options.auto_caps_from_stream = False
         else:
-            # The rate the stream's caps fall back to; with input.fps set it has no effect.
+            # The rate the stream's caps fall back to.
             options.fallback_h264_fps = stream.fps
     return options
 
@@ -178,18 +190,19 @@ def frames_graph(index: int) -> pyneat.Graph:
     """The newest decoded frame of one stream, which tells the pull loop the decoder is sending."""
     # Core gap: a Run reports no count of the frames a model holds, so the pull loop watches
     # each decoder's frames to tell a stalled model from a paused camera.
+    # Core gap: this output frees the model from the 4 frames per stream a realtime link admits.
+    # Core admits a decoded frame once and keeps its credit on the frame's shared storage
+    # (EdgeRouter.cpp:752, SampleUtil.cpp:3162). The decoder's fan-out retains only credits a
+    # frame already carries (EdgeRouter.cpp:1211), and each pull here releases the frame's
+    # credit (RunCore.cpp:1610, RunPull.cpp:168). So the decoder's buffers, not the credit,
+    # bound the frames the model holds.
     graph = pyneat.Graph()
     graph.add(pyneat.nodes.output(frames_output(index), pyneat.OutputOptions.latest()))
     return graph
 
 
 def realtime_link() -> pyneat.GraphLinkOptions:
-    """Pass on the newest frame, so a slow consumer cannot hold back the stream.
-
-    Core caps the decoded frames in flight on one link at min(4 * streams, 8), which is 4 for the
-    one stream per model (EdgeRouter.cpp). Not verified on a DevKit: the frames output receives
-    the same decoded frames, and Core counts one credit per frame, so the model may hold more.
-    """
+    """Pass on the newest frame, so a slow consumer cannot hold back the stream."""
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     return link
@@ -233,14 +246,25 @@ def stream_info(config: Config, sources: list[str]) -> list[RtspStreamInfo]:
     return [by_url[url] for url in sources]
 
 
-def per_stream(config: Config, key: str, streams: int) -> list[Config]:
-    """The list of mappings at `key`, which holds one entry per input.source stream."""
-    entries = config.mapping_list(key)
+def stream_models(config: Config, streams: int) -> list[StreamModel]:
+    """The model entry of each input.source stream, read entry by entry before any model loads."""
+    entries = config.mapping_list("model")
     if len(entries) != streams:
         raise ValueError(
-            f"{key} has {len(entries)} entries and input.source has {streams}: give one per stream"
+            f"model has {len(entries)} entries and input.source has {streams}: "
+            "give one per stream"
         )
-    return entries
+    models = []
+    for entry in entries:
+        model_id = entry.string("id")
+        path = entry.string("path")
+        decode_type, metadata_type = entry.choice("id", MODEL_IDS)
+        models.append(
+            StreamModel(
+                model_id, path, decode_type, metadata_type, model_labels(entry, metadata_type)
+            )
+        )
+    return models
 
 
 def model_labels(model: Config, metadata_type: str) -> list[str]:
@@ -251,12 +275,16 @@ def model_labels(model: Config, metadata_type: str) -> list[str]:
 
 
 def sample_tensors(sample: pyneat.Sample) -> list[pyneat.Tensor]:
-    # Core candidate: Python has no binding of tensors_from_sample (GraphOptions.h), so both
-    # languages pick the tensors out of the Sample here.
-    if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
-        return list(sample.tensors)
-    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
-        return [sample.tensor]
+    # Core candidate: Python has no binding of tensors_from_sample (GraphOptions.h), which the
+    # C++ example calls.
+    if sample.kind == pyneat.SampleKind.TensorSet:
+        tensors = list(sample.tensors)
+        if tensors:
+            return tensors
+    elif sample.kind == pyneat.SampleKind.Tensor:
+        tensor = sample.tensor
+        if tensor is not None:
+            return [tensor]
     raise RuntimeError("expected a tensor result")
 
 
@@ -341,18 +369,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.load(args.config)
     sources = config.string_list("input.source")
-    # Each stream's model, read before the probe and any model load.
-    entries = per_stream(config, "model", len(sources))
-    model_ids = []
-    model_paths = []
-    # Each stream's BoxDecode type and metadata type.
-    model_types = []
-    labels = []
-    for entry in entries:
-        model_ids.append(entry.string("id"))
-        model_paths.append(entry.string("path"))
-        model_types.append(entry.choice("id", MODEL_IDS))
-        labels.append(model_labels(entry, model_types[-1][1]))
+    # Read before the probe, so a wrong entry fails without waiting for the streams.
+    entries = stream_models(config, len(sources))
     infos = stream_info(config, sources)
     # Used by both the models and the box decode.
     max_detections = config.integer("inference.max_detections")
@@ -364,10 +382,12 @@ def main(argv: list[str] | None = None) -> int:
     streams = []
     for index, url in enumerate(sources):
         info = infos[index]
-        decode_type, metadata_type = model_types[index]
-        model_path = args.config.absolute().parent / model_paths[index]
+        entry = entries[index]
+        model_path = args.config.absolute().parent / entry.path
         models.append(
-            pyneat.Model(str(model_path), model_options(config, info, decode_type, max_detections))
+            pyneat.Model(
+                str(model_path), model_options(config, info, entry.decode_type, max_detections)
+            )
         )
         rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(config, url, info))
         decoder = decoder_graph(config, info)
@@ -384,16 +404,14 @@ def main(argv: list[str] | None = None) -> int:
         streams.append(
             Stream(
                 info,
-                metadata_type,
-                labels[index],
+                entry.metadata_type,
+                entry.labels,
                 pyneat.MetadataSender(metadata_options(config, index)),
-                PendingResults(
-                    index, model_paths[index], RESULT_DEADLINE_S, FIRST_RESULT_DEADLINE_S
-                ),
+                PendingResults(index, entry.path, RESULT_DEADLINE_S, FIRST_RESULT_DEADLINE_S),
             )
         )
         print(
-            f"[stream {index}] {model_ids[index]} model={model_paths[index]} rtsp={url} "
+            f"[stream {index}] {entry.id} model={entry.path} rtsp={url} "
             f"stream={info.width}x{info.height}@{info.fps} "
             f"insight={config.string('output.insight.host')} "
             f"video={config.integer('output.insight.video_port_base') + index} "

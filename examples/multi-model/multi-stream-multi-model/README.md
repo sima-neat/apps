@@ -53,10 +53,10 @@ How does a frame move through multi-stream-multi-model?
 
 - One graph and one `Run` hold every stream. Each stream has its own `SimaDecode`, its own model, and its own `Output "results_i"`.
 - `RtspEncodedInput` sends each stream's encoded video to Insight unchanged. Insight draws every overlay from the metadata.
-- The link into each model keeps the newest decoded frames. Core is meant to let each model hold 4 frames of its stream at once. That is not yet verified on a DevKit with `Output "frames_i"` on the same decoder.
+- The link into each model keeps the newest decoded frames. A realtime link lets a model hold 4 frames of its stream, but not here. Each pull of `Output "frames_i"` releases the frame's hold on that limit, because both share the decoded frame. So the decoder's 12 buffers bound the frames each model holds (a Core gap).
 - `Output "frames_i"` keeps only the newest decoded frame. The pull loop reads it to know that the decoder is sending. The RTSP input feeds only the decoder and the video sender, so Core runs the three as one pipeline.
 - One pull loop reads every output in turn. It turns each result into Insight metadata and sends it on the stream's channel.
-- Decoded frames that arrive with no result for 10 seconds stop the application with an error. The first result may take 30 seconds, because Core builds the rest of the pipeline on the first frame. A camera that pauses sends no frames, so it may wait without a limit.
+- Decoded frames that arrive with no result for 10 seconds stop the application with an error. The first result is allowed 30 seconds, because Core builds the rest of the pipeline on the first frame. Neither limit is measured on a DevKit yet. A camera that pauses sends no frames, so it may wait without a limit.
 
 ## Preview
 

@@ -17,8 +17,8 @@ UNKNOWN_LABEL = "unknown"
 METADATA_BYTE_BUDGET = 32768
 # A mask cell belongs to the object when its value is at least half of full scale (255).
 MASK_THRESHOLD = 0.5
-# The BoxDecode segmentation masks are a 160x160 grid over the model's 640x640 letterboxed
-# input, so one mask cell spans four input pixels.
+# One mask cell spans four pixels of the model's letterboxed input: the BoxDecode masks are a
+# 160x160 grid, for a 640x640 model input.
 MASK_STRIDE = 4
 # The order in which the BoxDecode pose payload emits the 17 COCO keypoints. Insight joins the
 # skeleton by these names.

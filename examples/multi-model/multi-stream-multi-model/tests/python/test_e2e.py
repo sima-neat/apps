@@ -107,6 +107,8 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
     # the app's path join. The labels path starts at the working directory, as shipped.
     shipped = yaml.safe_load((EXAMPLE_DIR / "src" / "common" / "config.yaml").read_text())["model"]
     models = [dict(entry, path=path) for entry, path in zip(shipped, model_paths)]
+    # The app runs from the Apps root, so the shipped labels paths resolve from there.
+    assert all((APPS_ROOT / entry["labels"]).is_file() for entry in models if "labels" in entry)
     config_path = e2e_config_writer(
         {
             "input": {"source": sources, "codec": codec},

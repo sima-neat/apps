@@ -66,7 +66,8 @@ std::vector<ConfigScalars> shipped_models() {
 }
 
 // The last line the example prints to stderr for the shipped config with `models` as its model
-// entries. The frame size and rate are set, so no stream is probed and no source is needed.
+// entries, with the test's directory shown as <dir>. The frame size and rate are set, so no stream
+// is probed and no source is needed.
 std::string run_error(const std::string& binary, const std::string& test_name,
                       const std::vector<ConfigScalars>& models) {
   const std::string dir = create_test_scratch_dir(kExampleName, test_name);
@@ -84,8 +85,13 @@ std::string run_error(const std::string& binary, const std::string& test_name,
     text.pop_back();
   }
   const auto newline = text.rfind('\n');
-  return result.exit_code == 1 ? text.substr(newline == std::string::npos ? 0 : newline + 1)
-                               : "exit " + std::to_string(result.exit_code) + ": " + text;
+  std::string line = result.exit_code == 1
+                         ? text.substr(newline == std::string::npos ? 0 : newline + 1)
+                         : "exit " + std::to_string(result.exit_code) + ": " + text;
+  for (auto at = line.find(dir); at != std::string::npos; at = line.find(dir, at)) {
+    line.replace(at, dir.size(), "<dir>");
+  }
+  return line;
 }
 
 // The checks the application leaves to its config: the values it reads are usable.
@@ -454,9 +460,7 @@ bool test_detection_model_without_labels_names_the_entry(const std::string& bina
   models[0].erase("labels");
   const std::string error =
       run_error(binary, "test_detection_model_without_labels_names_the_entry", models);
-  const std::string suffix = " is missing model[0].labels";
-  return expect_true(error.rfind("[ERR] ", 0) == 0 && error.size() > suffix.size() &&
-                         error.compare(error.size() - suffix.size(), suffix.size(), suffix) == 0,
+  return expect_true(error == "[ERR] <dir>/config.yaml is missing model[0].labels",
                      "a detection model without labels fails with the entry: " + error);
 }
 
@@ -469,12 +473,15 @@ bool test_each_model_reads_its_own_labels(const std::string& binary) {
 }
 
 bool test_pose_model_needs_no_labels(const std::string& binary) {
-  // The shipped pose entry has no labels. Every model entry is read before the first model
-  // loads, so the run gets past the config and fails later, on a model the test does not have.
-  const auto models = shipped_models();
+  // The shipped pose entry has no labels. Every entry is read before the first model loads, so a
+  // run whose first model is missing gets past the config and fails on that model.
+  auto models = shipped_models();
   bool ok = expect_true(models.at(2).count("labels") == 0, "the shipped pose entry has no labels");
+  models[0]["path"] = "missing_mpk.tar.gz";
   const std::string error = run_error(binary, "test_pose_model_needs_no_labels", models);
-  ok &= expect_true(error.find("labels") == std::string::npos,
+  // Core's text for a package that is not there (ModelArchiveLoader.cpp).
+  ok &= expect_true(error == "[ERR] invalid_archive: archive path does not exist or is not a "
+                             "regular file: <dir>/missing_mpk.tar.gz",
                     "a pose model without labels passes the config: " + error);
   return ok;
 }

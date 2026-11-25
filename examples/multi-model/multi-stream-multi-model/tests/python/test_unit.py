@@ -388,10 +388,18 @@ def test_each_model_reads_its_own_labels(tmp_path):
 
 
 def test_pose_model_needs_no_labels(tmp_path):
-    # The shipped pose entry has no labels. Every model entry is read before the first model
-    # loads, so the run gets past the config and fails later, on a model the test does not have.
+    # The shipped pose entry has no labels. Every entry is read before the first model loads, so
+    # a run whose first model is missing gets past the config and fails on that model.
     assert "labels" not in yaml.safe_load((COMMON_DIR / "config.yaml").read_text())["model"][2]
-    assert "labels" not in run_main(tmp_path, lambda config: None)
+
+    def missing_model(config):
+        config["model"][0]["path"] = "missing_mpk.tar.gz"
+
+    # Core's text for a package that is not there (ModelArchiveLoader.cpp).
+    assert run_main(tmp_path, missing_model) == (
+        "[ERR] invalid_archive: archive path does not exist or is not a regular file: "
+        f"{tmp_path / 'missing_mpk.tar.gz'}"
+    )
 
 
 def test_model_ids_select_the_decoder_and_metadata_type():

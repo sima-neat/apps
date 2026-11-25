@@ -203,6 +203,13 @@ int run_case(const std::string& binary, const std::string& models_dir,
     const auto& entry = shipped.at(static_cast<std::size_t>(index));
     models.push_back({{"id", entry.string("id")}, {"path", model_paths.back()}});
     if (const auto labels = entry.string_value("labels")) {
+      // The app runs in this test's working directory, so the shipped labels path must resolve
+      // from there.
+      if (!fs::is_regular_file(*labels)) {
+        std::cerr << "[FAIL] " << label << " the working directory does not find " << *labels
+                  << "\n";
+        return 1;
+      }
       models.back()["labels"] = *labels;
     }
   }

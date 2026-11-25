@@ -80,12 +80,22 @@ constexpr double kResultDeadlineS = 10.0;
 // The same for the first result, which also waits for Core to build the rest of the pipeline on
 // the first frame (EdgeRouter.cpp). Not measured on a DevKit.
 constexpr double kFirstResultDeadlineS = 30.0;
-// Decoded frames each stream's decoder keeps. 12 as before the conversion, not re-measured with
-// this graph.
+// Decoded frames each stream's decoder keeps. Before the conversion, 12 covered the host queue's 4,
+// the model's 4, and 4 to decode into. Here they bound the frames the model and frames_<i> hold,
+// because Core does not hold the model to 4 (frames_graph). Not re-measured with this graph.
 constexpr int kDecoderBuffers = 12;
 // The pull loop polls every output without waiting, and sleeps this long after a round that
 // pulled no result.
 constexpr std::chrono::milliseconds kIdleSleep{2};
+
+// One stream's model entry, as the config sets it.
+struct StreamModel {
+  std::string id;
+  std::string path;
+  neat::BoxDecodeType decode_type;
+  std::string metadata_type;
+  std::vector<std::string> labels;
+};
 
 // What the pull loop keeps for one stream.
 struct Stream {
@@ -180,7 +190,7 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
       // H.264 caps from input.fps and the stream's size, instead of the caps the stream sends.
       options.auto_caps_from_stream = false;
     } else {
-      // The rate the stream's caps fall back to; with input.fps set it has no effect.
+      // The rate the stream's caps fall back to.
       options.fallback_h264_fps = stream.fps;
     }
   }
@@ -209,16 +219,18 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
 neat::Graph frames_graph(std::size_t index) {
   // Core gap: a Run reports no count of the frames a model holds, so the pull loop watches each
   // decoder's frames to tell a stalled model from a paused camera.
+  // Core gap: this output frees the model from the 4 frames per stream a realtime link admits.
+  // Core admits a decoded frame once and keeps its credit on the frame's shared storage
+  // (EdgeRouter.cpp:752, SampleUtil.cpp:3162). The decoder's fan-out retains only credits a frame
+  // already carries (EdgeRouter.cpp:1211), and each pull here releases the frame's credit
+  // (RunCore.cpp:1610, RunPull.cpp:168). So the decoder's buffers, not the credit, bound the
+  // frames the model holds.
   neat::Graph graph;
   graph.add(neat::nodes::Output(frames_output(index), neat::OutputOptions::Latest()));
   return graph;
 }
 
 // Pass on the newest frame, so a slow consumer cannot hold back the stream.
-//
-// Core caps the decoded frames in flight on one link at min(4 * streams, 8), which is 4 for the one
-// stream per model (EdgeRouter.cpp). Not verified on a DevKit: the frames output receives the same
-// decoded frames, and Core counts one credit per frame, so the model may hold more.
 neat::GraphLinkOptions realtime_link() {
   neat::GraphLinkOptions link;
   link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
@@ -271,18 +283,6 @@ std::vector<sima_examples::RtspStreamInfo> stream_info(const sima_examples::Conf
   return streams;
 }
 
-// The list of mappings at `key`, which holds one entry per input.source stream.
-std::vector<sima_examples::Config> per_stream(const sima_examples::Config& config,
-                                              const std::string& key, std::size_t streams) {
-  auto entries = config.mapping_list(key);
-  if (entries.size() != streams) {
-    throw std::runtime_error(key + " has " + std::to_string(entries.size()) +
-                             " entries and input.source has " + std::to_string(streams) +
-                             ": give one per stream");
-  }
-  return entries;
-}
-
 // The class labels of a detection or segmentation model. Pose results carry none.
 std::vector<std::string> model_labels(const sima_examples::Config& model,
                                       const std::string& metadata_type) {
@@ -292,16 +292,23 @@ std::vector<std::string> model_labels(const sima_examples::Config& model,
   return sima_examples::load_labels(model.string("labels"));
 }
 
-neat::TensorList sample_tensors(const neat::Sample& sample) {
-  // Core candidate: Python has no binding of tensors_from_sample (GraphOptions.h), so both
-  // languages pick the tensors out of the Sample here.
-  if (sample.kind == neat::SampleKind::TensorSet && !sample.tensors.empty()) {
-    return sample.tensors;
+// The model entry of each input.source stream, read entry by entry before any model loads.
+std::vector<StreamModel> stream_models(const sima_examples::Config& config, std::size_t streams) {
+  const auto entries = config.mapping_list("model");
+  if (entries.size() != streams) {
+    throw std::runtime_error("model has " + std::to_string(entries.size()) +
+                             " entries and input.source has " + std::to_string(streams) +
+                             ": give one per stream");
   }
-  if (sample.kind == neat::SampleKind::Tensor && sample.tensor.has_value()) {
-    return {*sample.tensor};
+  std::vector<StreamModel> models;
+  for (const auto& entry : entries) {
+    std::string id = entry.string("id");
+    std::string path = entry.string("path");
+    const auto& [decode_type, metadata_type] = entry.choice("id", kModelIds);
+    models.push_back(StreamModel{std::move(id), std::move(path), decode_type, metadata_type,
+                                 model_labels(entry, metadata_type)});
   }
-  throw std::runtime_error("expected a tensor result");
+  return models;
 }
 
 // The tensor's values, copied once. A frame with nothing found has zero rows.
@@ -317,11 +324,10 @@ template <typename T> std::vector<T> tensor_values(const neat::Tensor& tensor) {
 
 // The objects, segments, or poses of one results sample, in the stream's frame pixels.
 std::vector<insight_metadata::Entry> metadata_entries(const neat::Sample& sample,
-                                                      const Stream& stream,
-                                                      int max_detections) {
+                                                      const Stream& stream, int max_detections) {
   const int width = stream.info.width;
   const int height = stream.info.height;
-  const auto tensors = sample_tensors(sample);
+  const auto tensors = neat::tensors_from_sample(sample);
   if (stream.metadata_type == kDetection) {
     const auto result =
         neat::decode_bbox_tensor(tensors.front(), width, height, max_detections, /*strict=*/true);
@@ -349,15 +355,10 @@ std::vector<insight_metadata::Entry> metadata_entries(const neat::Sample& sample
   return entries;
 }
 
-double now_s() {
-  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
 // Send every stream's results to its Insight channel until each stream sent `frames` (0 or less: no
 // limit) or a stop signal. A stream whose decoded frames arrive with no result for its deadline
 // throws with its model.
-void send_results(neat::Run& run, std::vector<Stream>& streams,
-                  int max_detections, int frames,
+void send_results(neat::Run& run, std::vector<Stream>& streams, int max_detections, int frames,
                   const std::atomic<bool>& stop) {
   const auto all_sent = [&] {
     return frames > 0 && std::all_of(streams.begin(), streams.end(),
@@ -365,7 +366,8 @@ void send_results(neat::Run& run, std::vector<Stream>& streams,
   };
   while (!stop && !all_sent()) {
     bool pulled = false;
-    const double now = now_s();
+    const double now =
+        std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     for (std::size_t index = 0; index < streams.size(); ++index) {
       Stream& stream = streams[index];
       if (frames > 0 && stream.processed >= frames) {
@@ -385,9 +387,8 @@ void send_results(neat::Run& run, std::vector<Stream>& streams,
         continue;
       }
       pulled = true;
-      const auto [data, left_out] =
-          insight_metadata::data_json(kDataKeys.at(stream.metadata_type),
-                                      metadata_entries(sample, stream, max_detections));
+      const auto [data, left_out] = insight_metadata::data_json(
+          kDataKeys.at(stream.metadata_type), metadata_entries(sample, stream, max_detections));
       // A nonblocking send drops the message while the socket buffer is full; the drops are
       // counted in the sender's stats and reported when the run ends. Any other failure throws.
       std::string send_error;
@@ -409,19 +410,8 @@ void send_results(neat::Run& run, std::vector<Stream>& streams,
 int run_app(const fs::path& config_path) {
   const auto config = sima_examples::Config::load(config_path);
   const auto sources = config.string_list("input.source");
-  // Each stream's model, read before the probe and any model load.
-  const auto entries = per_stream(config, "model", sources.size());
-  std::vector<std::string> model_ids;
-  std::vector<std::string> model_paths;
-  // Each stream's BoxDecode type and metadata type.
-  std::vector<std::pair<neat::BoxDecodeType, std::string>> model_types;
-  std::vector<std::vector<std::string>> labels;
-  for (const auto& entry : entries) {
-    model_ids.push_back(entry.string("id"));
-    model_paths.push_back(entry.string("path"));
-    model_types.push_back(entry.choice("id", kModelIds));
-    labels.push_back(model_labels(entry, model_types.back().second));
-  }
+  // Read before the probe, so a wrong entry fails without waiting for the streams.
+  const auto entries = stream_models(config, sources.size());
   const auto infos = stream_info(config, sources);
   // Used by both the models and the box decode.
   const int max_detections = config.integer("inference.max_detections");
@@ -434,10 +424,10 @@ int run_app(const fs::path& config_path) {
   for (std::size_t index = 0; index < sources.size(); ++index) {
     const auto& url = sources[index];
     const auto& info = infos[index];
-    const auto& [decode_type, metadata_type] = model_types[index];
-    const fs::path model_path = fs::absolute(config_path).parent_path() / model_paths[index];
+    const StreamModel& entry = entries[index];
+    const fs::path model_path = fs::absolute(config_path).parent_path() / entry.path;
     models.emplace_back(model_path.string(),
-                        model_options(config, info, decode_type, max_detections));
+                        model_options(config, info, entry.decode_type, max_detections));
     const neat::Graph rtsp = groups::RtspEncodedInput(rtsp_options(config, url, info));
     const neat::Graph decoder = decoder_graph(config, info);
     // A plain link keeps every encoded frame. A dropped one corrupts the decoded frames after it
@@ -452,10 +442,10 @@ int run_app(const fs::path& config_path) {
     neat::MetadataSender metadata_sender(metadata_options(config, index), &error);
     sima_examples::require(metadata_sender.ok(), error);
     streams.push_back(
-        Stream{info, metadata_type, labels[index], std::move(metadata_sender),
-               pending_results::PendingResults(static_cast<int>(index), model_paths[index],
+        Stream{info, entry.metadata_type, entry.labels, std::move(metadata_sender),
+               pending_results::PendingResults(static_cast<int>(index), entry.path,
                                                kResultDeadlineS, kFirstResultDeadlineS)});
-    std::cout << "[stream " << index << "] " << model_ids[index] << " model=" << model_paths[index]
+    std::cout << "[stream " << index << "] " << entry.id << " model=" << entry.path
               << " rtsp=" << url << " stream=" << info.width << "x" << info.height << "@"
               << info.fps << " insight=" << config.string("output.insight.host")
               << " video=" << config.integer("output.insight.video_port_base") + index
