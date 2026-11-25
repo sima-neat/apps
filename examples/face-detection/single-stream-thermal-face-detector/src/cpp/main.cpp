@@ -28,7 +28,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -107,10 +106,10 @@ neat::Graph model_graph(neat::Model& model) {
   return graph;
 }
 
-// The "detections" output, holding up to 4 results for the pull loop.
+// The "detections" output the pull loop reads.
 neat::Graph detections_graph() {
   neat::Graph graph("detections");
-  graph.add(neat::nodes::Output("detections", neat::OutputOptions::EveryFrame(4)));
+  graph.add(neat::nodes::Output("detections"));
   return graph;
 }
 
@@ -152,11 +151,14 @@ std::vector<yolov5_face::SplitHead> split_heads(const neat::Sample& sample) {
     if (tensor.dtype != neat::TensorDType::Float32) {
       throw std::runtime_error("expected Float32 split heads");
     }
-    // Copied into floats: a reinterpret_cast of the byte buffer could be an unaligned load.
-    const std::vector<uint8_t> bytes = tensor.copy_dense_bytes_tight();
+    // Copied straight into floats, which is alignment-safe where a reinterpret_cast of a byte
+    // buffer could be an unaligned load.
     yolov5_face::SplitHead head{{tensor.shape.begin(), tensor.shape.end()},
-                                std::vector<float>(bytes.size() / sizeof(float))};
-    std::memcpy(head.values.data(), bytes.data(), head.values.size() * sizeof(float));
+                                std::vector<float>(tensor.dense_bytes_tight() / sizeof(float))};
+    sima_examples::require(
+        tensor.copy_dense_bytes_tight_to(reinterpret_cast<uint8_t*>(head.values.data()),
+                                         head.values.size() * sizeof(float)),
+        "failed to read an output tensor");
     heads.push_back(std::move(head));
   }
   return heads;

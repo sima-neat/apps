@@ -85,9 +85,9 @@ def model_graph(model: pyneat.Model) -> pyneat.Graph:
 
 
 def detections_graph() -> pyneat.Graph:
-    """The "detections" output, holding up to 4 results for the pull loop."""
+    """The "detections" output the pull loop reads."""
     graph = pyneat.Graph("detections")
-    graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+    graph.add(pyneat.nodes.output("detections"))
     return graph
 
 
