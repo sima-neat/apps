@@ -26,8 +26,9 @@ LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitli
 FRAMES = 150
 # Above the shipped 0.30, so the results show that the example applies inference.min_score.
 MIN_SCORE = 0.35
-# Each stream's results per second, as a share of the frame rate the app printed for it. The
-# CI streams run at about 20 fps, and a DevKit sent 19.9 results/s on them (e83d42f).
+# Each stream's results per second, as a share of the frame rate the app printed for it. A
+# DevKit sent 19.9 to 20.0 results/s per stream on the CI streams (e83d42f). That log does not
+# show their rate, so the summary line below prints it.
 MIN_SHARE_OF_STREAM_RATE = 0.95
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
@@ -252,7 +253,7 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         results_per_s = (len(times) - 1) / (times[-1] - times[0])
         print(
             f"{codec} stream {index}: {len(stream_messages)} messages, "
-            f"{results_per_s:.1f} results/s, {len(entries)} {key}"
+            f"{results_per_s:.1f} results/s of {stream_fps} fps, {len(entries)} {key}"
         )
         assert results_per_s >= MIN_SHARE_OF_STREAM_RATE * stream_fps, (
             f"stream {index}: {results_per_s:.1f} results/s of a {stream_fps} fps stream"

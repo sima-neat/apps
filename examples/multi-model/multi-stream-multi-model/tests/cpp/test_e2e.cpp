@@ -40,8 +40,9 @@ constexpr const char* kExampleName = "multi-stream-multi-model";
 constexpr int kFrames = 150;
 // Above the shipped 0.30, so the results show that the example applies inference.min_score.
 constexpr double kMinScore = 0.35;
-// Each stream's results per second, as a share of the frame rate the app printed for it. The CI
-// streams run at about 20 fps, and a DevKit sent 19.9 results/s on them (e83d42f).
+// Each stream's results per second, as a share of the frame rate the app printed for it. A DevKit
+// sent 19.9 to 20.0 results/s per stream on the CI streams (e83d42f). That log does not show their
+// rate, so the summary line below prints it.
 constexpr double kMinShareOfStreamRate = 0.95;
 
 using Clock = std::chrono::steady_clock;
@@ -386,7 +387,8 @@ int run_case(const std::string& binary, const std::string& models_dir,
     const double seconds = std::chrono::duration<double>(times.back() - times[first]).count();
     const double results_per_s = static_cast<double>(times.size() - first - 1) / seconds;
     std::cout << label << " " << stream << ": " << messages << " messages, " << results_per_s
-              << " results/s, " << entries << " " << stream_case.key << "\n";
+              << " results/s of " << stream_fps << " fps, " << entries << " " << stream_case.key
+              << "\n";
     if (results_per_s < kMinShareOfStreamRate * stream_fps) {
       problems.push_back(stream + ": " + std::to_string(results_per_s) + " results/s of a " +
                          std::to_string(stream_fps) + " fps stream");
