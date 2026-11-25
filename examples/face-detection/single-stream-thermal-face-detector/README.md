@@ -81,7 +81,7 @@ relative `model.path` starts at the config file.
 ## Prepare Insight
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive landmark metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
-In the Neat Development Environment, install the sample video assets:
+In the Palette SDK, install the sample video assets:
 
 ```bash
 sima-cli install assets/multi-video-sources
@@ -92,7 +92,7 @@ example expects faces in frame, so upload a thermal or visible-light face clip o
 your own when the sample videos do not contain any.
 
 To create a reproducible RTSP input:
-1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
+1. Run `neat` in the Palette SDK and open the reported `Insight Web UI`.
 2. In Insight, open `RTSP Source`.
 3. Use a sample video or upload your own video.
 4. Start the stream and copy the RTSP URL.

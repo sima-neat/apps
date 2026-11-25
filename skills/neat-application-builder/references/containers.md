@@ -16,5 +16,5 @@ Beyond that README:
 - Stop the containers before installing or updating Neat on the DevKit. The installer's EV74
   firmware activation refuses to run while another Neat process holds the accelerator.
 
-Building and deploying images with the SDK's `dk container` commands belongs to the Neat
-Development Environment documentation.
+Building and deploying images with the SDK's `dk container` commands belongs to the Palette SDK
+documentation.
