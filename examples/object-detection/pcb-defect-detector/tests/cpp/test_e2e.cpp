@@ -465,6 +465,37 @@ int main(int argc, char** argv) {
     remove_dir(broken_out.string());
   }
 
+  // inference.min_score takes effect only through Core's decode; nothing on the host filters the
+  // scores again. No score is above 1, so at 1.0 the run must report no defect, while Core's
+  // default threshold of 0 would report every box. This is also the no-detection case.
+  if (rc == 0) {
+    const auto min_score_out = fs::path(out_dir).parent_path() / "min-score-output";
+    fs::create_directories(min_score_out);
+    const fs::path min_score_config = fs::path(out_dir).parent_path() / "config_min_score.yaml";
+    write_e2e_config(kExample, min_score_config,
+                     {{"model.path", model_path},
+                      {"model.labels", labels_file},
+                      {"input.source", input_dir},
+                      {"output.dir", min_score_out.string()},
+                      {"inference.min_score", "1.0"}});
+
+    const auto run = spawn_and_wait(binary, {"--config", min_score_config.string()}, timeout);
+    const int total_defects = summary_field(run.stdout_text, "total_defects=");
+    if (run.exit_code != 0) {
+      std::cerr << "[FAIL] inference.min_score: 1.0 exited " << run.exit_code << "\n";
+      std::cerr << "stderr:\n" << run.stderr_text << "\n";
+      rc = 1;
+    } else if (total_defects != 0) {
+      std::cerr << "[FAIL] inference.min_score: 1.0 must report total_defects=0, got "
+                << total_defects << "\n";
+      std::cerr << "stdout:\n" << run.stdout_text << "\n";
+      rc = 1;
+    } else {
+      std::cout << "[OK] inference.min_score: 1.0 reports total_defects=0\n";
+    }
+    remove_dir(min_score_out.string());
+  }
+
   remove_dir(out_dir);
   return rc;
 }

@@ -305,3 +305,37 @@ class TestE2E:
         assert summary and int(summary.group(1)) >= 1, (
             f"an unreadable input must be counted in failed=\nstdout:\n{result.stdout}"
         )
+
+    def test_min_score_of_one_reports_no_defects(
+        self, e2e_model_path, apps_root, tmp_output_dir, test_timeout_ms,
+        skip_unless_e2e_ready, e2e_config_writer,
+    ):
+        """inference.min_score takes effect only through Core's decode; nothing on the host
+        filters the scores again. No score is above 1, so at 1.0 the run must report no defect,
+        while Core's default threshold of 0 would report every box. This is also the
+        no-detection case."""
+        input_dir = apps_root / "assets" / "datasets-test" / "pcb"
+        skip_unless_e2e_ready(
+            input_dir.is_dir() and any(input_dir.iterdir()),
+            f"PCB test images are missing or empty: {input_dir}",
+        )
+
+        config_path = e2e_config_writer({
+            "input": {"source": str(input_dir)}, "output": {"dir": str(tmp_output_dir)},
+            "inference": {"min_score": 1.0},
+        })
+        result = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True, text=True, timeout=test_timeout_ms / 1000,
+            cwd=str(EXAMPLE_DIR), check=False,
+        )
+
+        assert result.returncode == 0, (
+            f"main.py exited with code {result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        summary = re.search(r"total_defects=(\d+)", result.stdout)
+        assert summary, f"summary line missing from stdout:\n{result.stdout}"
+        assert int(summary.group(1)) == 0, (
+            f"inference.min_score: 1.0 must report total_defects=0:\n{result.stdout}"
+        )
