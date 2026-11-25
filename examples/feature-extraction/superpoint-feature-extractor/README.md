@@ -61,8 +61,6 @@ Each frame's points go to Insight's pose-estimation overlay as the keypoints of 
 
 ![SuperPoint feature overlay](../../../portal/assets/examples/feature-extraction/superpoint-feature-extractor/image.png)
 
-The frame is from the [TUM RGB-D Benchmark](https://cvg.cit.tum.de/data/datasets/rgbd-dataset) sequence `freiburg1_desk` by Sturm et al., licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); an earlier version of this example drew the points and their count.
-
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
