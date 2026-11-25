@@ -418,6 +418,9 @@ bool test_mapping_list_rejects_what_is_not_a_list_of_mappings() {
       {"model:\n  path: a.tar.gz\n", "model must be a list of mappings, got a mapping"},
       {"model: a.tar.gz\n", "model must be a list of mappings, got 'a.tar.gz'"},
       {"model: []\n", "model must be a non-empty list of mappings"},
+      {"model:\n", "model must be a list of mappings, got null"},
+      {"model:\n  - path: a.tar.gz\n  -\n", "model[1] must be a mapping, got null"},
+      {"model:\n  - path: a.tar.gz\n  - [b, c]\n", "model[1] must be a mapping, got a list"},
       {"model:\n  - path: a.tar.gz\n  - b.tar.gz\n", "model[1] must be a mapping, got 'b.tar.gz'"},
   };
   for (const auto& [text, expected] : cases) {

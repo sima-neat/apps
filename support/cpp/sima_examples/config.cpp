@@ -50,6 +50,17 @@ bool parse_bool(const std::string& value, const std::string& key) {
   throw std::runtime_error(key + " must be true or false");
 }
 
+// A node as the errors of mapping_list() show it, the same as Python: null, a list, or 'text'.
+std::string shown(const YAML::Node& node) {
+  if (node.IsNull()) {
+    return "null";
+  }
+  if (node.IsSequence()) {
+    return "a list";
+  }
+  return "'" + node.Scalar() + "'";
+}
+
 } // namespace
 
 // Fills a Config from a YAML node; a friend of Config, so config.h needs no yaml-cpp header.
@@ -76,9 +87,8 @@ struct ConfigLoader {
           config.lists_with_non_strings_.insert(key);
         } else {
           if (config.non_mapping_items_.count(key) == 0) {
-            const std::string got = item.IsScalar() ? item.Scalar() : "a list";
             config.non_mapping_items_[key] =
-                key + "[" + std::to_string(index) + "] must be a mapping, got '" + got + "'";
+                key + "[" + std::to_string(index) + "] must be a mapping, got " + shown(item);
           }
           if (item.IsScalar()) {
             items.push_back(item.Scalar());
@@ -209,7 +219,8 @@ std::vector<Config> Config::mapping_list(const std::string& key) const {
   }
   const auto scalar = scalars_.find(name);
   if (scalar != scalars_.end()) {
-    throw std::runtime_error(name + " must be a list of mappings, got '" + scalar->second + "'");
+    const std::string got = is_nullish(scalar->second) ? "null" : "'" + scalar->second + "'";
+    throw std::runtime_error(name + " must be a list of mappings, got " + got);
   }
   const auto is_child = [&name](const auto& entry) {
     return entry.first.rfind(name + ".", 0) == 0;

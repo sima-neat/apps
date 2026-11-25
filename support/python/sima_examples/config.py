@@ -23,6 +23,17 @@ def _flatten(mapping: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     return values
 
 
+def _shown(value: Any) -> str:
+    """A value as the errors of `mapping_list` show it, the same as C++: null, a list, or 'text'."""
+    if value is None:
+        return "null"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, bool):
+        return f"'{str(value).lower()}'"
+    return f"'{value}'"
+
+
 def lookup(key: str, value: str, table: Mapping[str, T]) -> T:
     """`table[value]`; a value the table lacks raises with `key`, the value, and the choices.
 
@@ -101,13 +112,13 @@ class Config:
             raise ValueError(f"{self.path} is missing {key}")
         values = self._values[key]
         if not isinstance(values, list):
-            raise ValueError(f"{key} must be a list of mappings, got {values!r}")
+            raise ValueError(f"{key} must be a list of mappings, got {_shown(values)}")
         if not values:
             raise ValueError(f"{key} must be a non-empty list of mappings")
         entries = []
         for index, value in enumerate(values):
             entry = f"{key}[{index}]."
             if not isinstance(value, dict):
-                raise ValueError(f"{key}[{index}] must be a mapping, got {value!r}")
+                raise ValueError(f"{key}[{index}] must be a mapping, got {_shown(value)}")
             entries.append(Config(self.path, _flatten(value, entry), entry))
         return entries
