@@ -302,11 +302,15 @@ int run_app(const fs::path& config_path) {
       send_detections(run, metadata_senders, labels, config.integer("inference.frames"), stop);
   run.close();
 
+  // Core candidate: after an RTSP MJPEG run, the process exits with code 0 without flushing
+  // stdout, so on a pipe or a file the lines below are lost unless std::endl flushes them.
+  // The e2e test, which reads stdout through a pipe, shows it with two RTSP MJPEG sources.
   for (std::size_t index = 0; index < metadata_senders.size(); ++index) {
-    std::cout << "[stream " << index << "] processed=" << processed[index] << "\n";
+    std::cout << "[stream " << index << "] processed=" << processed[index] << std::endl;
     const auto failures = metadata_senders[index].stats().send_failures;
     if (failures > 0) {
-      std::cout << "[stream " << index << "] " << failures << " metadata messages dropped\n";
+      std::cout << "[stream " << index << "] " << failures << " metadata messages dropped"
+                << std::endl;
     }
   }
   return 0;
