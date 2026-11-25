@@ -38,10 +38,10 @@ test("the shared header's event: persist from the header, or kept when an older 
   assert.deepEqual(themeFromShellEvent({ detail: { theme: "dark", persist: false } }), { theme: "dark", persist: false });
   assert.deepEqual(themeFromShellEvent({ detail: { theme: "light", persist: true } }), { theme: "light", persist: true });
   assert.deepEqual(themeFromShellEvent({ detail: { theme: "dark" } }), { theme: "dark", persist: true }, "an older header doesn't say");
-  assert.deepEqual(
+  assert.equal(
     themeFromShellEvent({ detail: { theme: "light" } }, { theme: "dark", persist: false }),
-    { theme: "light", persist: false },
-    "an older header's event keeps a theme from ?theme unstored (Codex on #833)",
+    null,
+    "an older header's event doesn't replace a theme from ?theme (Codex on #833)",
   );
   assert.deepEqual(themeFromShellEvent({ detail: { theme: "light" } }, { theme: "dark", persist: true }), { theme: "light", persist: true });
   assert.equal(themeFromShellEvent({ detail: { theme: "blue" } }), null);
