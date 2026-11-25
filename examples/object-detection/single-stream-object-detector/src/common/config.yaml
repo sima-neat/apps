@@ -3,7 +3,7 @@ model:
   # Compiled model package; a relative path starts at this file.
   path: ../../../../../models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
   # Class labels, one per line; a relative path starts at the working directory.
-  labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt
+  labels: support/labels/coco80.txt
 
 input:
   # rtsp, http, or usb. For http, delete codec and rtsp, set source to the http:// or

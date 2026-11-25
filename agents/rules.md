@@ -49,8 +49,8 @@ Place each piece of code by the first question it answers yes to:
   example does. `build.sh` and `scripts/get-example.sh` ship that folder, `support/README.md`,
   `support/labels/`, and `support/cpp/sima_examples/` without `testing/` as reference source.
 - A label file moves from an example's `src/common/` to `support/labels/` when a second
-  example's model uses the same classes in the same class-ID order, and its copies are deleted
-  in the same pull request. A config names it as `model.labels: support/labels/<file>`, read
+  example's model uses the same classes in the same class-ID order. An example that keeps a
+  copy deletes it and names the shared file in its own conversion pull request. A config names it as `model.labels: support/labels/<file>`, read
   from the working directory. A label set with another order or count, such as COCO's 80
   classes and its 91 class IDs, is its own file. A class ID that names no class has the line
   `N/A`.
