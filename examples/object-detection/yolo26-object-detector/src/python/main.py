@@ -1,283 +1,112 @@
-"""yolo26m simple folder detection pipeline using pyneat."""
+"""Detect objects in a folder of images with YOLO26, saved as annotated PNGs.
+
+The model runs on one image at a time and decodes YOLO26's boxes itself. Each image is saved with
+its boxes drawn.
+"""
 
 from __future__ import annotations
 
 import argparse
-import struct
 import sys
-import time
 from pathlib import Path
 
-import yaml
+import cv2
+import numpy as np
+import pyneat
 
+# The helpers the examples share live in <apps root>/support/python.
+for apps_root in Path(__file__).resolve().parents:
+    if (apps_root / "support" / "python" / "sima_examples").is_dir():
+        sys.path.insert(0, str(apps_root / "support" / "python"))
+        break
+else:
+    raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
-MIN_SCORE = 0.25
-NMS_IOU = 0.45
-MAX_DET = 100
+from sima_examples.config import Config
+from sima_examples.labels import load_labels
+from utils import annotate, images
+
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-BOX_COLORS = [
-    (0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0),
-    (255, 0, 255), (0, 255, 255), (128, 255, 0), (255, 128, 0),
-]
 
 
-def is_image(path: Path) -> bool:
-    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    return parser.parse_args(argv)
 
 
-def load_labels(path: Path) -> list[str]:
-    if not path.is_file():
-        raise FileNotFoundError(f"Labels file does not exist: {path}")
-    labels = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if not labels:
-        raise ValueError(f"Labels file is empty: {path}")
-    return labels
+def model_options(config: Config, max_detections: int) -> pyneat.ModelOptions:
+    """OpenCV BGR images in, boxes out of Core's YOLO26 decoder."""
+    options = pyneat.ModelOptions()
+    options.preprocess.kind = pyneat.InputKind.Image
+    options.preprocess.enable = pyneat.AutoFlag.On
+    options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+    options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+    options.decode_type = pyneat.BoxDecodeType.YoloV26
+    options.score_threshold = config.number("inference.min_score")
+    options.nms_iou_threshold = config.number("inference.nms_iou")
+    options.top_k = max_detections
+    return options
 
 
-def extract_bbox_payload_from_tensors(tensors) -> bytes | None:
-    if len(tensors) != 1:
-        return None
-    for tensor in tensors:
-        try:
-            payload = tensor.copy_payload_bytes()
-        except Exception:
-            continue
-        if payload:
-            return payload
-    return None
-
-
-def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, min_score: float) -> list[dict]:
-    if len(payload) < 4:
-        return []
-    count = min(struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // 24)
-    out = []
-    off = 4
-    for _ in range(count):
-        x, y, w, h, score, cls_id = struct.unpack_from("<iiiifi", payload, off)
-        off += 24
-        x1 = max(0.0, min(float(img_w), float(x)))
-        y1 = max(0.0, min(float(img_h), float(y)))
-        x2 = max(0.0, min(float(img_w), float(x + w)))
-        y2 = max(0.0, min(float(img_h), float(y + h)))
-        if x2 <= x1 or y2 <= y1 or float(score) < min_score:
-            continue
-        out.append(dict(x1=x1, y1=y1, x2=x2, y2=y2, score=float(score), class_id=int(cls_id)))
-    return out
-
-
-def draw_boxes(frame: np.ndarray, boxes: list[dict], labels: list[str]) -> np.ndarray:
-    for b in boxes:
-        x1, y1 = int(b["x1"]), int(b["y1"])
-        x2, y2 = int(b["x2"]), int(b["y2"])
-        cls_id = b["class_id"]
-        score = b["score"]
-        color = BOX_COLORS[cls_id % len(BOX_COLORS)]
-        label = labels[cls_id] if cls_id < len(labels) else str(cls_id)
-        text = f"{label} {score:.2f}"
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(frame, (x1, y1 - th - 4), (x1 + tw, y1), color, -1)
-        cv2.putText(frame, text, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-    return frame
-
-
-def load_config(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
-
-
-def clear_output_images(output_dir: Path, input_dir: Path) -> int:
-    if output_dir.resolve() == input_dir.resolve():
-        print(
-            f"Skipping output cleanup because output_dir matches input_dir: {output_dir}",
-            file=sys.stderr,
-        )
-        return 0
-
-    removed = 0
-    for path in output_dir.iterdir():
-        if path.is_file() and is_image(path):
-            path.unlink()
-            removed += 1
-    return removed
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="yolo26m simple folder detection pipeline")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
-    args = parser.parse_args()
-
-    global cv2, np, pyneat
-    import cv2
-    import numpy as np
-    import pyneat
-
-    raw = load_config(args.config)
-    model_cfg = raw.get("model", {})
-    io_cfg = raw.get("io", {})
-    decode_cfg = raw.get("decode", {})
-    runtime_cfg = raw.get("runtime", {})
-    output_cfg = raw.get("output", {})
-
-    model_path = model_cfg.get("path", "models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz")
-    labels_path = Path(
-        model_cfg.get(
-            "labels",
-            "examples/object-detection/yolo26-object-detector/src/common/coco_label.txt",
-        )
+def image_tensor(image: np.ndarray) -> pyneat.Tensor:
+    """An OpenCV image as a BGR tensor in EV74 memory, where the preprocessing reads it."""
+    return pyneat.Tensor.from_numpy(
+        image, copy=True, image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.EV74
     )
-    input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
-    output_dir = Path(io_cfg.get("output_dir", "sandbox/yolo26-object-detector"))
-    min_score = float(decode_cfg.get("score_threshold", MIN_SCORE))
-    nms_iou = float(decode_cfg.get("nms_iou", NMS_IOU))
-    max_detections = int(decode_cfg.get("max_detections", MAX_DET))
-    num_runs = int(runtime_cfg.get("num_runs", 1))
-    profile = bool(runtime_cfg.get("profile", False))
-    overlay = bool(output_cfg.get("overlay", True))
 
-    if not 0.0 <= min_score <= 1.0:
-        print(f"Error: decode.score_threshold must be in [0.0, 1.0], got {min_score}", file=sys.stderr)
-        return 2
-    if not 0.0 <= nms_iou <= 1.0:
-        print(f"Error: decode.nms_iou must be in [0.0, 1.0], got {nms_iou}", file=sys.stderr)
-        return 2
-    if max_detections < 1:
-        print(f"Error: decode.max_detections must be >= 1, got {max_detections}", file=sys.stderr)
-        return 2
-    if num_runs < 1:
-        print(f"Error: runtime.num_runs must be >= 1, got {num_runs}", file=sys.stderr)
-        return 2
-    if not input_dir.is_dir():
-        print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
-        return 2
+
+def detect(runner: pyneat.ModelRunner, image: np.ndarray, max_detections: int) -> list:
+    """The boxes the model finds in one image, in the image's pixels."""
+    bbox = runner.run([image_tensor(image)])[0]
+    height, width = image.shape[:2]
+    # strict fails on anything but a BBOX payload, such as raw model heads.
+    return pyneat.detections.decode_bbox_tensor(bbox, width, height, max_detections, True).boxes
+
+
+def annotate_images(
+    runner: pyneat.ModelRunner,
+    paths: list[Path],
+    labels: list[str],
+    max_detections: int,
+    output_dir: Path,
+) -> None:
+    """Save each image with its boxes drawn to `output_dir`."""
+    for index, path in enumerate(paths, start=1):
+        image = images.read_image(path)
+        boxes = detect(runner, image, max_detections)
+        output_path = output_dir / annotate.output_name(path)
+        if not cv2.imwrite(str(output_path), annotate.draw_detections(image, boxes, labels)):
+            raise OSError(f"cannot write {output_path}")
+        print(f"[{index}/{len(paths)}] {path.name}: {len(boxes)} detections -> {output_path.name}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    config = Config.load(args.config)
+    # Used by both the model and the box decode.
+    max_detections = config.integer("inference.max_detections")
+    # YOLO26's class IDs index the labels directly.
+    labels = load_labels(Path(config.string("model.labels")))
+    paths = images.image_paths(Path(config.string("input.source")))
+    model_path = args.config.absolute().parent / config.string("model.path")
+    model = pyneat.Model(str(model_path), model_options(config, max_detections))
+    # The first image seeds the build, which plans the route for images like it.
+    runner = model.build([image_tensor(images.read_image(paths[0]))])
+    output_dir = Path(config.string("output.dir"))
     output_dir.mkdir(parents=True, exist_ok=True)
-    removed_outputs = clear_output_images(output_dir, input_dir)
-    if removed_outputs:
-        print(f"Cleared {removed_outputs} stale output images")
     try:
-        labels = load_labels(labels_path)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 2
-
-    images = sorted(p for p in input_dir.iterdir() if p.is_file() and is_image(p))
-    if not images:
-        print(f"No images found in {input_dir}", file=sys.stderr)
-        return 3
-    print(f"Found {len(images)} images")
-
-    try:
-        opt = pyneat.ModelOptions()
-        opt.preprocess.kind = pyneat.InputKind.Image
-        opt.preprocess.enable = pyneat.AutoFlag.On
-        opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
-        opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-        opt.decode_type = pyneat.BoxDecodeType.YoloV26
-        opt.score_threshold = min_score
-        opt.nms_iou_threshold = nms_iou
-        opt.top_k = max_detections
-        model = pyneat.Model(model_path, opt)
-
-        # Warmup inference to stabilize timing before profiling.
-        seed = cv2.imread(str(images[0]), cv2.IMREAD_COLOR)
-        if seed is None:
-            print(f"Error: failed to read build seed image: {images[0].name}", file=sys.stderr)
-            return 4
-        t_dummy = pyneat.Tensor.from_numpy(
-            np.ascontiguousarray(seed, dtype=np.uint8),
-            copy=True,
-            image_format=pyneat.PixelFormat.BGR,
-            memory=pyneat.TensorMemory.EV74,
-        )
-        run_opt = pyneat.RunOptions()
-        run_opt.queue_depth = 8
-        run_opt.overflow_policy = pyneat.OverflowPolicy.Block
-        run_opt.preset = pyneat.RunPreset.Balanced
-        runner = model.build(
-            [t_dummy],
-            route_options=pyneat.ModelRouteOptions(),
-            run_options=run_opt,
-        )
-        runner.run([t_dummy])
-        print("[WARMUP] done")
-
-        all_images = images * num_runs
-        if num_runs > 1:
-            print(f"Looping {num_runs}x over {len(images)} images ({len(all_images)} total)")
-
-        pipeline_start = time.perf_counter()
-        processed = 0
-
-        for img_path in all_images:
-            img_start = time.perf_counter()
-
-            bgr = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
-            if bgr is None:
-                print(f"Skipping unreadable: {img_path.name}", file=sys.stderr)
-                continue
-
-            orig_h, orig_w = bgr.shape[:2]
-            t_in = pyneat.Tensor.from_numpy(
-                np.ascontiguousarray(bgr, dtype=np.uint8),
-                copy=True,
-                image_format=pyneat.PixelFormat.BGR,
-                memory=pyneat.TensorMemory.EV74,
-            )
-
-            infer_start = time.perf_counter()
-            out = runner.run([t_in])
-            infer_end = time.perf_counter()
-
-            payload = extract_bbox_payload_from_tensors(out)
-            if not payload:
-                print(f"Model returned no BBOX payload for {img_path.name}", file=sys.stderr)
-                continue
-            boxes = parse_bbox_payload(payload, orig_w, orig_h, min_score)
-            decode_end = time.perf_counter()
-
-            if overlay:
-                draw_boxes(bgr, boxes, labels)
-                out_path = output_dir / f"{img_path.stem}.png"
-                cv2.imwrite(str(out_path), bgr)
-            img_end = time.perf_counter()
-
-            processed += 1
-            det_str = f"({len(boxes)} detections)"
-            if overlay:
-                print(f"[{processed}/{len(all_images)}] {img_path.name} -> {img_path.stem}.png {det_str}")
-            else:
-                print(f"[{processed}/{len(all_images)}] {img_path.name} {det_str}")
-
-            if profile:
-                pre_ms = (infer_start - img_start) * 1000
-                inf_ms = (infer_end - infer_start) * 1000
-                dec_ms = (decode_end - infer_end) * 1000
-                post_ms = (img_end - decode_end) * 1000
-                tot_ms = (img_end - img_start) * 1000
-                print(
-                    f"[PROFILE] {img_path.name}: preprocess={pre_ms:.1f}ms "
-                    f"inference={inf_ms:.1f}ms decode={dec_ms:.1f}ms "
-                    f"overlay+save={post_ms:.1f}ms total={tot_ms:.1f}ms"
-                )
-
-        if profile and processed > 0:
-            pipeline_end = time.perf_counter()
-            total_s = pipeline_end - pipeline_start
-            avg_ms = (total_s * 1000) / processed
-            fps = processed / total_s
-            print(
-                f"[PROFILE] Total: {processed} images in {total_s:.1f}s "
-                f"(avg {avg_ms:.1f}ms/image, {fps:.1f} FPS)"
-            )
-
+        annotate_images(runner, paths, labels, max_detections, output_dir)
+    finally:
         runner.close()
-        print(f"Done: {processed} images processed")
-        return 0
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 4
+
+    print(f"Done: {len(paths)} images processed")
+    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        sys.exit(main())
+    except Exception as error:  # noqa: BLE001 - report the cause in one line, not a traceback
+        print(f"[ERR] {error}", file=sys.stderr)
+        sys.exit(1)

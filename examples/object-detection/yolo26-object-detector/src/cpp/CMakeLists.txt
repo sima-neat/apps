@@ -9,4 +9,10 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
-sima_neat_apps_module("yolo26-object-detector" UNIT_TEST E2E_TEST)
+sima_neat_apps_module("yolo26-object-detector" UNIT_TEST E2E_TEST OUTPUT_TARGET_VAR YOLO26_TARGET)
+
+# The image folder and the annotated images; the unit test includes the same headers.
+target_sources(${YOLO26_TARGET} PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/utils/annotate.h"
+  "${CMAKE_CURRENT_LIST_DIR}/utils/images.h"
+)

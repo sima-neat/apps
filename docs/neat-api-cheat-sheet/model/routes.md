@@ -288,7 +288,6 @@ change them.
 - `RouteOptions` passed to `build`:
   [Depth Estimator](../../../examples/depth-estimation/depth-estimator/),
   [PCB Defect Detector](../../../examples/object-detection/pcb-defect-detector/),
-  [YOLO26 Object Detector](../../../examples/object-detection/yolo26-object-detector/),
   [SSD-MobileNet Object Detector](../../../examples/object-detection/ssd-mobilenet-object-detector/),
   [PatchCore Anomaly Detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/),
   [RF-DETR Detection and Segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/),

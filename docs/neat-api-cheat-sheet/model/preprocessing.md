@@ -37,28 +37,29 @@ image is on [decoding.md](decoding.md).
 
 C++, from
 [`yolo26-object-detector/src/cpp/main.cpp`](../../../examples/object-detection/yolo26-object-detector/src/cpp/main.cpp)
-(lines 248–252 and 258, de-indented):
+(lines 56–60 of `model_options` and line 104 of `run_app`, de-indented; `neat`
+is `simaai::neat`):
 
 ```cpp
-simaai::neat::Model::Options model_opt;
-model_opt.preprocess.kind = simaai::neat::InputKind::Image;
-model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
-model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
-model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
-simaai::neat::Model model(cfg.model_path, model_opt);
+neat::Model::Options options;
+options.preprocess.kind = neat::InputKind::Image;
+options.preprocess.enable = neat::AutoFlag::On;
+options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
+options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
+neat::Model model(model_path.string(), model_options(config, max_detections));
 ```
 
 Python, from
 [`yolo26-object-detector/src/python/main.py`](../../../examples/object-detection/yolo26-object-detector/src/python/main.py)
-(lines 171–175 and 180, de-indented):
+(lines 40–44 of `model_options` and line 93 of `main`, de-indented):
 
 ```python
-opt = pyneat.ModelOptions()
-opt.preprocess.kind = pyneat.InputKind.Image
-opt.preprocess.enable = pyneat.AutoFlag.On
-opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
-opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-model = pyneat.Model(model_path, opt)
+options = pyneat.ModelOptions()
+options.preprocess.kind = pyneat.InputKind.Image
+options.preprocess.enable = pyneat.AutoFlag.On
+options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+model = pyneat.Model(str(model_path), model_options(config, max_detections))
 ```
 
 The example then sends each OpenCV frame as a BGR image tensor
