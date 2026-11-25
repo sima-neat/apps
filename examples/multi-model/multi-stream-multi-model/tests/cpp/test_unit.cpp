@@ -270,7 +270,10 @@ bool test_data_json_leaves_out_the_lowest_confidence_entries() {
                                       {{"id", "c"}, {"confidence", 0.7}, {"pad", pad}}};
   const auto [data, left_out] = insight_metadata::data_json("objects", entries);
   std::vector<std::string> ids;
-  for (const auto& entry : Entry::parse(data)["objects"]) {
+  // A named Entry: a range-for over Entry::parse(data)["objects"] would keep only the reference
+  // operator[] returns, into a parse result destroyed before the loop.
+  const Entry parsed = Entry::parse(data);
+  for (const auto& entry : parsed["objects"]) {
     ids.push_back(entry["id"].get<std::string>());
   }
   bool ok = expect_true(left_out == 1, "one entry is left out");
