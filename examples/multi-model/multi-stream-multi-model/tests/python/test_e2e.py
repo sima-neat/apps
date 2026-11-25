@@ -34,6 +34,12 @@ MIN_SCORE = 0.35
 MIN_RESULTS_PER_S = 19.5
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
+# Each video socket's receive buffer. A keyframe arrives as a burst of packets, and a full buffer
+# drops the rest of the burst. In Vulcan CI run 45615743474 on 02572b9, 47 of 150 messages of
+# H.264 stream 0 had no video frame, in runs of adjacent frames. Linux caps the size at
+# net.core.rmem_max (212992 bytes by default), and getsockopt reports twice what it set, so the
+# report prints what the socket got. The same as yolo26-tiny-drone-tracker's test.
+VIDEO_RECEIVE_BUFFER = 8 << 20
 # The shipped config's streams, in order: the package test-scope.yaml downloads for each, the
 # Insight metadata type its model sends, and the key of the entries in that type's data.
 STREAMS = [
@@ -52,10 +58,13 @@ def _env_int(name: str, default: int) -> int:
 def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
     """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
     # A copy of single-stream's helper. #823 moves it into tests/utils/rtp_video.py.
+    # The loop only reads, into one buffer, so it empties the socket as fast as it can.
     sock.settimeout(0.2)
+    packet = bytearray(65536)
     while True:
         try:
-            headers.append(sock.recv(65536)[:12])
+            sock.recv_into(packet)
+            headers.append(bytes(packet[:12]))
         except TimeoutError:
             if stop.is_set():
                 return
@@ -76,18 +85,44 @@ def _udp_rcvbuf_errors() -> int | None:
     return int(rows[1][rows[0].index("RcvbufErrors")])
 
 
+def _sequence_gaps(headers: list[bytes]) -> list[tuple[int, int, int]]:
+    """Each gap in the RTP sequence: the packets missing, and the RTP timestamps of the packets
+    before and after it. A frame wholly in a gap has a timestamp between those two."""
+    gaps = []
+    for previous, current in zip(headers, headers[1:]):
+        step = (int.from_bytes(current[2:4], "big") - int.from_bytes(previous[2:4], "big")) & 0xFFFF
+        if 1 < step < 0x8000:
+            gaps.append(
+                (
+                    step - 1,
+                    int.from_bytes(previous[4:8], "big"),
+                    int.from_bytes(current[4:8], "big"),
+                )
+            )
+    return gaps
+
+
+def _in_gap(timestamp_ms: int, gaps: list[tuple[int, int, int]]) -> bool:
+    """Whether the frame at `timestamp_ms` may be one of the packets a gap is missing."""
+    ticks = (timestamp_ms * 90) & 0xFFFFFFFF
+    return any(
+        (ticks - before + 90) & 0xFFFFFFFF <= (after - before + 180) & 0xFFFFFFFF
+        for _, before, after in gaps
+    )
+
+
 def _video_report(headers: list[list[bytes]], rcvbufs: list[int], drops_before: int | None) -> str:
     """What each video port received, to tell packets the test's sockets dropped from frames the
     app did not send. A gap in the RTP sequence numbers is a packet sent and not received."""
     lines = []
     for index, port_headers in enumerate(headers):
-        sequence = [int.from_bytes(header[2:4], "big") for header in port_headers]
-        missing = sum((b - a - 1) & 0xFFFF for a, b in zip(sequence, sequence[1:]))
+        missing = sum(lost for lost, _, _ in _sequence_gaps(port_headers))
         timestamps = {int.from_bytes(header[4:8], "big") for header in port_headers}
         lines.append(
             f"video port {index}: {len(port_headers)} RTP packets, {missing} sequence numbers "
             f"missing between them, {len(timestamps)} RTP timestamps for {FRAMES} frames, "
-            f"SO_RCVBUF {rcvbufs[index]}"
+            f"receive buffer {rcvbufs[index]} bytes from getsockopt for "
+            f"{VIDEO_RECEIVE_BUFFER} asked"
         )
     drops_after = _udp_rcvbuf_errors()
     drops = "unknown" if None in (drops_before, drops_after) else drops_after - drops_before
@@ -189,6 +224,9 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         try:
             for index in range(streams):
                 video_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                video_sockets[-1].setsockopt(
+                    socket.SOL_SOCKET, socket.SO_RCVBUF, VIDEO_RECEIVE_BUFFER
+                )
                 video_sockets[-1].bind(("127.0.0.1", video_port + index))
                 rcvbufs.append(video_sockets[-1].getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))
                 drains.append(
@@ -288,11 +326,16 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         unpaired = [
             m.timestamp_ms for m in stream_messages if not _pairs(m.timestamp_ms, rtp_timestamps)
         ]
+        # A frame in a gap of the RTP sequence was lost between the sender and this test, so its
+        # message counts against the frames received, not against the app's timestamps.
+        gaps = _sequence_gaps(headers[index])
+        lost = [timestamp for timestamp in unpaired if _in_gap(timestamp, gaps)]
+        unpaired = [timestamp for timestamp in unpaired if not _in_gap(timestamp, gaps)]
         # A frame the video link dropped leaves its message unpaired, so allow 5%, as for the
         # count.
         assert len(unpaired) <= len(stream_messages) * 5 // 100, (
-            f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}\n"
-            f"{video_report}"
+            f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}, "
+            f"{len(lost)} messages in a sequence gap\n{video_report}"
         )
         times = arrivals[index][len(arrivals[index]) // 10:]
         assert len(times) > 10, f"stream {index}: {len(times)} messages arrived during the run"

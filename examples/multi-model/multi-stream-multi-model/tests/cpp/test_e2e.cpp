@@ -23,10 +23,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -46,6 +48,12 @@ constexpr double kMinScore = 0.35;
 // e83d42f the same DevKit gave 19.9 to 20.0, and that log does not show the sources' rate. Whether
 // the app keeps up with its sources is measured on a board, not here.
 constexpr double kMinResultsPerS = 19.5;
+// Each video socket's receive buffer. A keyframe arrives as a burst of packets, and a full buffer
+// drops the rest of the burst. In Vulcan CI run 45615743474 on 02572b9, 47 of 150 messages of the
+// Python H.264 stream 0 had no video frame, in runs of adjacent frames. Linux caps the size at
+// net.core.rmem_max (212992 bytes by default), and getsockopt reports twice what it set, so the
+// report prints what the socket got. The same as yolo26-tiny-drone-tracker's test.
+constexpr int kVideoReceiveBuffer = 8 << 20;
 
 using Clock = std::chrono::steady_clock;
 
@@ -84,6 +92,8 @@ std::set<std::string> coco_labels() {
   return labels;
 }
 
+using RtpHeader = std::array<unsigned char, 12>;
+
 // Receives one stream's video and keeps each packet's RTP header until `stop` is set. A copy of
 // single-stream's helper: #823 moves it into support/cpp/sima_examples/testing/rtp_video.
 class VideoDrain {
@@ -96,14 +106,18 @@ public:
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     timeval timeout{0, 200000};
     ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    ::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &kVideoReceiveBuffer, sizeof(kVideoReceiveBuffer));
+    socklen_t size = sizeof(receive_buffer_);
+    ::getsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &receive_buffer_, &size);
     ok_ = fd_ >= 0 && ::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
     if (ok_) {
+      // The loop only reads, into one buffer, so it empties the socket as fast as it can.
       thread_ = std::thread([this, &stop] {
         std::vector<unsigned char> packet(65536);
         for (;;) {
           const auto size = ::recv(fd_, packet.data(), packet.size(), 0);
           if (size >= 12) {
-            std::array<unsigned char, 12> header{};
+            RtpHeader header{};
             std::copy_n(packet.begin(), header.size(), header.begin());
             headers_.push_back(header);
           } else if (stop) {
@@ -124,8 +138,11 @@ public:
   bool ok() const {
     return ok_;
   }
+  int receive_buffer() const {
+    return receive_buffer_;
+  }
   // Call after `stop` is set.
-  const std::vector<std::array<unsigned char, 12>>& headers() {
+  const std::vector<RtpHeader>& headers() {
     if (thread_.joinable()) {
       thread_.join();
     }
@@ -135,9 +152,102 @@ public:
 private:
   int fd_ = -1;
   bool ok_ = false;
-  std::vector<std::array<unsigned char, 12>> headers_;
+  int receive_buffer_ = 0;
+  std::vector<RtpHeader> headers_;
   std::thread thread_;
 };
+
+// RcvbufErrors of the Udp: line of /proc/net/snmp: datagrams the kernel dropped because a UDP
+// socket's receive buffer was full, for every UDP socket of the host. -1 without the file.
+long long udp_rcvbuf_errors() {
+  std::ifstream file("/proc/net/snmp");
+  std::vector<std::vector<std::string>> rows;
+  for (std::string line; std::getline(file, line) && rows.size() < 2;) {
+    if (line.rfind("Udp:", 0) == 0) {
+      std::istringstream words(line);
+      rows.emplace_back(std::istream_iterator<std::string>(words),
+                        std::istream_iterator<std::string>());
+    }
+  }
+  if (rows.size() != 2) {
+    return -1;
+  }
+  const auto name = std::find(rows[0].begin(), rows[0].end(), "RcvbufErrors");
+  const auto column = static_cast<std::size_t>(name - rows[0].begin());
+  return name == rows[0].end() || column >= rows[1].size() ? -1 : std::stoll(rows[1][column]);
+}
+
+std::uint32_t rtp_timestamp(const RtpHeader& header) {
+  return static_cast<std::uint32_t>(header[4]) << 24 | static_cast<std::uint32_t>(header[5]) << 16 |
+         static_cast<std::uint32_t>(header[6]) << 8 | header[7];
+}
+
+std::uint16_t rtp_sequence(const RtpHeader& header) {
+  return static_cast<std::uint16_t>(header[2] << 8 | header[3]);
+}
+
+// A gap in the RTP sequence: the packets missing, and the RTP timestamps of the packets before and
+// after it. A frame wholly in a gap has a timestamp between those two.
+struct SequenceGap {
+  long long missing = 0;
+  std::uint32_t before = 0;
+  std::uint32_t after = 0;
+};
+
+std::vector<SequenceGap> sequence_gaps(const std::vector<RtpHeader>& headers) {
+  std::vector<SequenceGap> gaps;
+  for (std::size_t i = 1; i < headers.size(); ++i) {
+    const auto step =
+        static_cast<std::uint16_t>(rtp_sequence(headers[i]) - rtp_sequence(headers[i - 1]));
+    if (step > 1 && step < 0x8000) {
+      gaps.push_back({step - 1, rtp_timestamp(headers[i - 1]), rtp_timestamp(headers[i])});
+    }
+  }
+  return gaps;
+}
+
+// Whether the frame at `timestamp_ms` may be one of the packets a gap is missing.
+bool in_gap(std::int64_t timestamp_ms, const std::vector<SequenceGap>& gaps) {
+  const auto ticks = static_cast<std::uint32_t>(timestamp_ms * 90);
+  return std::any_of(gaps.begin(), gaps.end(), [&](const SequenceGap& gap) {
+    return static_cast<std::uint32_t>(ticks - gap.before + 90) <=
+           static_cast<std::uint32_t>(gap.after - gap.before + 180);
+  });
+}
+
+// What each video port received, to tell packets the test's sockets dropped from frames the app
+// did not send. A gap in the RTP sequence numbers is a packet sent and not received.
+std::string video_report(const std::vector<std::unique_ptr<VideoDrain>>& videos,
+                         long long drops_before) {
+  std::string report;
+  for (std::size_t index = 0; index < videos.size(); ++index) {
+    const auto& headers = videos[index]->headers();
+    long long missing = 0;
+    for (const auto& gap : sequence_gaps(headers)) {
+      missing += gap.missing;
+    }
+    std::set<std::uint32_t> timestamps;
+    for (const auto& header : headers) {
+      timestamps.insert(rtp_timestamp(header));
+    }
+    report += "video port " + std::to_string(index) + ": " + std::to_string(headers.size()) +
+              " RTP packets, " + std::to_string(missing) + " sequence numbers missing between " +
+              "them, " + std::to_string(timestamps.size()) + " RTP timestamps for " +
+              std::to_string(kFrames) + " frames, receive buffer " +
+              std::to_string(videos[index]->receive_buffer()) + " bytes from getsockopt for " +
+              std::to_string(kVideoReceiveBuffer) + " asked\n";
+  }
+  const long long drops_after = udp_rcvbuf_errors();
+  std::ifstream rmem_file("/proc/sys/net/core/rmem_max");
+  std::string rmem_max;
+  if (!(rmem_file >> rmem_max)) {
+    rmem_max = "unknown";
+  }
+  return report + "Udp RcvbufErrors during the run, all sockets: " +
+         (drops_before < 0 || drops_after < 0 ? std::string("unknown")
+                                              : std::to_string(drops_after - drops_before)) +
+         "; rmem_max " + rmem_max;
+}
 
 // Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a video
 // frame's RTP timestamp.
@@ -266,11 +376,13 @@ int run_case(const std::string& binary, const std::string& models_dir,
     }
     return false; // The application stops by itself after inference.frames.
   };
+  const long long drops_before = udp_rcvbuf_errors();
   const ProcessResult result =
       spawn_until(binary, {"--config", config_path.string()}, read_metadata, timeout_ms);
   const auto rest = listener.drain_pending();
   metadata.messages.insert(metadata.messages.end(), rest.messages.begin(), rest.messages.end());
   stop = true;
+  const std::string video = video_report(videos, drops_before);
 
   const auto labels = coco_labels();
   std::vector<std::string> problems;
@@ -309,11 +421,10 @@ int run_case(const std::string& binary, const std::string& models_dir,
 
     std::set<int> payload_types;
     std::set<std::uint32_t> rtp_timestamps;
-    for (const auto& header : videos[static_cast<std::size_t>(index)]->headers()) {
+    const auto& headers = videos[static_cast<std::size_t>(index)]->headers();
+    for (const auto& header : headers) {
       payload_types.insert(header[1] & 0x7F);
-      rtp_timestamps.insert(static_cast<std::uint32_t>(header[4]) << 24 |
-                            static_cast<std::uint32_t>(header[5]) << 16 |
-                            static_cast<std::uint32_t>(header[6]) << 8 | header[7]);
+      rtp_timestamps.insert(rtp_timestamp(header));
     }
     if (payload_types != std::set<int>{payload_type(source_case.codec)}) {
       problems.push_back(stream + " video did not arrive with RTP payload type " +
@@ -373,11 +484,21 @@ int run_case(const std::string& binary, const std::string& models_dir,
         sources[static_cast<std::size_t>(index)] == sources.front()) {
       problems.push_back(stream + " sent no poses while stream 0 saw a person");
     }
+    // A frame in a gap of the RTP sequence was lost between the sender and this test, so its
+    // message counts against the frames received, not against the app's timestamps.
+    const auto gaps = sequence_gaps(headers);
+    const auto lost = std::count_if(unpaired.begin(), unpaired.end(), [&](std::int64_t timestamp) {
+      return in_gap(timestamp, gaps);
+    });
+    unpaired.erase(std::remove_if(unpaired.begin(), unpaired.end(),
+                                  [&](std::int64_t timestamp) { return in_gap(timestamp, gaps); }),
+                   unpaired.end());
     // A frame the video link dropped leaves its message unpaired, so allow 5%, as for the count.
     if (static_cast<int>(unpaired.size()) > messages * 5 / 100) {
       problems.push_back(stream + ": " + std::to_string(unpaired.size()) +
                          " timestamps with no video frame, first " +
-                         std::to_string(unpaired.front()));
+                         std::to_string(unpaired.front()) + ", " + std::to_string(lost) +
+                         " messages in a sequence gap\n" + video);
     }
     const auto& times = arrivals[index];
     const std::size_t first = times.size() / 10;
