@@ -454,6 +454,14 @@ bool test_detection_model_without_labels_names_the_entry(const std::string& bina
                      "a detection model without labels fails with the entry: " + error);
 }
 
+bool test_each_model_reads_its_own_labels(const std::string& binary) {
+  auto models = shipped_models();
+  models[1]["labels"] = "missing_labels.txt";
+  const std::string error = run_error(binary, "test_each_model_reads_its_own_labels", models);
+  return expect_true(error == "[ERR] labels file does not exist: missing_labels.txt",
+                     "model[1] reads its own labels: " + error);
+}
+
 bool test_pose_model_needs_no_labels(const std::string& binary) {
   // The shipped pose entry has no labels. Every model entry is read before the first model
   // loads, so the run gets past the config and fails later, on a model the test does not have.
@@ -491,6 +499,7 @@ int main(int argc, char** argv) {
   ok &= test_model_needs_one_entry_per_stream(binary);
   ok &= test_unknown_model_id_names_the_entry_and_the_choices(binary);
   ok &= test_detection_model_without_labels_names_the_entry(binary);
+  ok &= test_each_model_reads_its_own_labels(binary);
   ok &= test_pose_model_needs_no_labels(binary);
   return ok ? 0 : 1;
 }

@@ -378,6 +378,15 @@ def test_detection_model_without_labels_names_the_entry(tmp_path):
     )
 
 
+def test_each_model_reads_its_own_labels(tmp_path):
+    def missing_labels(config):
+        config["model"][1]["labels"] = "missing_labels.txt"
+
+    assert run_main(tmp_path, missing_labels) == (
+        "[ERR] labels file does not exist: missing_labels.txt"
+    )
+
+
 def test_pose_model_needs_no_labels(tmp_path):
     # The shipped pose entry has no labels. Every model entry is read before the first model
     # loads, so the run gets past the config and fails later, on a model the test does not have.
