@@ -140,9 +140,9 @@ bool test_shipped_config_names_the_model_and_usable_values() {
                         config.number("inference.min_score") <= 1.0,
                     "the shipped inference values are usable");
   // The threshold becomes a logit, so 0 and 1 are out of range.
-  ok &= expect_true(config.number("app.mask_threshold") > 0.0 &&
-                        config.number("app.mask_threshold") < 1.0,
-                    "app.mask_threshold is between 0 and 1");
+  ok &= expect_true(config.number("inference.mask_threshold") > 0.0 &&
+                        config.number("inference.mask_threshold") < 1.0,
+                    "inference.mask_threshold is between 0 and 1");
   ok &= expect_true(!config.string("output.insight.host").empty() &&
                         config.integer("output.insight.video_port_base") > 0 &&
                         config.integer("output.insight.metadata_port_base") > 0,

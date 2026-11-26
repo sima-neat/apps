@@ -167,7 +167,7 @@ efficientsam3::SegmentOptions segment_options(const sima_examples::Config& confi
   options.label = prompt;
   options.min_score = config.number("inference.min_score");
   options.max_detections = config.integer("inference.max_detections");
-  options.mask_threshold = config.number("app.mask_threshold");
+  options.mask_threshold = config.number("inference.mask_threshold");
   return options;
 }
 

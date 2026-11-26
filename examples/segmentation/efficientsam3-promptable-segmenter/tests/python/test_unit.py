@@ -110,7 +110,7 @@ def test_shipped_config_names_the_model_and_usable_values():
     assert config.integer("inference.max_detections") > 0
     assert 0 <= config.number("inference.min_score") <= 1
     # The threshold becomes a logit, so 0 and 1 are out of range.
-    assert 0 < config.number("app.mask_threshold") < 1
+    assert 0 < config.number("inference.mask_threshold") < 1
     for key in ("output.insight.video_port_base", "output.insight.metadata_port_base"):
         assert 1 <= config.integer(key) <= 65535, key
     assert config.string("output.insight.host")

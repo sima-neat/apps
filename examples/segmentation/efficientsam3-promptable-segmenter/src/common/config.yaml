@@ -20,6 +20,7 @@ inference:
   # about 0.3 to 0.8, and keeps a prompt that names nothing in view below 0.1.
   min_score: 0.30
   max_detections: 20            # Instances kept per frame.
+  mask_threshold: 0.50          # Mask probability at which a pixel belongs to the instance.
 
 output:
   insight:
@@ -31,4 +32,3 @@ app:
   # What to segment: a short noun phrase, such as "red car" or "traffic sign", of at most 14
   # CLIP tokens (about 10 words). A longer prompt fails at startup.
   prompt: person
-  mask_threshold: 0.50          # Mask probability at which a pixel belongs to the instance.

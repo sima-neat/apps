@@ -138,7 +138,7 @@ def segment_options(
         label=prompt,
         min_score=config.number("inference.min_score"),
         max_detections=config.integer("inference.max_detections"),
-        mask_threshold=config.number("app.mask_threshold"),
+        mask_threshold=config.number("inference.mask_threshold"),
     )
 
 

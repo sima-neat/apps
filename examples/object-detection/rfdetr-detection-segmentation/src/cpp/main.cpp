@@ -183,7 +183,7 @@ rfdetr::PostprocessOptions postprocess_options(const sima_examples::Config& conf
   options.height = stream.height;
   options.min_score = static_cast<float>(config.number("inference.min_score"));
   options.max_detections = config.integer("inference.max_detections");
-  options.mask_threshold = static_cast<float>(config.number("app.mask_threshold"));
+  options.mask_threshold = static_cast<float>(config.number("inference.mask_threshold"));
   options.mask_grid_size = config.integer("app.mask_grid_size");
   return options;
 }
