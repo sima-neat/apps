@@ -119,7 +119,7 @@ Open `${APP_DIR}/src/common/config.yaml` and set:
 
 - `input.source`: one RTSP URL per stream. Stream i runs `model` entry i and goes to Insight channel i.
 - `input.codec`: `h264` or `h265`, the same for every stream.
-- `model`: one entry per stream, in `input.source` order. Each entry sets `id` and `path`. A detection or segmentation model also sets `labels`, the class-label file. A relative `labels` path starts at the working directory. To run fewer streams, remove the same entries from `input.source` and `model`.
+- `model`: one entry per stream, in `input.source` order. Each entry sets `id` and `path`. A detection or segmentation model also sets `labels`, the class-label file, which the shipped entries take from `support/labels/coco80.txt`. A relative `labels` path starts at the working directory. To run fewer streams, remove the same entries from `input.source` and `model`.
 - `output.insight.host`. Stream i sends video to `video_port_base` + i and results to `metadata_port_base` + i.
 
 `inference.frames` at 0 or less runs until you stop the application.
@@ -188,7 +188,7 @@ The metadata sender does not wait for a full network buffer. It drops the messag
 - C++ reference source: `src/cpp/main.cpp`, with the Insight metadata in `src/cpp/utils/insight_metadata.cpp` and the result deadline in `src/cpp/utils/pending_results.cpp`
 - Python source: `src/python/main.py`, with the Insight metadata in `src/python/utils/insight_metadata.py` and the result deadline in `src/python/utils/pending_results.py`
 - Shared config: `src/common/config.yaml`
-- Class labels: `src/common/coco_label.txt`
+- Class labels: `support/labels/coco80.txt` in `prebuilt-apps/`, shared with the other examples that score the same classes
 - Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle. `main.py` finds it in a folder above itself. Their C++ reference source is in `support/cpp/sima_examples/`.
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`. The installed bundle does not include CMake files.

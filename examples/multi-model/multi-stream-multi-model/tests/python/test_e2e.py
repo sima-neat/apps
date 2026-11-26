@@ -21,7 +21,7 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 APPS_ROOT = EXAMPLE_DIR.parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitlines()
+LABELS = (APPS_ROOT / "support" / "labels" / "coco80.txt").read_text().splitlines()
 FRAMES = 150
 # Above the shipped 0.30, so the results show that the example applies inference.min_score.
 MIN_SCORE = 0.35
@@ -142,7 +142,7 @@ def _entry_problem(metadata_type: str, entry: dict) -> str:
             return "not a person with the 17 COCO keypoints"
         return ""
     if entry["label"] not in LABELS:
-        return "label not in coco_label.txt"
+        return "label not in coco80.txt"
     if metadata_type == "segmentation" and len(entry["mask"]) < 3:
         return "mask outline with fewer than three points"
     return ""

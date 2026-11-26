@@ -75,7 +75,7 @@ std::string regex_escape(const std::string& text) {
 }
 
 std::set<std::string> coco_labels() {
-  std::ifstream file("examples/multi-model/multi-stream-multi-model/src/common/coco_label.txt");
+  std::ifstream file("support/labels/coco80.txt");
   std::set<std::string> labels;
   for (std::string line; std::getline(file, line);) {
     if (!line.empty()) {
@@ -266,7 +266,7 @@ std::string entry_problem(const std::string& metadata_type, const nlohmann::json
     return "";
   }
   if (labels.count(label) == 0) {
-    return "label not in coco_label.txt";
+    return "label not in coco80.txt";
   }
   if (metadata_type == "segmentation" && entry.at("mask").size() < 3U) {
     return "mask outline with fewer than three points";
