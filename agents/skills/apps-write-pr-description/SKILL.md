@@ -110,10 +110,8 @@ Refs #<issue>, #<issue>
   messages or issue comments.
 - **State each fact once.** A fact in the Summary does not come back in What Changed or
   Validation.
-- **Use precise, plain words.** Use the project's name for each thing and keep it the same in
-  every section. Explain a term the first time when a reviewer outside the work may not know
-  it.
-- **Write short sentences with one fact each,** in active voice. Do not shorten a sentence so
-  far that the reader has to guess what it means.
+- **Follow the [language rules](../../references/writing.md#language):** one name for each
+  thing in every section, full sentences, the condition first, active voice,
+  and the plain word.
 - **Before publishing, read it as the reviewer.** Delete each line whose removal would not
   change the review.
