@@ -82,8 +82,5 @@ fix. Include only pitfalls you reproduced or found in the source.
 
 ## Source
 
-<!-- Use the short commit hash of the Core checkout you read. -->
-
 - C++ header: `include/<path>.h`
 - Python binding: `python/src/module.cpp`, `<bound class or function>`
-- Core commit: `<hash>`

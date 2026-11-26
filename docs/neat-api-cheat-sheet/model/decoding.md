@@ -386,4 +386,3 @@ payload stores whole pixels, so the floats have no fractional part.
   `ModelOptions`, `decode_bbox`, `decode_pose`, `decode_segmentation`,
   `decode_segmentation_pose`, `decode_obb`, `decode_obb_tensor`,
   `decode_superpoint` and the `detections` submodule
-- Core commit: `7e5317be`

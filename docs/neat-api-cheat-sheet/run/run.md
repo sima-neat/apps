@@ -174,9 +174,8 @@ the device logs then reach the console.
 - Python binding: `python/src/module.cpp`, `nb::class_<RunOptions>`,
   `nb::class_<RunAdvancedOptions>`, `nb::enum_<RunPreset>`, `nb::class_<Run>`
 - The preset depths and the sync defaults are runtime behavior, not header
-  values. They were read from Core at the commit below and are not part of the
-  published API.
+  values. They were read from Core source and are not part of the published
+  API.
 - The stdout and stderr forwarding: `src/gst/GstInit.cpp`, `start_stdio_filter` (which
   detaches its thread) and `install_stdio_filters` (installed while
   `SIMA_GST_SUPPRESS_DEVICE_LOGS` is on).
-- Core commit: `c68a5241`

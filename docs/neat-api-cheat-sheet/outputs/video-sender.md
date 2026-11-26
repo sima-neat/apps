@@ -191,4 +191,3 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 - The MJPEG size check: `src/nodes/io/internal/JpegRtpUdpSink.cpp` (the build
   error only for a sized input, and the running caps filter), and
   `src/nodes/groups/RtspEncodedInput.cpp` (the MJPEG path, which sets no size).
-- Core commit: `3f8b8d04`
