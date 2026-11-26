@@ -1,287 +1,200 @@
-#include "examples/tracking/yolo26-tiny-drone-tracker/src/cpp/utils/tracker_api.cpp"
+// Copyright 2026 SiMa Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "tracker.h"
 
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
+#include <set>
 #include <tuple>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
-namespace yolo26_tiny_drone_tracker {
+namespace drone_tracker {
 namespace {
 
-struct TrackState {
-  int track_id = 0;
-  Detection detection;
-  float velocity_x = 0.0f;
-  float velocity_y = 0.0f;
-  float velocity_w = 0.0f;
-  float velocity_h = 0.0f;
-  int last_frame_index = 0;
-  int missing_frames = 0;
-  int hits = 1;
-};
+using BBox = std::array<double, 4>;
 
-float width(const Detection& detection) {
-  return std::max(0.0f, detection.x2 - detection.x1);
+double width(const BBox& box) {
+  return std::max(0.0, box[2] - box[0]);
 }
 
-float height(const Detection& detection) {
-  return std::max(0.0f, detection.y2 - detection.y1);
+double height(const BBox& box) {
+  return std::max(0.0, box[3] - box[1]);
 }
 
-float center_x(const Detection& detection) {
-  return 0.5f * (detection.x1 + detection.x2);
+double center_x(const BBox& box) {
+  return 0.5 * (box[0] + box[2]);
 }
 
-float center_y(const Detection& detection) {
-  return 0.5f * (detection.y1 + detection.y2);
+double center_y(const BBox& box) {
+  return 0.5 * (box[1] + box[3]);
 }
 
-float iou_xyxy(const Detection& a, const Detection& b) {
-  const float xx1 = std::max(a.x1, b.x1);
-  const float yy1 = std::max(a.y1, b.y1);
-  const float xx2 = std::min(a.x2, b.x2);
-  const float yy2 = std::min(a.y2, b.y2);
-  const float intersection = std::max(0.0f, xx2 - xx1) * std::max(0.0f, yy2 - yy1);
-  const float union_area = width(a) * height(a) + width(b) * height(b) - intersection;
-  return union_area > 0.0f ? intersection / union_area : 0.0f;
+double iou(const BBox& a, const BBox& b) {
+  const double overlap_w = std::max(0.0, std::min(a[2], b[2]) - std::max(a[0], b[0]));
+  const double overlap_h = std::max(0.0, std::min(a[3], b[3]) - std::max(a[1], b[1]));
+  const double intersection = overlap_w * overlap_h;
+  const double union_area = width(a) * height(a) + width(b) * height(b) - intersection;
+  return union_area > 0.0 ? intersection / union_area : 0.0;
 }
 
-float normalized_center_distance(const Detection& a, const Detection& b) {
-  const float dx = center_x(a) - center_x(b);
-  const float dy = center_y(a) - center_y(b);
-  const float scale =
-      std::max(1.0f, 0.5f * (std::hypot(width(a), height(a)) + std::hypot(width(b), height(b))));
-  return std::hypot(dx, dy) / scale;
-}
-
-Detection predict(const TrackState& track, int frame_index) {
-  const int elapsed = std::max(0, frame_index - track.last_frame_index);
-  const float predicted_x = center_x(track.detection) + track.velocity_x * elapsed;
-  const float predicted_y = center_y(track.detection) + track.velocity_y * elapsed;
-  const float predicted_w = std::max(1.0f, width(track.detection) + track.velocity_w * elapsed);
-  const float predicted_h = std::max(1.0f, height(track.detection) + track.velocity_h * elapsed);
-  return Detection{
-      predicted_x - predicted_w * 0.5f,
-      predicted_y - predicted_h * 0.5f,
-      predicted_x + predicted_w * 0.5f,
-      predicted_y + predicted_h * 0.5f,
-      track.detection.score,
-      track.detection.class_id,
-  };
-}
-
-void validate_config(const TrackerConfig& config) {
-  if (!std::isfinite(config.high_score_threshold) || config.high_score_threshold < 0.0f ||
-      config.high_score_threshold > 1.0f) {
-    throw std::invalid_argument("high_score_threshold must be in [0, 1]");
-  }
-  if (!std::isfinite(config.new_track_threshold) ||
-      config.new_track_threshold < config.high_score_threshold ||
-      config.new_track_threshold > 1.0f) {
-    throw std::invalid_argument("new_track_threshold must be in [high_score_threshold, 1]");
-  }
-  if (!std::isfinite(config.match_iou_threshold) || config.match_iou_threshold < 0.0f ||
-      config.match_iou_threshold > 1.0f) {
-    throw std::invalid_argument("match_iou_threshold must be in [0, 1]");
-  }
-  if (!std::isfinite(config.max_center_distance) || config.max_center_distance < 0.0f) {
-    throw std::invalid_argument("max_center_distance must be >= 0");
-  }
-  if (!std::isfinite(config.velocity_momentum) || config.velocity_momentum < 0.0f ||
-      config.velocity_momentum >= 1.0f) {
-    throw std::invalid_argument("velocity_momentum must be in [0, 1)");
-  }
-  if (config.max_missing_frames < 0) {
-    throw std::invalid_argument("max_missing_frames must be >= 0");
-  }
-  if (config.min_confirmed_hits < 1) {
-    throw std::invalid_argument("min_confirmed_hits must be >= 1");
-  }
-  if (config.max_active_tracks < 1) {
-    throw std::invalid_argument("max_active_tracks must be >= 1");
-  }
+// Center distance in mean box diagonals.
+double center_distance(const BBox& a, const BBox& b) {
+  const double scale =
+      std::max(1.0, 0.5 * (std::hypot(width(a), height(a)) + std::hypot(width(b), height(b))));
+  return std::hypot(center_x(a) - center_x(b), center_y(a) - center_y(b)) / scale;
 }
 
 } // namespace
 
-struct ObjectTracker::Impl {
-  std::unordered_map<int, TrackState> tracks;
-  int last_frame_index = -1;
-};
+ObjectTracker::ObjectTracker(TrackerSettings settings, int fps) : settings_(settings), fps_(fps) {}
 
-ObjectTracker::ObjectTracker(TrackerConfig config)
-    : config_(config), impl_(std::make_unique<Impl>()) {
-  validate_config(config_);
+int ObjectTracker::tracks_started() const {
+  return next_track_id_ - 1;
 }
 
-ObjectTracker::~ObjectTracker() = default;
-ObjectTracker::ObjectTracker(ObjectTracker&&) noexcept = default;
-ObjectTracker& ObjectTracker::operator=(ObjectTracker&&) noexcept = default;
-
-int ObjectTracker::active_track_count() const {
-  return static_cast<int>(impl_->tracks.size());
-}
-
-std::vector<TrackedDetection> ObjectTracker::update(const std::vector<Detection>& detections,
-                                                    int frame_index) {
-  if (frame_index < 0) {
-    throw std::invalid_argument("frame_index must be >= 0");
+int ObjectTracker::frame_index_at(std::int64_t pts_ns) {
+  if (pts_ns < 0) {
+    return ++frame_index_;
   }
-  if (frame_index < impl_->last_frame_index) {
-    throw std::invalid_argument("frame_index must be monotonic");
-  }
-  impl_->last_frame_index = frame_index;
-
-  std::vector<int> stale_tracks;
-  for (const auto& [track_id, track] : impl_->tracks) {
-    const int intervening_frames = std::max(0, frame_index - track.last_frame_index - 1);
-    if (intervening_frames > config_.max_missing_frames) {
-      stale_tracks.push_back(track_id);
+  if (origin_pts_ns_) {
+    const int frames = origin_frame_index_ +
+                       static_cast<int>(std::floor(
+                           static_cast<double>(pts_ns - *origin_pts_ns_) * fps_ / 1e9 + 0.5));
+    if (frames >= frame_index_) {
+      frame_index_ = frames;
+      return frame_index_;
     }
   }
-  for (const int track_id : stale_tracks) {
-    impl_->tracks.erase(track_id);
-  }
+  ++frame_index_;
+  origin_pts_ns_ = pts_ns;
+  origin_frame_index_ = frame_index_;
+  return frame_index_;
+}
 
-  std::vector<int> high_detections;
-  std::vector<int> low_detections;
+std::vector<TrackedDetection>
+ObjectTracker::update(const std::vector<simaai::neat::Box>& detections, std::int64_t pts_ns) {
+  const int frame_index = frame_index_at(pts_ns);
+  // Frames the shared model's link dropped still age the tracks, so a track unmatched for more
+  // than max_missing_frames ends before it can match again.
+  std::erase_if(tracks_, [&](const auto& item) {
+    return frame_index - item.second.last_frame_index - 1 > settings_.max_missing_frames;
+  });
+  std::vector<BBox> boxes;
+  std::vector<int> high;
+  std::vector<int> low;
   for (std::size_t index = 0; index < detections.size(); ++index) {
-    if (detections[index].score >= config_.high_score_threshold) {
-      high_detections.push_back(static_cast<int>(index));
-    } else {
-      low_detections.push_back(static_cast<int>(index));
-    }
+    const auto& detection = detections[index];
+    boxes.push_back({detection.x1, detection.y1, detection.x2, detection.y2});
+    (detection.score >= settings_.high_score_threshold ? high : low)
+        .push_back(static_cast<int>(index));
   }
 
-  std::unordered_set<int> matched_tracks;
-  std::unordered_set<int> matched_detections;
-  std::unordered_map<int, int> assignments;
+  std::map<int, int> assignments; // Detection index -> track ID.
+  associate(boxes, high, frame_index, assignments, /*confirmed_only=*/false);
+  associate(boxes, low, frame_index, assignments, /*confirmed_only=*/true);
 
-  const auto associate = [&](const std::vector<int>& detection_indices, bool confirmed_only) {
-    std::vector<std::tuple<float, int, int>> candidates;
-    for (const auto& [track_id, track] : impl_->tracks) {
-      if (matched_tracks.count(track_id) != 0 ||
-          (confirmed_only && track.hits < config_.min_confirmed_hits)) {
-        continue;
-      }
-      const Detection predicted = predict(track, frame_index);
-      for (const int detection_index : detection_indices) {
-        if (matched_detections.count(detection_index) != 0) {
-          continue;
-        }
-        const Detection& detection = detections[static_cast<std::size_t>(detection_index)];
-        if (detection.class_id != track.detection.class_id) {
-          continue;
-        }
-        const float iou = iou_xyxy(predicted, detection);
-        const float center_distance = normalized_center_distance(predicted, detection);
-        const bool center_match =
-            config_.center_distance_enabled && center_distance <= config_.max_center_distance;
-        if (iou < config_.match_iou_threshold && !center_match) {
-          continue;
-        }
-        const float affinity =
-            config_.center_distance_enabled ? iou + 1.0f / (1.0f + center_distance) : iou;
-        candidates.emplace_back(affinity, track_id, detection_index);
-      }
-    }
-    std::sort(candidates.begin(), candidates.end(), [](const auto& lhs, const auto& rhs) {
-      if (std::get<0>(lhs) != std::get<0>(rhs)) {
-        return std::get<0>(lhs) > std::get<0>(rhs);
-      }
-      if (std::get<1>(lhs) != std::get<1>(rhs)) {
-        return std::get<1>(lhs) < std::get<1>(rhs);
-      }
-      return std::get<2>(lhs) < std::get<2>(rhs);
-    });
-    for (const auto& [affinity, track_id, detection_index] : candidates) {
-      static_cast<void>(affinity);
-      if (matched_tracks.count(track_id) != 0 || matched_detections.count(detection_index) != 0) {
-        continue;
-      }
-      matched_tracks.insert(track_id);
-      matched_detections.insert(detection_index);
-      assignments[detection_index] = track_id;
-    }
-  };
-
-  associate(high_detections, false);
-  // Low-score observations can recover confirmed tracks, but cannot confirm
-  // tentative identities or create new ones.
-  associate(low_detections, true);
-
+  // Move each matched track to its box and blend the measured motion into its velocity.
+  std::set<int> matched_tracks;
   for (const auto& [detection_index, track_id] : assignments) {
-    TrackState& track = impl_->tracks.at(track_id);
-    const Detection& detection = detections[static_cast<std::size_t>(detection_index)];
+    Track& track = tracks_.at(track_id);
+    const BBox& box = boxes[static_cast<std::size_t>(detection_index)];
     const int elapsed = std::max(1, frame_index - track.last_frame_index);
-    const float measured_vx = (center_x(detection) - center_x(track.detection)) / elapsed;
-    const float measured_vy = (center_y(detection) - center_y(track.detection)) / elapsed;
-    const float measured_vw = (width(detection) - width(track.detection)) / elapsed;
-    const float measured_vh = (height(detection) - height(track.detection)) / elapsed;
-    const float previous = config_.velocity_momentum;
-    const float measured = 1.0f - previous;
-    track.velocity_x = previous * track.velocity_x + measured * measured_vx;
-    track.velocity_y = previous * track.velocity_y + measured * measured_vy;
-    track.velocity_w = previous * track.velocity_w + measured * measured_vw;
-    track.velocity_h = previous * track.velocity_h + measured * measured_vh;
-    track.detection = detection;
+    const std::array<double, 4> measured{
+        (center_x(box) - center_x(track.bbox)) / elapsed,
+        (center_y(box) - center_y(track.bbox)) / elapsed,
+        (width(box) - width(track.bbox)) / elapsed,
+        (height(box) - height(track.bbox)) / elapsed,
+    };
+    for (std::size_t i = 0; i < measured.size(); ++i) {
+      track.velocity[i] =
+          kVelocityMomentum * track.velocity[i] + (1.0 - kVelocityMomentum) * measured[i];
+    }
+    track.bbox = box;
     track.last_frame_index = frame_index;
-    track.missing_frames = 0;
     ++track.hits;
+    matched_tracks.insert(track_id);
   }
+  std::erase_if(tracks_, [&](const auto& item) {
+    return matched_tracks.count(item.first) == 0 &&
+           frame_index - item.second.last_frame_index > settings_.max_missing_frames;
+  });
 
-  std::vector<int> expired_tracks;
-  for (auto& [track_id, track] : impl_->tracks) {
-    if (matched_tracks.count(track_id) != 0) {
+  for (const int detection_index : high) {
+    if (assignments.count(detection_index) != 0 ||
+        detections[static_cast<std::size_t>(detection_index)].score <
+            settings_.new_track_threshold) {
       continue;
     }
-    track.missing_frames = frame_index - track.last_frame_index;
-    if (track.missing_frames > config_.max_missing_frames) {
-      expired_tracks.push_back(track_id);
-    }
-  }
-  for (const int track_id : expired_tracks) {
-    impl_->tracks.erase(track_id);
-  }
-
-  for (const int detection_index : high_detections) {
-    if (matched_detections.count(detection_index) != 0) {
-      continue;
-    }
-    const Detection& detection = detections[static_cast<std::size_t>(detection_index)];
-    if (detection.score < config_.new_track_threshold) {
-      continue;
-    }
-    if (impl_->tracks.size() >= static_cast<std::size_t>(config_.max_active_tracks)) {
+    if (static_cast<int>(tracks_.size()) >= kMaxActiveTracks) {
       break;
     }
     const int track_id = next_track_id_++;
-    impl_->tracks.emplace(
-        track_id, TrackState{track_id, detection, 0.0f, 0.0f, 0.0f, 0.0f, frame_index, 0, 1});
-    matched_tracks.insert(track_id);
-    matched_detections.insert(detection_index);
+    tracks_[track_id] = Track{boxes[static_cast<std::size_t>(detection_index)], frame_index};
     assignments[detection_index] = track_id;
   }
 
   std::vector<TrackedDetection> tracked;
-  tracked.reserve(assignments.size());
-  for (std::size_t detection_index = 0; detection_index < detections.size(); ++detection_index) {
-    const auto assignment = assignments.find(static_cast<int>(detection_index));
-    if (assignment == assignments.end()) {
+  for (const auto& [detection_index, track_id] : assignments) {
+    if (tracks_.at(track_id).hits < settings_.min_confirmed_hits) {
       continue;
     }
-    const TrackState& track = impl_->tracks.at(assignment->second);
-    if (track.hits < config_.min_confirmed_hits) {
-      continue;
-    }
-    const Detection& detection = detections[detection_index];
-    tracked.push_back(TrackedDetection{track.track_id, detection.x1, detection.y1, detection.x2,
-                                       detection.y2, detection.score, detection.class_id});
+    const auto& detection = detections[static_cast<std::size_t>(detection_index)];
+    tracked.push_back({track_id, detection.x1, detection.y1, detection.x2, detection.y2,
+                       detection.score, detection.class_id});
   }
   return tracked;
 }
 
-} // namespace yolo26_tiny_drone_tracker
+// Assigns free detections to free tracks, best affinity first.
+void ObjectTracker::associate(const std::vector<BBox>& boxes,
+                              const std::vector<int>& detection_indices, int frame_index,
+                              std::map<int, int>& assignments, bool confirmed_only) const {
+  std::set<int> matched_tracks;
+  for (const auto& [detection_index, track_id] : assignments) {
+    matched_tracks.insert(track_id);
+  }
+  // (affinity, track ID, detection index) of every pair that passes a gate.
+  std::vector<std::tuple<double, int, int>> pairs;
+  for (const auto& [track_id, track] : tracks_) {
+    if (matched_tracks.count(track_id) != 0 ||
+        (confirmed_only && track.hits < settings_.min_confirmed_hits)) {
+      continue;
+    }
+    // The box moved by its velocity to frame_index, at least 1 pixel on each side.
+    const int elapsed = frame_index - track.last_frame_index;
+    const double predicted_x = center_x(track.bbox) + track.velocity[0] * elapsed;
+    const double predicted_y = center_y(track.bbox) + track.velocity[1] * elapsed;
+    const double predicted_w = std::max(1.0, width(track.bbox) + track.velocity[2] * elapsed);
+    const double predicted_h = std::max(1.0, height(track.bbox) + track.velocity[3] * elapsed);
+    const BBox predicted{predicted_x - predicted_w * 0.5, predicted_y - predicted_h * 0.5,
+                         predicted_x + predicted_w * 0.5, predicted_y + predicted_h * 0.5};
+    for (const int detection_index : detection_indices) {
+      if (assignments.count(detection_index) != 0) {
+        continue;
+      }
+      const BBox& box = boxes[static_cast<std::size_t>(detection_index)];
+      const double overlap = iou(predicted, box);
+      const double distance = center_distance(predicted, box);
+      if (distance <= kMaxCenterDistance) {
+        pairs.emplace_back(overlap + 1.0 / (1.0 + distance), track_id, detection_index);
+      }
+    }
+  }
+  // Highest affinity first; ties go to the lower track ID, then the lower detection index.
+  std::sort(pairs.begin(), pairs.end(), [](const auto& lhs, const auto& rhs) {
+    if (std::get<0>(lhs) != std::get<0>(rhs)) {
+      return std::get<0>(lhs) > std::get<0>(rhs);
+    }
+    return std::make_pair(std::get<1>(lhs), std::get<2>(lhs)) <
+           std::make_pair(std::get<1>(rhs), std::get<2>(rhs));
+  });
+  for (const auto& [affinity, track_id, detection_index] : pairs) {
+    if (matched_tracks.count(track_id) != 0 || assignments.count(detection_index) != 0) {
+      continue;
+    }
+    matched_tracks.insert(track_id);
+    assignments[detection_index] = track_id;
+  }
+}
+
+} // namespace drone_tracker

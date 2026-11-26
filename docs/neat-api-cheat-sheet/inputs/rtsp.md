@@ -208,6 +208,7 @@ parser. The tables above describe what Core does.
 - [multi-stream-object-detector](../../../examples/object-detection/multi-stream-object-detector/) (`RtspEncodedInput` with `SimaDecode`, encoded stream to Insight)
 - [rfdetr-detection-segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/) (`RtspEncodedInput`, `buffer_mode = "none"` with TCP)
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) (`RtspEncodedInput`, `drop_on_latency`, decoder tuning)
+- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/) (`RtspEncodedInput` with `SimaDecode`, one to four streams, encoded stream to Insight)
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`RtspEncodedInput`)
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`RtspEncodedInput`)
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (`RtspDecodedInput`)

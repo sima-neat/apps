@@ -67,9 +67,6 @@ decoder.add(pyneat.nodes.caps_raw("NV12", stream.frame_w, stream.frame_h,
 
 Complete flow: [multi-stream-object-detector](../../../examples/object-detection/multi-stream-object-detector/)
 
-`VideoRate` followed by `CapsRaw`, added when the configured frame rate differs from the source:
-[yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/)
-
 ## Options
 
 `SimaDecodeType`
@@ -180,7 +177,7 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
 - [rfdetr-detection-segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/) (`num_buffers` for MJPEG)
 - [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/) (`SimaDecode` MJPEG after `UsbCameraInput`)
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (one `SimaDecode` per stream, each feeding its own model, `num_buffers` 12 to bound the frames each model holds)
-- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/) (`VideoRate`, `CapsRaw`)
+- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/) (`SimaDecode` after `RtspEncodedInput`, `CapsRaw` NV12)
 
 ## Source
 

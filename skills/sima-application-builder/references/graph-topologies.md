@@ -98,7 +98,9 @@ Each of these drops stale frames or results in favor of newer ones:
   overflow, and which both examples use for live input
 
 Keep plain links and `OutputOptions::EveryFrame(n)`, which holds up to `n` results, on paths
-that must process every frame.
+that must process every frame. That includes the encoded link to a `VideoSender` when metadata
+pairs with its frames: a realtime link there drops frames of a burst, and their metadata has no
+frame in Insight.
 
 Keep a plain link on encoded H.264 or H.265 that goes into a decoder whose frames the
 application processes. A realtime link drops encoded frames there, and every frame after a
