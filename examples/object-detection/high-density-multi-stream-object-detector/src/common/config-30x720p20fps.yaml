@@ -1,7 +1,7 @@
 # Profile: 30 streams of 720p at 20 FPS.
 model:
   path: <model-path>            # Compiled model package; relative paths start at this file.
-  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt  # Relative to the working directory.
+  labels: support/labels/coco80.txt  # The 80 COCO classes; relative to the working directory.
 
 input:
   source:                       # One RTSP URL per stream; the same URL may repeat.

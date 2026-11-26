@@ -114,8 +114,9 @@ int main(int argc, char** argv) {
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+  const char* apps_root = env_or_null("APPS_ROOT");
   const fs::path labels =
-      example_common_config_path("rfdetr-detection-segmentation").parent_path() / "coco-labels.txt";
+      fs::path(apps_root != nullptr ? apps_root : ".") / "support" / "labels" / "coco91.txt";
   const auto label_list = sima_examples::load_labels(labels);
   const std::set<std::string> label_set(label_list.begin(), label_list.end());
 

@@ -1,6 +1,6 @@
 """Repository contract: e2e suites assert usable output, not merely present output.
 
-`agents/skills/write-example-tests/SKILL.md` requires end-to-end tests to prove useful
+`agents/skills/apps-write-example-tests/SKILL.md` requires end-to-end tests to prove useful
 output, and `tests/utils/output_assertions.py` (Python) with
 `support/cpp/sima_examples/testing/test_process.h` (C++) are the helpers that do so:
 saved frames must decode, have plausible dimensions, and, for a stream, advance. A suite

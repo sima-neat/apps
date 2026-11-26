@@ -40,11 +40,26 @@ Python. `validate_config_body` runs an example with `--validate-config-only`, so
 examples that still read their config into an `AppConfig` use it. It goes away with the last
 of them.
 
+## Label files
+
+`support/labels/` holds the class-label files that more than one example's config names, one
+label per line in the model's class-ID order. A config names one as
+`model.labels: support/labels/coco80.txt`, a path that starts at the working directory: the
+root of `prebuilt-apps/` or of the repository. An example whose model has its own classes keeps
+its label file in its `src/common/`.
+
+| File | Classes | Used by |
+| --- | --- | --- |
+| `coco80.txt` | The 80 COCO classes as IDs 0 to 79, as YOLO models score them | single-stream, high-density, PCIe high-density |
+| `coco91.txt` | The COCO class IDs 0 to 90, with `N/A` for the 11 IDs that name no class, as DETR models score them | DETR, RF-DETR |
+
 ## Changing the library
 
 A pull request that adds, removes, or changes a module, function, or behavior here updates
 this page in the same pull request, and lists the change in its description under `Shared
 library`. Each example that calls the changed function is updated in that pull request too.
+A pull request that adds a label file, changes one, or points another example at one updates
+the label table.
 
 The C++ source ships in the installed package as reference. The packaged C++ executables are
 already built with it.

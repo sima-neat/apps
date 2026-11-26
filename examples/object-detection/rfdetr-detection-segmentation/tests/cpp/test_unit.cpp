@@ -43,7 +43,7 @@ bool test_shipped_config_names_a_supported_model_stream_and_labels() {
 }
 
 std::vector<std::string> coco_labels() {
-  std::vector<std::string> labels(91, "unused");
+  std::vector<std::string> labels(91, "N/A");
   labels[1] = "person";
   return labels;
 }
