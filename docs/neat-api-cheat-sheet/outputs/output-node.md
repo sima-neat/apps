@@ -33,10 +33,7 @@ media framework Core builds its pipelines on, and `fragment` is raw GStreamer
 launch text, for example `"fakesink sync=false"`. It is an escape hatch:
 Core does not check that the elements in the text exist, so a typo fails only
 when the graph is built. An empty fragment becomes a pass-through element.
-Prefer a typed node when one exists. The only Apps use of `Custom` adds an
-extra decode step in
-[yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/),
-not an end node.
+Prefer a typed node when one exists. No Apps example uses `Custom`.
 
 ## Minimal example
 
@@ -134,10 +131,9 @@ close but not right.
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `Latest()` with `CombinePolicy::ByFrame`
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/): two named outputs joined with `graphs::Combine`
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/): `drop = true` on a frame output
-- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `max_buffers` set by hand
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `Latest()` on decoded frames the application pulls
 
 ## Source
 
 - C++ headers: `include/nodes/common/Output.h`, `include/nodes/common/Caps.h` (`nodes::Custom`)
 - Python binding: `python/src/module.cpp`, `OutputOptions`, `CombinePolicy`, `nodes.output`, `nodes.custom`
-- Core commit: `3f8b8d04`

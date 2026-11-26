@@ -1,215 +1,129 @@
-"""CLI tests for the Python SuperPoint example."""
+"""Unit tests for the SuperPoint feature extractor: the checks the application leaves to its config,
+the frames luma rejects, and the mapping of feature points onto the source frame.
+tests/cpp/test_unit.cpp runs the same checks in C++, except luma's: C++ luma is in main.cpp, which
+the C++ unit test does not compile.
+"""
 
-import importlib.util
-import subprocess
-import sys
+from __future__ import annotations
+
+import json
+import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
+import pyneat
 import pytest
 
+from tests.utils.config_cases import load_example_main
+
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
-MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+COMMON_DIR = EXAMPLE_DIR / "src" / "common"
+
+main_module = load_example_main(EXAMPLE_DIR, "superpoint_feature_extractor_main")
+feature_points = main_module.feature_points
+
+pytestmark = pytest.mark.unit
+
+MODEL_SIZE = (640, 480)
+SOURCE_SIZE = (1280, 720)
 
 
-def load_example():
-    spec = importlib.util.spec_from_file_location("superpoint_example", MAIN_PY)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.mark.unit
-def test_draw_points_marks_the_requested_coordinate():
-    class FakeCv2:
-        LINE_AA = 16
-        FONT_HERSHEY_SIMPLEX = 0
-
-        def __init__(self):
-            self.circles = []
-
-        def circle(self, _frame, center, *_args):
-            self.circles.append(center)
-
-        @staticmethod
-        def putText(*_args):
-            pass
-
-    example = load_example()
-    cv2 = FakeCv2()
-
-    example.draw_points(object(), [(40.0, 50.0)], cv2)
-
-    assert cv2.circles == [(40, 50)]
-
-
-def fake_pyneat(model_pixel_points):
-    """A pyneat whose SuperPoint decoder returns the given keypoints in model pixels."""
-    points = np.asarray(model_pixel_points, dtype=np.float32)
-    features = SimpleNamespace(
-        keypoints=SimpleNamespace(dtype="fp32", to_numpy=lambda copy: points.copy()),
-        scores=SimpleNamespace(shape=(len(points),), dtype="fp32"),
-        descriptors=SimpleNamespace(shape=(len(points), 256), dtype="fp32"),
+def test_shipped_config_names_the_model_and_usable_values():
+    """The checks the application leaves to its config: the values it reads are usable."""
+    config = main_module.Config.load(COMMON_DIR / "config.yaml")
+    model_path = COMMON_DIR / config.string("model.path")
+    assert model_path.name == "superpoint_w8a8_mpk.tar.gz"
+    # The packaged path reaches prebuilt-apps/models/superpoint/w8a8/ from the config file.
+    assert Path(os.path.normpath(model_path.absolute())) == (
+        EXAMPLE_DIR.parents[2].absolute() / "models" / "superpoint" / "w8a8" / model_path.name
     )
-    return SimpleNamespace(
-        TensorDType=SimpleNamespace(Float32="fp32"),
-        decode_superpoint=lambda _output: [features],
-    )
+    assert config.string("input.source").startswith("rtsp://")
+    for key in ("input.width", "input.height", "input.fps", "input.rtsp.latency_ms",
+                "inference.frames"):
+        assert config.integer(key) >= 0, key
+    for key in ("output.insight.video_port_base", "output.insight.metadata_port_base"):
+        assert 1 <= config.integer(key) <= 65535, key
+    # Core sends to 127.0.0.1 when the host is empty.
+    assert config.string("output.insight.host")
+    assert config.boolean("input.rtsp.tcp")
 
 
-@pytest.mark.unit
-def test_model_input_size_reads_the_resolved_mla_contract():
-    example = load_example()
-    contract = SimpleNamespace(width=640, height=480)
-    plan = SimpleNamespace(mla_contract=contract)
-    model = SimpleNamespace(resolved_preprocess_plan=lambda: plan)
+def test_luma_rejects_a_frame_without_a_tensor():
+    sample = pyneat.Sample()
+    sample.kind = pyneat.SampleKind.TensorSet
+    sample.tensors = []
 
-    assert example.model_input_size(model) == example.FrameSize(640, 480)
-
-    contract.width = 0
-    with pytest.raises(RuntimeError, match="unresolved"):
-        example.model_input_size(model)
+    with pytest.raises(RuntimeError, match="decoded frame has no tensor"):
+        main_module.luma(sample, main_module.RtspStreamInfo(*SOURCE_SIZE, 30))
 
 
-@pytest.mark.unit
-def test_feature_points_scale_model_pixels_onto_the_source_frame():
-    example = load_example()
-    model_size = example.FrameSize(640, 480)
-    source_size = example.FrameSize(1280, 720)
-
-    actual = example.feature_points(
-        [object()], model_size, source_size, np, fake_pyneat([[600.0, 400.0]])
+def test_luma_rejects_a_frame_that_is_not_nv12():
+    """luma checks the format, not the planes: an I420 frame has a Y plane too."""
+    sample = pyneat.Sample()
+    sample.kind = pyneat.SampleKind.Tensor
+    sample.tensor = pyneat.Tensor.from_numpy(
+        np.zeros(SOURCE_SIZE[::-1], np.uint8),
+        image_format=pyneat.PixelFormat.GRAY8,
+        memory=pyneat.TensorMemory.CPU,
     )
 
-    np.testing.assert_array_equal(actual, [[1200.0, 600.0]])
+    with pytest.raises(RuntimeError, match="decoded frame is not NV12"):
+        main_module.luma(sample, main_module.RtspStreamInfo(*SOURCE_SIZE, 30))
 
 
-@pytest.mark.unit
-def test_feature_points_keep_model_sized_frames_unchanged():
-    example = load_example()
-    model_size = example.FrameSize(640, 480)
-
-    actual = example.feature_points(
-        [object()], model_size, model_size, np, fake_pyneat([[10.0, 20.0]])
+def test_source_points_scale_each_axis_onto_the_source_frame():
+    points = feature_points.source_points(
+        np.array([[600.0, 400.0], [10.0, 20.0]]), MODEL_SIZE, SOURCE_SIZE
     )
 
-    np.testing.assert_array_equal(actual, [[10.0, 20.0]])
+    np.testing.assert_array_equal(points, [[1200, 600], [20, 30]])
 
 
-@pytest.mark.unit
-def test_feature_points_discards_coordinates_outside_the_source_frame():
-    example = load_example()
-    model_size = example.FrameSize(640, 480)
-    source_size = example.FrameSize(1280, 720)
-    pyneat = fake_pyneat(
-        [[600.0, 400.0], [640.0, 200.0], [20.0, 480.0], [np.nan, 10.0]]
+def test_source_points_round_half_up_to_whole_pixels():
+    points = feature_points.source_points(
+        np.array([[6.25, 3.0], [6.0, 3.3]]), MODEL_SIZE, SOURCE_SIZE
     )
 
-    actual = example.feature_points([object()], model_size, source_size, np, pyneat)
-
-    np.testing.assert_array_equal(actual, [[1200.0, 600.0]])
+    np.testing.assert_array_equal(points, [[13, 5], [12, 5]])
 
 
-@pytest.mark.unit
-def test_model_options_delegate_image_geometry_to_core_preproc():
-    class FakePyneat:
-        AutoFlag = SimpleNamespace(On="on")
-        InputKind = SimpleNamespace(Image="image")
-        ResizeMode = SimpleNamespace(Stretch="stretch")
-        PreprocessColorFormat = SimpleNamespace(BGR="bgr", GRAY8="gray8")
-        BoxDecodeType = SimpleNamespace(SuperPoint="superpoint")
-        SuperPointProfile = SimpleNamespace(A65V1="a65-v1")
-        SuperPointOutputFormat = SimpleNamespace(FeaturePointsV1="feature-points-v1")
-        TensorDType = SimpleNamespace(Float32="fp32")
-
-        @staticmethod
-        def ModelOptions():
-            return SimpleNamespace(
-                preprocess=SimpleNamespace(
-                    kind=None,
-                    enable=None,
-                    input_max_width=0,
-                    input_max_height=0,
-                    input_max_depth=0,
-                    resize=SimpleNamespace(enable=None, mode=None, width=0, height=0),
-                    color_convert=SimpleNamespace(
-                        enable=None, input_format=None, output_format=None
-                    ),
-                    normalize=SimpleNamespace(
-                        enable=None,
-                        mean=None,
-                        stddev=None,
-                        has_explicit_stats=False,
-                    ),
-                ),
-                superpoint=SimpleNamespace(
-                    profile=None, output_format=None, descriptor_output_dtype=None
-                ),
-                processcvu=SimpleNamespace(post_run_target=None),
-            )
-
-    example = load_example()
-    options = example.model_options(FakePyneat, 1280, 720)
-
-    assert options.preprocess.kind == "image"
-    assert options.preprocess.enable == "on"
-    assert (
-        options.preprocess.input_max_width,
-        options.preprocess.input_max_height,
-    ) == (
-        1280,
-        720,
+def test_source_points_drop_points_on_or_beyond_an_edge():
+    points = feature_points.source_points(
+        np.array(
+            [[600.0, 400.0], [640.0, 200.0], [639.8, 200.0], [20.0, 480.0], [-1.0, 5.0],
+             [np.nan, 10.0]]
+        ),
+        MODEL_SIZE,
+        SOURCE_SIZE,
     )
-    assert options.preprocess.resize.mode == "stretch"
-    assert (options.preprocess.resize.width, options.preprocess.resize.height) == (0, 0)
-    assert options.preprocess.color_convert.input_format == "bgr"
-    assert options.preprocess.color_convert.output_format == "gray8"
-    assert options.preprocess.normalize.mean == (0.0, 0.0, 0.0)
-    assert options.preprocess.normalize.stddev == (1.0, 1.0, 1.0)
-    assert options.preprocess.normalize.has_explicit_stats is True
+
+    # 639.8 maps to 1279.6, which rounds onto the right edge.
+    np.testing.assert_array_equal(points, [[1200, 600]])
 
 
-@pytest.mark.unit
-def test_validate_frame_accepts_any_stable_bgr_resolution():
-    example = load_example()
-    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+def test_source_points_of_a_frame_without_features_are_empty():
+    points = feature_points.source_points(np.zeros((0, 2)), MODEL_SIZE, SOURCE_SIZE)
 
-    example.validate_frame(frame, np)
-    example.validate_frame(frame, np, frame.shape)
-
-    with pytest.raises(RuntimeError, match="resolution changed"):
-        example.validate_frame(np.zeros((480, 640, 3), dtype=np.uint8), np, frame.shape)
+    assert points.shape == (0, 2)
 
 
-@pytest.mark.unit
-class TestCli:
-    def run(self, *args: str):
-        return subprocess.run(
-            [sys.executable, str(MAIN_PY), *args],
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
+def test_points_json_sends_the_points_as_one_pose_of_unnamed_keypoints():
+    """Insight draws each keypoint as a dot; without names and confidences it draws no skeleton
+    line and no box."""
+    data = json.loads(feature_points.points_json(np.array([[13, 7], [1279, 0]])))
 
-    def test_help(self):
-        result = self.run("--help")
-        assert result.returncode == 0
-        assert "--config" in result.stdout
+    assert data == {"poses": [{"keypoints": [{"x": 13, "y": 7}, {"x": 1279, "y": 0}]}]}
 
-    def test_unknown_argument_is_rejected(self):
-        result = self.run("--bogus")
-        assert result.returncode == 2
-        assert "unrecognized arguments" in result.stderr
 
-    def test_missing_config_value_is_rejected(self):
-        result = self.run("--config")
-        assert result.returncode == 2
-        assert "expected one argument" in result.stderr
+def test_points_json_of_a_frame_without_features_has_no_keypoints():
+    assert json.loads(feature_points.points_json(np.zeros((0, 2), np.int64))) == {
+        "poses": [{"keypoints": []}]
+    }
 
-    def test_missing_config_is_reported(self):
-        result = self.run("--config", "/does/not/exist.yaml")
-        assert result.returncode == 2
-        assert "Error:" in result.stderr
+
+def test_points_json_of_600_points_fits_one_metadata_message():
+    """The metadata sender rejects messages over 65,507 bytes; the decoder returns at most 600
+    points per frame."""
+    payload = feature_points.points_json(np.full((600, 2), 1279))
+
+    assert len(payload.encode()) < 65_507 - 1_024  # Leaves room for the message envelope.

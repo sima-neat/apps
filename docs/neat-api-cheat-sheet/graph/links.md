@@ -24,9 +24,9 @@ output to a fragment that declares `nodes::Input("model")`.
 
 Pass `GraphLinkOptions` as the third argument of `connect()` when the link
 carries live video and a late frame is worthless: the branch that feeds a model
-from a camera, or the branch that sends video to Insight. With the default
-policy a slow branch holds back the source, and through the source every other
-branch.
+from a camera, or the branch that sends video to Insight when no metadata must
+pair with every frame. With the default policy a slow branch holds back the
+source, and through the source every other branch.
 
 Keep the default policy on a link that carries encoded H.264 or H.265 video
 into a decoder whose frames the application processes. Each encoded frame
@@ -34,8 +34,18 @@ depends on the frames before it, so a frame dropped on such a link corrupts the
 decoded picture until the next keyframe (a frame that decodes on its own). The
 [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/)
 example keeps that link lossless for this reason, and still uses a realtime
-link for the encoded video it passes to Insight, where a dropped frame affects
-only what the viewer shows.
+link for the encoded video it passes to Insight. There a dropped frame affects
+only what the viewer shows, unless metadata must pair with every frame.
+
+Keep the default policy on the link to a `VideoSender` when every metadata
+message must pair with its frame in Insight, as a tracker's tracks must. Core
+puts a queue of one encoded frame before the sender, and a realtime link makes
+that queue drop its pending frame for a newer one. A burst of encoded frames
+then loses some before Insight gets them, and their messages arrive with no
+frame to draw on. The default link drops none, but a slow sender holds back the
+source and its decoder. The
+[yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/)
+example keeps that link plain for this reason.
 
 Leave the options out when every sample must arrive: offline processing of
 files, or the link from a model to its `Output`.
@@ -75,8 +85,8 @@ Complete flow: [single-stream-thermal-face-detector](../../../examples/face-dete
 
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
-| Policy | `policy` | `policy` | `GraphLinkPolicy::Default` | Chooses how the link behaves when the receiver is slow. See the next table | Set `RealtimeLatestByStream` on live video branches |
-| Stream ID | `stream_id` | `stream_id` | `""` | Stable stream identity stamped on samples before realtime scheduling. Empty derives the identity from the source link | Several cameras share a model and you need to tell their results apart, count drops per camera, or keep IDs stable across restarts |
+| Policy | `policy` | `policy` | `GraphLinkPolicy::Default` | Chooses how the link behaves when the receiver is slow. See the next table | Set `RealtimeLatestByStream` on live video branches, unless metadata must pair with every frame the branch sends to Insight |
+| Stream ID | `stream_id` | `stream_id` | `""` | Stable stream identity stamped on samples before realtime scheduling. Empty derives the identity from the source link. With one source, the pulled sample carries the decoder name instead (see Pitfalls) | Several cameras share a model and you need to tell their results apart, count drops per camera, or keep IDs stable across restarts |
 | Inflight per stream | `max_inflight_per_stream` | `max_inflight_per_stream` | `-1` (the framework default, 4) | Maximum decoded frames one stream may have in the graph at once. Applies only to realtime links that carry raw decoder frames | A stream must keep more frames in flight to reach its frame rate, or fewer to leave decoder buffers for others |
 | Inflight total | `max_inflight_total` | `max_inflight_total` | `-1` (the per-stream limits added up, at most 8) | Maximum decoded frames all streams together may have in the graph. Applies only to realtime links that carry raw decoder frames | More than two streams share one model: the default total of 8 caps them below their per-stream limits. The pose estimator sets 16 for four streams |
 
@@ -88,7 +98,7 @@ still compiles. It has no effect, see Pitfalls.
 | Value | C++ | Python | What it does | When to use it |
 |---|---|---|---|---|
 | Default | `GraphLinkPolicy::Default` | `pyneat.GraphLinkPolicy.Default` | Lossless. A slow receiver makes the sender wait (backpressure) | Offline work where no sample may be lost, and links after the model |
-| Realtime latest by stream | `GraphLinkPolicy::RealtimeLatestByStream` | `pyneat.GraphLinkPolicy.RealtimeLatestByStream` | The sender never waits. The link keeps only the newest sample per stream, replaces older ones, and serves ready streams fairly | Live video where a fresh frame matters more than every frame: model branches and video to Insight, including encoded video passed through to `VideoSender`. Not on a link into a decoder whose frames you process |
+| Realtime latest by stream | `GraphLinkPolicy::RealtimeLatestByStream` | `pyneat.GraphLinkPolicy.RealtimeLatestByStream` | The sender never waits. The link keeps only the newest sample per stream, replaces older ones, and serves ready streams fairly | Live video where a fresh frame matters more than every frame: model branches and video to Insight, including encoded video passed through to `VideoSender`, unless metadata must pair with every frame. Not on a link into a decoder whose frames you process |
 
 ## Language differences
 
@@ -96,11 +106,20 @@ None. Python has every field and both policy values.
 
 ## Pitfalls
 
+- **One source ignores `stream_id`.** With a single source, the pulled `Sample.stream_id` is the
+  decoder name, not the link's `stream_id`. An application that parses the ID as a stream index
+  fails. Fix: route by position when there is one source.
 - **A slow video branch slows the model.** With `Default` on the branch that
   sends video to Insight, a slow network makes the sender wait, which holds back
   the shared source and the model branch with it. Symptom: model frame rate drops
   whenever the viewer or the network lags. Fix: set `RealtimeLatestByStream` on
-  that branch.
+  that branch, unless metadata must pair with every frame it sends.
+- **A realtime video link unpairs overlays.** With `RealtimeLatestByStream` on
+  the link to a `VideoSender`, a burst of encoded frames drops some before
+  Insight gets them. Symptom: tracks or boxes are missing from some frames in
+  Insight, with no RTP packet lost. On a DevKit, up to 29 of 150 tracking
+  messages per stream had no frame. Fix: connect the encoded source to the
+  `VideoSender` with a plain `connect`.
 - **One-to-one links ignore names.** A fragment with one output connects to a
   fragment with one input even when the names differ. Adding a second output
   later turns the same `connect()` into a `cannot infer endpoints` error. Give
@@ -123,10 +142,9 @@ None. Python has every field and both policy values.
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) (`stream_id`, `max_inflight_per_stream`, `max_inflight_total`)
 - [multi-stream-blazepose3d](../../../examples/pose-estimation/multi-stream-blazepose3d/)
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`stream_id`)
-- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/)
+- [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/) (`stream_id`, `max_inflight_total`, plain link to `VideoSender`)
 
 ## Source
 
 - C++ header: `include/pipeline/GraphOptions.h` (`GraphLinkPolicy`, `GraphLinkOptions`), `include/pipeline/Graph.h` (`Graph::connect`)
 - Python binding: `python/src/module.cpp`, `GraphLinkPolicy`, `GraphLinkOptions`, `Graph.connect`
-- Core commit: `c68a5241`

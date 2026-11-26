@@ -18,7 +18,7 @@ postprocess = main_module.postprocess
 
 pytestmark = pytest.mark.unit
 
-LABELS = ["unused", "person"] + ["unused"] * 89
+LABELS = ["N/A", "person"] + ["N/A"] * 89
 
 
 def test_shipped_config_names_a_supported_model_stream_and_labels():

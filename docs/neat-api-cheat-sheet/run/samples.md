@@ -174,8 +174,6 @@ single-tensor sample returns the sample rather than throwing. Fix: check
 
 **A borrowed sample (`owned == false`) must not be kept.** It holds a loan on
 the producer's buffer. Copy the data out before the sample goes out of scope.
-The superpoint example notes this explicitly where it converts to a `cv::Mat`:
-the CPU copy outlives the decoder loan held by the sample.
 
 **`pts_ns`, `frame_id` and friends default to `-1`, not `0`.** A source that
 does not carry timestamps leaves them at `-1`. Symptom: nonsensical latency
@@ -185,7 +183,7 @@ arithmetic.
 ## Used in
 
 - [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — walks `fields` by `stream_label == "frame"`, then `tensors_from_sample`
-- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — picks a bundle field, then flattens; notes the decoder loan
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — reads the Y plane of each pulled NV12 frame: `tensors_from_sample` and a `map_nv12_read()` view in C++, `kind` and `tensor` and a copy in Python
 - [single-stream-instance-segmenter](../../../examples/segmentation/single-stream-instance-segmenter/) — resolves the `"segments"` field out of a Bundle in both languages
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) — uses the sample's stream identity to route results per camera
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — derives a stream index from the pulled sample
@@ -200,4 +198,3 @@ arithmetic.
   `nb::enum_<SampleKind>`, `nb::bind_map<SampleAttributes>`,
   `make_tensor_sample`, `make_text_sample`, `make_encoded_sample`;
   `python/pyneat/_wrappers.py`, `Sample.from_encoded`
-- Core commit: `c68a5241`

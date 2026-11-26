@@ -4,6 +4,7 @@
 // sima_examples.rtsp_probe in support/python.
 
 #include <string>
+#include <vector>
 
 namespace sima_examples {
 
@@ -19,6 +20,12 @@ struct RtspStreamInfo {
 // cannot be opened.
 RtspStreamInfo probe_rtsp_stream_info(const std::string& url, bool tcp,
                                       const RtspStreamInfo& configured = {});
+
+// Each stream's frame size and rate, in the order of `urls`, from probe_rtsp_stream_info. A URL
+// listed more than once is probed once. Throws unless every stream has the same frame size,
+// because the streams share one model.
+std::vector<RtspStreamInfo> probe_rtsp_streams(const std::vector<std::string>& urls, bool tcp,
+                                               const RtspStreamInfo& configured = {});
 
 // The form the examples not yet converted call. Only rtsp_tcp changes the probe. Returns
 // whether the frame size is known and leaves an unknown frame rate at 0.

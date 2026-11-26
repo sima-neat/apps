@@ -58,7 +58,8 @@ class Config:
         if not isinstance(value, kind) or (
             kind is not bool and isinstance(value, bool)
         ):
-            raise ValueError(f"{key} must be {kind_name}, got {value!r}")
+            # The value in quotes, as the C++ Config reports a string or a number.
+            raise ValueError(f"{key} must be {kind_name}, got '{value}'")
         return value
 
     def string(self, key: str) -> str:

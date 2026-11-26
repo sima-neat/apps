@@ -74,7 +74,7 @@ run = graph.build([seed])
 run.push([tensor])
 ```
 
-Complete flow: [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/)
+Complete flow: [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/)
 
 To feed a model, take the options from the model instead of writing them by
 hand: `model.input_appsrc_options(true)` returns the format, size, memory
@@ -183,7 +183,6 @@ does.
 
 ## Used in
 
-- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) (BGR frames to Insight)
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (BGR or NV12 frames to Insight, named endpoints)
 - [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/)
 - [face-detector](../../../examples/face-detection/face-detector/) (`model.input_appsrc_options(true)`)
@@ -197,4 +196,3 @@ does.
 
 - C++ header: `include/nodes/io/Input.h` (`Input`, `InputOptions`, `InputMemoryPolicy`, `PreprocessMetaTemplate`), `include/pipeline/PayloadType.h` (`PayloadType`)
 - Python binding: `python/src/module.cpp`, `InputOptions`, `InputMemoryPolicy`, `PayloadType`, `PreprocessMetaTemplate`, `nodes.input`
-- Core commit: `b1f9556c`

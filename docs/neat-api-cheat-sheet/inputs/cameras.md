@@ -241,6 +241,12 @@ elements run in sync mode, but Core only removes the queues that
   `output_caps.fps conflicts with source_fps; use video_rate_fps for rate conversion`
   or `output_caps.fps conflicts with video_rate_fps`. Fix: set only
   `source_fps`, and use videorate to change the rate.
+- **HTTP frames without a timestamp.** Some `HttpMjpegDecodedInput` frames have
+  `pts_ns = -1`. GStreamer's `multipartdemux` stamps a JPEG part only when it
+  ends in a different HTTP chunk from the part before it. Metadata built from
+  such a frame has no timestamp, so Insight draws its boxes without pairing
+  them to a video frame. Do not assert that every message pairs with a frame
+  for an HTTP source.
 - **An output format the decoder cannot produce, or frames that do not match
   the model.** See the pitfalls in [decode-and-caps](decode-and-caps.md).
 
@@ -255,4 +261,3 @@ elements run in sync mode, but Core only removes the queues that
 
 - C++ header: `include/nodes/io/CameraInput.h` (`CameraInputOptions`, `CameraInput`, `CameraInputWithCaptureBuffers`), `include/nodes/io/UsbCameraInput.h` (`UsbCameraInputOptions`, `UsbCameraInfo`, `usb_camera_ids`, `usb_camera_info`, `UsbCameraInput`), `include/nodes/groups/HttpMjpegDecodedInput.h` (`HttpMjpegDecodedInputOptions`, `HttpMjpegDecodedInput`), `include/nodes/common/MultipartJpegDemux.h` (`MultipartHeaderCaptureOptions`), `include/builder/NextCpuPolicy.h` (APU)
 - Python binding: `python/src/module.cpp`, `CameraInputOptions`, `UsbCameraInputOptions`, `UsbCameraInfo`, `usb_camera_ids`, `usb_camera_info`, `MultipartHeaderCaptureOptions`, `HttpMjpegDecodedInputOptions`, `HttpMjpegDecodedInputOutputCaps`, `nodes.camera_input`, `nodes.usb_camera_input`, `groups.http_mjpeg_decoded_input`
-- Core commit: `b1f9556c`

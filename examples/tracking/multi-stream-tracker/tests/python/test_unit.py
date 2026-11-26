@@ -26,8 +26,10 @@ tracking:
       max_missing_frames: 45
 """
 
-if str(PYTHON_DIR) not in sys.path:
-    sys.path.insert(0, str(PYTHON_DIR))
+SUPPORT_DIR = EXAMPLE_DIR.parents[2] / "support" / "python"
+for path in (PYTHON_DIR, SUPPORT_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 
 def shipped_labels() -> tuple[str, ...]:
@@ -355,7 +357,7 @@ class TestMetadata:
             TrackedDetection(8, 50.0, 50.0, 90.0, 80.0, 0.5, 2, "car"),
         ]
 
-        send_metadata(runtime, FakeSample(), tracks)
+        send_metadata(runtime, FakeSample(), tracks, shipped_labels())
 
         assert len(sender.calls) == 1
         metadata_type, data_json, timestamp_ms, frame_id = sender.calls[0]
@@ -371,7 +373,7 @@ class TestMetadata:
 
     def test_metadata_box_clipped_at_both_edges(self):
         """A predicted box crossing an edge must publish the clipped extent, not the raw span."""
-        from main import build_metadata_tracks
+        from sima_examples.detection_egress import track_entries
         from utils.tracker import TrackedDetection
 
         # Crosses the left edge: raw span is 181 px but only 136 px are visible.
@@ -379,7 +381,7 @@ class TestMetadata:
         # Crosses the right and bottom edges.
         right = TrackedDetection(2, 600.0, 400.0, 700.0, 500.0, 0.8, 0, "person")
 
-        out = build_metadata_tracks([left, right], frame_w=640, frame_h=480)
+        out = track_entries([left, right], shipped_labels(), frame_w=640, frame_h=480)
 
         x, y, w, h = out[0]["bbox"]
         assert (x, w) == (0.0, 136.0)
@@ -390,11 +392,12 @@ class TestMetadata:
         assert x + w == 640.0 and y + h == 480.0
 
     def test_metadata_box_fully_outside_frame_is_empty(self):
-        from main import build_metadata_tracks
+        from sima_examples.detection_egress import track_entries
         from utils.tracker import TrackedDetection
 
-        out = build_metadata_tracks(
+        out = track_entries(
             [TrackedDetection(3, -200.0, -200.0, -10.0, -10.0, 0.8, 0, "person")],
+            shipped_labels(),
             frame_w=640,
             frame_h=480,
         )

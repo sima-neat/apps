@@ -123,6 +123,7 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
 
   target_link_libraries(sima_neat_apps_support_testing
     PUBLIC
+      SimaNeatApps::support_runtime
       nlohmann_json::nlohmann_json
       PkgConfig::OPENCV
       SimaNeatApps::yaml_cpp
