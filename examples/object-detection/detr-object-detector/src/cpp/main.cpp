@@ -18,8 +18,8 @@
 
 #include "neat.h"
 #include "sima_examples/config.h"
+#include "sima_examples/image_folder.h"
 #include "sima_examples/labels.h"
-#include "utils/annotate.h"
 #include "utils/images.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -91,10 +91,10 @@ void annotate_images(neat::Model::Runner& runner, const std::vector<fs::path>& p
                      const fs::path& output_dir) {
   for (size_t index = 0; index < paths.size(); ++index) {
     const fs::path& path = paths[index];
-    const cv::Mat image = images::read_image(path);
+    const cv::Mat image = sima_examples::read_image(path);
     const std::vector<neat::Box> boxes = detect(runner, image, max_detections);
-    const fs::path output_path = output_dir / annotate::output_name(path);
-    if (!cv::imwrite(output_path.string(), annotate::draw_detections(image, boxes, labels))) {
+    const fs::path output_path = output_dir / sima_examples::output_name(path, "_detr");
+    if (!cv::imwrite(output_path.string(), sima_examples::draw_detections(image, boxes, labels))) {
       throw std::runtime_error("cannot write " + output_path.string());
     }
     std::cout << "[" << index + 1 << "/" << paths.size() << "] " << path.filename().string()
@@ -109,13 +109,13 @@ int run_app(const fs::path& config_path) {
   const int max_detections = config.integer("inference.max_detections");
   // DETR's class IDs index the labels directly.
   const auto labels = sima_examples::load_labels(config.string("model.labels"));
-  const auto paths = images::image_paths(config.string("input.source"));
+  const auto paths = sima_examples::image_paths(config.string("input.source"));
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
   neat::Model model(model_path.string(),
                     model_options(config, images::largest_image_size(paths), max_detections));
   // The first image seeds the build, which plans the route for images like it.
   neat::Model::Runner runner =
-      model.build(std::vector<cv::Mat>{images::read_image(paths.front())});
+      model.build(std::vector<cv::Mat>{sima_examples::read_image(paths.front())});
   const fs::path output_dir = config.string("output.dir");
   fs::create_directories(output_dir);
   // When annotate_images throws, the Run the Runner holds closes as it is destroyed.
