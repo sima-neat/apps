@@ -8,10 +8,10 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
 - `main` reads top to bottom as the Neat flow: parse the command line, load the config,
   create the `Model`, build the graph, build the run, process the outputs, close the run.
-- Each step is one line or one call to a function named for what it does. A reader understands
-  the application from `main` without opening the functions.
-- The C++ and Python entrypoints have the same functions, with the same names, in the same
-  order. In C++, `main` only reports errors and calls `run_app`. `run_app` is the function
+- Each step outside the graph is one line or one call to a function named for what it does. A
+  reader understands the application from `main` without opening the functions.
+- The C++ and Python entrypoints have the same Neat-flow functions, with the same names, in the
+  same order. A helper only one language needs exists only there. In C++, `main` only reports errors and calls `run_app`. `run_app` is the function
   these rules call `main`.
 - Use the simplest implementation that meets the requirement. Each extra helper,
   abstraction, dependency, process, and compatibility path needs a reason a reader can see.
@@ -94,8 +94,10 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
 ## Functions and state
 
-- Each function does one job. A function described with "and" becomes two functions.
-- Give a behavior that a boolean parameter would switch its own function.
+- Each function does one job. Split a function when a part is reused or tested on its own.
+- In the example's own functions, give a behavior that a boolean parameter would switch its
+  own function. A flag that mirrors a Core API, such as `strict` in `decode_bbox_tensor`,
+  stays a parameter.
 - Keep state in `main` and pass it down. Stop on Ctrl-C, SIGTERM, and SIGHUP with
   `stop_on_signals()` from the shared library: `main` passes its flag to every pull loop and
   closes the run when the loop ends.
