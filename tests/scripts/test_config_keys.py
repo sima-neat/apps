@@ -28,7 +28,6 @@ TYPE_CHECKS = {
 PENDING_EXAMPLES = {
     "depth-estimator",
     "detection-to-vlm-assistant",
-    "detr-object-detector",
     "efficientsam3-promptable-segmenter",
     "face-detector",
     "face-recognizer",
@@ -47,7 +46,6 @@ PENDING_EXAMPLES = {
     "single-stream-instance-segmenter",
     "single-stream-thermal-face-detector",
     "ssd-mobilenet-object-detector",
-    "superpoint-feature-extractor",
     "yolo26-object-detector",
     "yolo26-tiny-drone-tracker",
 }

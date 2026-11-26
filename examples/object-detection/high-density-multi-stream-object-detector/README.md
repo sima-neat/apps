@@ -233,7 +233,7 @@ If channels do not start, confirm that every publisher was already reachable and
 - Default 20-stream profile: `src/common/config.yaml`
 - 30-stream profile: `src/common/config-30x720p20fps.yaml`
 - 60-stream profile: `src/common/config-60x720p10fps.yaml`
-- COCO labels: `src/common/coco_label.txt`
+- Class labels: `support/labels/coco80.txt` in `prebuilt-apps/`, shared with the other examples that score the same classes
 - Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.

@@ -143,17 +143,19 @@ other threads send
 - **Size limit.** A message larger than 65507 bytes fails with
   `MetadataSender payload exceeds 65507 bytes`. A message larger than 1200
   bytes is split into several UDP packets with a 12-byte header each. Insight
-  joins them again. Another receiver has to do the same.
+  joins them again. Another receiver has to do the same. A larger message
+  also takes longer: on a DevKit about 9 ms for 37 KB and 3 ms for 10 KB.
 
 ## Used in
 
 `MetadataSender` is used by most streaming examples, for example:
 
 - [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/): `pose-estimation`
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `pose-estimation` with every feature point of a frame as one pose's keypoints
 - [multi-stream-object-detector](../../../examples/object-detection/multi-stream-object-detector/): `object-detection`, one sender per stream
 
 ## Source
 
 - C++ header: `include/nodes/io/MetadataSender.h`
 - Python binding: `python/src/module.cpp`, `MetadataSenderOptions`, `MetadataSenderSendOptions`, `MetadataSenderStats`, `MetadataSender`
-- Core commit: `3f8b8d04`
+- Core commit: `7e5317be`

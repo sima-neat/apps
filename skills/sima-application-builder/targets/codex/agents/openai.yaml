@@ -1,0 +1,4 @@
+interface:
+  display_name: "SiMa Application Builder"
+  short_description: "Build applications with the Neat Library APIs"
+  default_prompt: "Use $sima-application-builder to build a Neat Library application with the right public API shape."
