@@ -50,6 +50,7 @@ def _fake_repo(root: Path) -> None:
     _write(root / "tests/conftest.py")
     _write(root / "tests/test.sh", executable=True)
     _write(root / "support/README.md")
+    _write(root / "support/labels/coco80.txt")
     _write(root / "support/python/sima_examples/helpers.py")
     _write(root / "support/cpp/sima_examples/include/helpers.h")
     _write(root / "support/cpp/sima_examples/testing/fixture.h")
@@ -155,6 +156,7 @@ def test_package_apps_ships_runtime_and_test_layout(packaged_without_git):
         "prebuilt-apps/deps/neat-core.json",
         "prebuilt-apps/deps/neat-apps.json",
         "prebuilt-apps/support/README.md",
+        "prebuilt-apps/support/labels/coco80.txt",
         "prebuilt-apps/support/python/sima_examples/helpers.py",
         "prebuilt-apps/support/cpp/sima_examples/include/helpers.h",
         "prebuilt-apps/assets/datasets/coco/sample.jpg",
