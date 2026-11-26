@@ -14,7 +14,7 @@
 
 ## Concept
 
-Detects objects in a folder of images with SSD-MobileNet, saves annotated PNGs, and writes every detection to a JSON report.
+Detects objects in a folder of images with SSD-MobileNet, saves annotated PNGs, and can write every detection to a JSON report.
 
 ```text
 How does an image move through ssd-mobilenet-object-detector?
