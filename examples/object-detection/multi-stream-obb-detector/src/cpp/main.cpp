@@ -285,9 +285,7 @@ int run_app(const fs::path& config_path) {
       send_detections(run, metadata_senders, labels, config.integer("inference.frames"), stop);
   run.close();
 
-  // Core candidate: Core forwards fd 1 through a detached thread (start_stdio_filter) that exit()
-  // can stop before it writes the last lines. std::endl puts each line into the pipe earlier,
-  // which narrows the race but does not close it.
+  // Core gap: lines printed just before exit can be lost on a pipe. std::endl narrows the race.
   for (std::size_t index = 0; index < metadata_senders.size(); ++index) {
     std::cout << "[stream " << index << "] processed=" << processed[index] << std::endl;
     const auto failures = metadata_senders[index].stats().send_failures;

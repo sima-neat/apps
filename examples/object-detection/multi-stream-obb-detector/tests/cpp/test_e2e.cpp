@@ -40,9 +40,7 @@ constexpr int kFrames = 150;
 constexpr double kMinScore = 0.4;
 // The box and rate checks run on the suite's model only. Larger variants run slower.
 constexpr const char* kDefaultModel = "yolo26n_obb_w8a8_mpk.tar.gz";
-// Each stream's results per second, about 80% of Vulcan CI run 45418480248 on 5baed52 (Modalix
-// devkit-1, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources). With one or
-// two streams, each stream gave 24.6 to 25.2, the source's rate.
+// Each stream's results per second: about 80% of the 25 a 25 fps source gives.
 constexpr double kMinStreamFps = 20.0;
 
 using Clock = std::chrono::steady_clock;
@@ -316,9 +314,7 @@ int run_case(const std::string& binary, const std::string& model_path,
       problems.push_back(stream + ": " + std::to_string(fps) + " results/s");
     }
   }
-  // The model is trained on top-down aerial video, and the CI streams show streets. Its boxes
-  // there are still enough to check: the C++ cases in CI run 45584903721 on d291e61 checked 1265
-  // boxes on h264, 680 on h264-one-stream, 848 on h265, and 141 on mjpeg.
+  // The CI streams show streets, not the aerial video the model is trained on, but give boxes.
   std::cout << label << ": " << boxes << " oriented boxes checked\n";
   if (default_model && boxes == 0) {
     problems.push_back("no oriented boxes arrived");

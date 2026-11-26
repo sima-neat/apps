@@ -14,15 +14,8 @@ UNKNOWN_LABEL = "unknown"
 
 
 def detections_json(boxes: pyneat.OrientedDecodeTensors, labels: list[str]) -> str:
-    """The `data` of one frame's `object-detection` message, as `{"objects": [...]}`.
-
-    `boxes` is what `decode_obb_tensor` returns: geometry [N, 5] as cx, cy, width, height, and
-    the angle in radians, in source-frame pixels, and scores and class IDs [N]. A positive angle
-    turns the box clockwise. `oriented_bbox` is what Insight draws. `bbox` is the box's upright
-    extent, which places the label. Pixels are rounded to 0.1, angles to 4 decimals, and scores to
-    3, so that a frame with hundreds of boxes stays under the 65507-byte limit of one metadata
-    message.
-    """
+    """One frame's `object-detection` data for Insight. Values are rounded so that a frame with
+    hundreds of boxes stays under the 65507-byte limit of one metadata message."""
     # float64, so that rounded values stay short in JSON (float32 0.9 prints 0.899999976).
     geometry = boxes.geometry.to_numpy().astype(np.float64).reshape(-1, 5)
     cx, cy, width, height, angle = geometry.T

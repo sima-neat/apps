@@ -26,9 +26,7 @@ FRAMES = 150
 MIN_SCORE = 0.4
 # The box and rate checks run on the suite's model only. Larger variants run slower.
 DEFAULT_MODEL = "yolo26n_obb_w8a8_mpk.tar.gz"
-# Each stream's results per second, about 80% of Vulcan CI run 45418480248 on 5baed52 (Modalix
-# devkit-1, firmware 3.0.1_master_B2798, Core develop/530580ae4d76, 25 fps sources). With one or
-# two streams, each stream gave 24.6 to 25.2, the source's rate.
+# Each stream's results per second: about 80% of the 25 a 25 fps source gives.
 MIN_STREAM_FPS = 20.0
 # RTP payload types: H.264 96, H.265 98, and RTP/JPEG 26.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98, "mjpeg": 26}
@@ -222,9 +220,7 @@ def test_streams_reach_their_insight_channels(
         print(f"{codec} stream {index}: {len(stream_messages)} messages, {fps:.1f} results/s")
         if default_model:
             assert fps >= MIN_STREAM_FPS, f"stream {index}: {fps:.1f} results/s"
-    # The model is trained on top-down aerial video, and the CI streams show streets. Its boxes
-    # there are still enough to check: the C++ cases in CI run 45584903721 on d291e61 checked 1265
-    # boxes on h264, 680 on h264-one-stream, 848 on h265, and 141 on mjpeg.
+    # The CI streams show streets, not the aerial video the model is trained on, but give boxes.
     print(f"{codec}: {boxes} oriented boxes checked")
     if default_model:
         assert boxes > 0, "no oriented boxes arrived"
