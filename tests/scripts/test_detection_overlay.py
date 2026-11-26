@@ -9,7 +9,12 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
+import pytest
+
+# The contract job installs only pytest and PyYAML, so these tests skip there and run wherever
+# numpy and OpenCV are installed.
+np = pytest.importorskip("numpy", reason="numpy is not installed")
+pytest.importorskip("cv2", reason="OpenCV is not installed")
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(APPS_ROOT / "support" / "python"))
