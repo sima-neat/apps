@@ -50,7 +50,7 @@ input.rtsp.latency_ms:
 
 inference.frames:
   type: integer
-  meaning: Frames to process before the application stops. 0 runs until interrupted.
+  meaning: Frames to process before the application stops, counted per stream where an example says so. 0 runs until interrupted, and so does a value below 0 where the example says so.
 inference.min_score:
   type: number
   meaning: Lowest score a detection needs, from 0 to 1.
