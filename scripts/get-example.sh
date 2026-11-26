@@ -199,7 +199,8 @@ cp -a "${TMP_DIR}/${ARCHIVE_ROOT}/${EXAMPLE_PATH}" "${DEST_DIR}"
 
 # Python examples import the helpers they share from support/python, which main.py finds in
 # a folder above itself. support/cpp is the source the C++ executables were built with.
-for support_dir in python cpp; do
+# support/labels holds the label files that configs share.
+for support_dir in python cpp labels; do
   ARCHIVE_SUPPORT_PATH="${ARCHIVE_ROOT}/support/${support_dir}"
   if grep -qxF "${ARCHIVE_SUPPORT_PATH}/" "${TMP_DIR}/archive-list.txt"; then
     tar -xzf "${TMP_ARCHIVE}" -C "${TMP_DIR}" "${ARCHIVE_SUPPORT_PATH}"

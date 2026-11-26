@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-NUM_CLASSES = 91  # COCO class IDs 0 to 90. ID 0 and the "unused" labels name no object.
+NUM_CLASSES = 91  # COCO class IDs 0 to 90. ID 0 and the "N/A" labels name no object.
 NUM_SELECT = (
     300  # RF-DETR's reference postprocess ranks the 300 best (query, class) scores.
 )
@@ -65,7 +65,7 @@ def ranked_objects(
         if score < min_score:
             return
         query, class_id = divmod(int(index), NUM_CLASSES)
-        if class_id != 0 and labels[class_id] != "unused":
+        if class_id != 0 and labels[class_id] != "N/A":
             yield query, labels[class_id], score
 
 

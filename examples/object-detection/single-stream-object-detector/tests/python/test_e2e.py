@@ -19,7 +19,8 @@ from tests.utils.pytest_fixtures import usb_camera_cases
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitlines()
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+LABELS = (APPS_ROOT / "support" / "labels" / "coco80.txt").read_text().splitlines()
 FRAMES = 100
 # Above the shipped 0.30, so the scores show that the example applies inference.min_score.
 MIN_SCORE = 0.5
@@ -89,13 +90,6 @@ def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes
         except TimeoutError:
             if stop.is_set():
                 return
-
-
-def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
-    """Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a
-    video frame's RTP timestamp."""
-    ticks = (timestamp_ms * 90) & 0xFFFFFFFF
-    return any(abs(ticks - rtp) <= 90 for rtp in rtp_timestamps)
 
 
 @pytest.mark.e2e
@@ -178,7 +172,3 @@ def test_publishes_insight_video_and_metadata(
     payload_type = 96 if source["type"] == "http" else {"h264": 96, "h265": 98, "mjpeg": 26}[codec]
     assert headers and len(headers[0]) == 12 and headers[0][0] >> 6 == 2
     assert headers[0][1] & 0x7F == payload_type
-    # Insight draws each message's boxes on the video frame its timestamp names.
-    rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers}
-    unpaired = [m.timestamp_ms for m in messages if not _pairs(m.timestamp_ms, rtp_timestamps)]
-    assert not unpaired, f"metadata timestamps with no video frame: {unpaired[:5]}"

@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from received_metadata_tracker import ReceivedMetadataTracker
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
-LABELS = set((EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitlines())
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+LABELS = set((APPS_ROOT / "support" / "labels" / "coco80.txt").read_text().splitlines())
 # Every stream must keep this rate over the measured interval: 500 FPS in total for 20 streams.
 # DevKits measured 528 to 565 FPS in total for H.264.
 MIN_STREAM_FPS = 25.0
@@ -62,7 +63,7 @@ def validate_metadata_message(message, base_port):
     assert payload["stream_id"] == f"stream{index}"
     assert payload["frame_id"] and payload["pts_ns"] >= 0
     for item in payload["data"]["objects"]:
-        assert item["label"] in LABELS, f"label not in coco_label.txt: {item['label']}"
+        assert item["label"] in LABELS, f"label not in coco80.txt: {item['label']}"
         assert 0.3 <= item["confidence"] <= 1.0, "confidence below inference.min_score"
     return index, payload
 
