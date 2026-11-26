@@ -1,359 +1,126 @@
-"""DETR folder object detection through Neat's model-managed BoxDecodeType.Detr decoder."""
+"""Detect objects in a folder of images with DETR, saved as annotated PNGs.
+
+The model runs on one image at a time and decodes DETR's boxes itself. Each image is saved with
+its boxes drawn.
+"""
 
 from __future__ import annotations
 
 import argparse
 import sys
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+import cv2
+import numpy as np
+import pyneat
+
+# The helpers the examples share live in <apps root>/support/python.
+for apps_root in Path(__file__).resolve().parents:
+    if (apps_root / "support" / "python" / "sima_examples").is_dir():
+        sys.path.insert(0, str(apps_root / "support" / "python"))
+        break
+else:
+    raise SystemExit("support/python not found above this example; reinstall the Apps package")
+
+from sima_examples.config import Config
+from sima_examples.labels import load_labels
+from utils import annotate, images
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-DEFAULT_MODEL_PATH = "models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz"
-PERSON_CLASS_ID = 1
-DETR_COCO_LABELS = [
-    "N/A",
-    "person",
-    "bicycle",
-    "car",
-    "motorcycle",
-    "airplane",
-    "bus",
-    "train",
-    "truck",
-    "boat",
-    "traffic light",
-    "fire hydrant",
-    "N/A",
-    "stop sign",
-    "parking meter",
-    "bench",
-    "bird",
-    "cat",
-    "dog",
-    "horse",
-    "sheep",
-    "cow",
-    "elephant",
-    "bear",
-    "zebra",
-    "giraffe",
-    "N/A",
-    "backpack",
-    "umbrella",
-    "N/A",
-    "N/A",
-    "handbag",
-    "tie",
-    "suitcase",
-    "frisbee",
-    "skis",
-    "snowboard",
-    "sports ball",
-    "kite",
-    "baseball bat",
-    "baseball glove",
-    "skateboard",
-    "surfboard",
-    "tennis racket",
-    "bottle",
-    "N/A",
-    "wine glass",
-    "cup",
-    "fork",
-    "knife",
-    "spoon",
-    "bowl",
-    "banana",
-    "apple",
-    "sandwich",
-    "orange",
-    "broccoli",
-    "carrot",
-    "hot dog",
-    "pizza",
-    "donut",
-    "cake",
-    "chair",
-    "couch",
-    "potted plant",
-    "bed",
-    "N/A",
-    "dining table",
-    "N/A",
-    "N/A",
-    "toilet",
-    "N/A",
-    "tv",
-    "laptop",
-    "mouse",
-    "remote",
-    "keyboard",
-    "cell phone",
-    "microwave",
-    "oven",
-    "toaster",
-    "sink",
-    "refrigerator",
-    "N/A",
-    "book",
-    "clock",
-    "vase",
-    "scissors",
-    "teddy bear",
-    "hair drier",
-    "toothbrush",
-]
-BOX_COLORS = [
-    (0, 255, 0),
-    (255, 0, 0),
-    (0, 0, 255),
-    (255, 255, 0),
-    (255, 0, 255),
-    (0, 255, 255),
-    (128, 255, 0),
-    (255, 128, 0),
-]
 
 
-@dataclass(frozen=True)
-class Config:
-    model_path: Path
-    input_dir: Path
-    output_dir: Path
-    confidence_threshold: float
-    max_draw: int
-    person_only: bool
-    profile: bool
-    num_runs: int
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    return parser.parse_args(argv)
 
 
-def load_config(path: Path) -> Config:
-    """Read the YAML config and reject values Neat would read as "use the package default"."""
-    with path.open("r", encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
-    model_cfg = raw.get("model", {})
-    io_cfg = raw.get("io", {})
-    decode_cfg = raw.get("decode", {})
-    runtime_cfg = raw.get("runtime", {})
-    config = Config(
-        model_path=Path(model_cfg.get("path", DEFAULT_MODEL_PATH)),
-        input_dir=Path(io_cfg.get("input_dir", "assets/datasets/coco")),
-        output_dir=Path(io_cfg.get("output_dir", "sandbox/detr-object-detector")),
-        confidence_threshold=float(decode_cfg.get("confidence_threshold", 0.7)),
-        max_draw=int(decode_cfg.get("max_draw", 50)),
-        person_only=bool(decode_cfg.get("person_only", False)),
-        profile=bool(runtime_cfg.get("profile", False)),
-        num_runs=int(runtime_cfg.get("num_runs", 100)),
-    )
-    # Neat's decoder keeps the package's own threshold and top-k when either is 0.
-    if not 0.0 < config.confidence_threshold <= 1.0:
-        raise ValueError("decode.confidence_threshold must be in (0.0, 1.0]")
-    if config.max_draw < 1:
-        raise ValueError("decode.max_draw must be >= 1")
-    if config.num_runs < 1:
-        raise ValueError("runtime.num_runs must be >= 1")
-    return config
-
-
-def is_image(path: Path) -> bool:
-    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
-
-
-def class_name(class_id: int) -> str:
-    if 0 <= class_id < len(DETR_COCO_LABELS):
-        label = DETR_COCO_LABELS[class_id]
-        if label != "N/A":
-            return label
-    return f"class_{class_id}"
-
-
-def class_color(class_id: int) -> tuple[int, int, int]:
-    return BOX_COLORS[abs(class_id) % len(BOX_COLORS)]
-
-
-def build_model_options(config: Config, max_width: int, max_height: int) -> pyneat.ModelOptions:
-    """Stretch, ImageNet-normalize, and decode DETR on the model route."""
+def model_options(
+    config: Config, max_width: int, max_height: int, max_detections: int
+) -> pyneat.ModelOptions:
+    """OpenCV BGR images in, boxes out of Core's DETR decoder."""
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
-    # Neat rejects inputs larger than 1920x1080 unless these limits are raised.
+    options.preprocess.enable = pyneat.AutoFlag.On
+    # Neat rejects images larger than 1920x1080 unless these limits are raised.
     options.preprocess.input_max_width = max_width
     options.preprocess.input_max_height = max_height
-    options.preprocess.enable = pyneat.AutoFlag.On
+    # Core's DETR decoder needs a Stretch resize; Core's default is Letterbox.
     options.preprocess.resize.enable = pyneat.AutoFlag.On
-    # Core's classic DETR decoder requires Stretch (Core docs/reference/boxdecode_decode_types.md).
     options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
-    # The registry calibrates and scores DETR on Pillow bilinear resizes, which average every source
-    # pixel when shrinking; plain bilinear samples only the nearest four.
+    # The registry calibrates and scores DETR on Pillow bilinear resizes, which average every
+    # source pixel when shrinking; plain bilinear samples only the nearest four.
     options.preprocess.resize.interpolation = pyneat.ResizeInterpolation.BilinearAntialiased
     options.preprocess.preset = pyneat.NormalizePreset.ImageNet
     options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
     options.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
     options.decode_type = pyneat.BoxDecodeType.Detr
-    options.score_threshold = config.confidence_threshold
-    options.top_k = config.max_draw
+    options.score_threshold = config.number("inference.min_score")
+    options.top_k = max_detections
     return options
 
 
-def read_image(image_path: Path) -> np.ndarray:
-    image_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if image_bgr is None:
-        raise RuntimeError(f"Failed to read image: {image_path}")
-    return image_bgr
-
-
-def largest_image_size(image_paths: list[Path]) -> tuple[int, int]:
-    """Return the largest width and height among the images, so Neat accepts every one."""
-    max_width = max_height = 0
-    for image_path in image_paths:
-        height, width = read_image(image_path).shape[:2]
-        max_width, max_height = max(max_width, width), max(max_height, height)
-    return max_width, max_height
-
-
-def image_to_tensor(image_bgr: np.ndarray) -> pyneat.Tensor:
+def image_tensor(image: np.ndarray) -> pyneat.Tensor:
+    """An OpenCV image as a BGR tensor in EV74 memory, where the preprocessing reads it."""
     return pyneat.Tensor.from_numpy(
-        np.ascontiguousarray(image_bgr, dtype=np.uint8),
-        copy=True,
-        image_format=pyneat.PixelFormat.BGR,
-        memory=pyneat.TensorMemory.EV74,
+        image, copy=True, image_format=pyneat.PixelFormat.BGR, memory=pyneat.TensorMemory.EV74
     )
 
 
-def detect(runner: pyneat.ModelRunner, image_bgr: np.ndarray, config: Config) -> list[pyneat.Box]:
-    """Run one image through the model and return its boxes in original-image pixels."""
-    outputs = runner.run([image_to_tensor(image_bgr)])
-    if len(outputs) != 1:
-        raise RuntimeError(f"expected one BBOX tensor, got {len(outputs)}")
-    height, width = image_bgr.shape[:2]
-    boxes = pyneat.detections.decode_bbox_tensor(
-        outputs[0], width, height, config.max_draw, False
-    ).boxes
-    if config.person_only:
-        return [box for box in boxes if box.class_id == PERSON_CLASS_ID]
-    return list(boxes)
+def detect(runner: pyneat.ModelRunner, image: np.ndarray, max_detections: int) -> list:
+    """The boxes the model finds in one image, in the image's pixels."""
+    bbox = runner.run([image_tensor(image)])[0]
+    height, width = image.shape[:2]
+    # strict fails on anything but a BBOX payload, such as raw model heads.
+    return pyneat.detections.decode_bbox_tensor(bbox, width, height, max_detections, True).boxes
 
 
-def draw_detections(image_bgr: np.ndarray, boxes: list[pyneat.Box]) -> np.ndarray:
-    annotated = image_bgr.copy()
-    for box in boxes:
-        x1, y1, x2, y2 = (round(v) for v in (box.x1, box.y1, box.x2, box.y2))
-        color = class_color(box.class_id)
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(
-            annotated,
-            f"{class_name(box.class_id)} {box.score:.2f}",
-            (x1, max(0, y1 - 4)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            2,
-        )
-    return annotated
+def annotate_images(
+    runner: pyneat.ModelRunner,
+    paths: list[Path],
+    labels: list[str],
+    max_detections: int,
+    output_dir: Path,
+) -> None:
+    """Save each image with its boxes drawn to `output_dir`."""
+    for index, path in enumerate(paths, start=1):
+        image = images.read_image(path)
+        boxes = detect(runner, image, max_detections)
+        output_path = output_dir / annotate.output_name(path)
+        if not cv2.imwrite(str(output_path), annotate.draw_detections(image, boxes, labels)):
+            raise OSError(f"cannot write {output_path}")
+        print(f"[{index}/{len(paths)}] {path.name}: {len(boxes)} detections -> {output_path.name}")
 
 
-def annotate_images(runner: pyneat.ModelRunner, image_paths: list[Path], config: Config) -> None:
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    for index, image_path in enumerate(image_paths, start=1):
-        image_bgr = read_image(image_path)
-        boxes = detect(runner, image_bgr, config)
-
-        output_path = config.output_dir / f"{image_path.stem}_detr.png"
-        if not cv2.imwrite(str(output_path), draw_detections(image_bgr, boxes)):
-            raise RuntimeError(f"Failed to write: {output_path}")
-        progress = f"[{index}/{len(image_paths)}] {image_path.name}"
-        print(f"{progress}: {len(boxes)} detections -> {output_path.name}")
-    print(f"Done: {len(image_paths)} images processed")
-
-
-def profile_model_run(runner: pyneat.ModelRunner, image_path: Path, config: Config) -> None:
-    """Time preprocess, inference, and decode on one image after one untimed warm-up run."""
-    image_bgr = read_image(image_path)
-    detect(runner, image_bgr, config)
-
-    run_times_s = []
-    for _ in range(config.num_runs):
-        start = time.perf_counter()
-        boxes = detect(runner, image_bgr, config)
-        run_times_s.append(time.perf_counter() - start)
-
-    times = np.array(run_times_s)
-    print(f"Profiling over {len(times)} runs (image='{image_path}'):")
-    print(
-        f"  Model run (preprocess+infer+decode): mean={times.mean():.6f}s, "
-        f"min={times.min():.6f}s, max={times.max():.6f}s, FPS={len(times) / times.sum():.3f}"
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    config = Config.load(args.config)
+    # Used by both the model and the box decode.
+    max_detections = config.integer("inference.max_detections")
+    # DETR's class IDs index the labels directly.
+    labels = load_labels(Path(config.string("model.labels")))
+    paths = images.image_paths(Path(config.string("input.source")))
+    max_width, max_height = images.largest_image_size(paths)
+    model_path = args.config.absolute().parent / config.string("model.path")
+    model = pyneat.Model(
+        str(model_path), model_options(config, max_width, max_height, max_detections)
     )
-    print(f"Last run detections: {len(boxes)}")
-    for i, box in enumerate(boxes[:20]):
-        print(
-            f"  [{i}] class={class_name(box.class_id)}({box.class_id}) score={box.score:.4f} "
-            f"box=[{box.x1:.1f},{box.y1:.1f},{box.x2:.1f},{box.y2:.1f}]"
-        )
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="DETR folder object detection example")
-    parser.add_argument(
-        "--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration"
-    )
-    args = parser.parse_args()
-
+    # The first image seeds the build, which plans the route for images like it.
+    runner = model.build([image_tensor(images.read_image(paths[0]))])
+    output_dir = Path(config.string("output.dir"))
+    output_dir.mkdir(parents=True, exist_ok=True)
     try:
-        config = load_config(args.config)
-    except OSError as exc:
-        print(f"failed to open config file: {args.config} ({exc.strerror})", file=sys.stderr)
-        return 2
-    except (yaml.YAMLError, ValueError) as exc:
-        print(exc, file=sys.stderr)
-        return 2
-    if not config.model_path.is_file():
-        print(f"Model file does not exist: {config.model_path}", file=sys.stderr)
-        return 2
-    if not config.input_dir.is_dir():
-        print(f"Input directory does not exist: {config.input_dir}", file=sys.stderr)
-        return 2
-    image_paths = sorted(p for p in config.input_dir.iterdir() if p.is_file() and is_image(p))
-    if not image_paths:
-        print(f"No images found in {config.input_dir}", file=sys.stderr)
-        return 3
-
-    # Imported after config validation so config errors are reported without a runtime install.
-    global cv2, np, pyneat
-    import cv2
-    import numpy as np
-    import pyneat
-
-    # Profiling times only the first image.
-    if config.profile:
-        image_paths = image_paths[:1]
-    try:
-        max_width, max_height = largest_image_size(image_paths)
-    except RuntimeError as exc:
-        print(exc, file=sys.stderr)
-        return 3
-    try:
-        model = pyneat.Model(
-            str(config.model_path), build_model_options(config, max_width, max_height)
-        )
-        runner = model.build([image_to_tensor(read_image(image_paths[0]))])
-    except Exception as exc:
-        print(f"Error loading model: {exc}", file=sys.stderr)
-        return 3
-
-    try:
-        if config.profile:
-            profile_model_run(runner, image_paths[0], config)
-        else:
-            annotate_images(runner, image_paths, config)
-    except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 4
+        annotate_images(runner, paths, labels, max_detections, output_dir)
     finally:
         runner.close()
+
+    print(f"Done: {len(paths)} images processed")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        sys.exit(main())
+    except Exception as error:  # noqa: BLE001 - report the cause in one line, not a traceback
+        print(f"[ERR] {error}", file=sys.stderr)
+        sys.exit(1)

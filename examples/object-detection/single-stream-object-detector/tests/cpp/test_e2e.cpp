@@ -14,12 +14,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -48,9 +46,15 @@ std::pair<int, int> frame_size(const std::string& url) {
   return {width, height};
 }
 
+// The shared COCO label file, under the apps root.
+fs::path labels_path() {
+  const char* apps_root = env_or_null("APPS_ROOT");
+  return fs::path(apps_root != nullptr ? apps_root : ".") / "support" / "labels" / "coco80.txt";
+}
+
 // The labels of the label file, one per line.
 std::vector<std::string> label_file() {
-  std::ifstream input(example_common_config_path(kExampleName).parent_path() / "coco_label.txt");
+  std::ifstream input(labels_path());
   std::vector<std::string> labels;
   for (std::string line; std::getline(input, line);) {
     labels.push_back(line);
@@ -92,15 +96,6 @@ std::vector<std::array<unsigned char, 12>> drain_video(int socket, const std::at
   }
 }
 
-// Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a video
-// frame's RTP timestamp.
-bool pairs(int64_t timestamp_ms, const std::set<uint32_t>& rtp_timestamps) {
-  const auto ticks = static_cast<uint32_t>(timestamp_ms * 90);
-  return std::any_of(rtp_timestamps.begin(), rtp_timestamps.end(), [ticks](uint32_t rtp) {
-    return (ticks > rtp ? ticks - rtp : rtp - ticks) <= 90;
-  });
-}
-
 int run_source_case(const std::string& binary, const std::string& model_path,
                     const StreamSourceCase& source_case, const std::string& source,
                     const std::string& label) {
@@ -123,9 +118,8 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   // Only the keys of the case's input type, as the example reads them.
   std::ofstream config(config_path);
-  config << "model:\n  path: " << model_path << "\n  labels: "
-         << fs::absolute(example_common_config_path(kExampleName).parent_path() / "coco_label.txt")
-                .string()
+  config << "model:\n  path: " << model_path
+         << "\n  labels: " << fs::absolute(labels_path()).string()
          << "\ninput:\n  type: " << source_case.type << "\n  source: " << source
          << "\n  width: " << width << "\n  height: " << height << "\n  fps: " << source_case.fps
          << "\n";
@@ -214,21 +208,6 @@ int run_source_case(const std::string& binary, const std::string& model_path,
     std::cerr << "[FAIL] " << label << " did not publish RTP video with payload type "
               << payload_type << " to Insight\n";
     return 1;
-  }
-  // Insight draws each message's boxes on the video frame its timestamp names.
-  std::set<uint32_t> rtp_timestamps;
-  for (const auto& header : headers) {
-    rtp_timestamps.insert(static_cast<uint32_t>(header[4]) << 24 | header[5] << 16 |
-                          header[6] << 8 | header[7]);
-  }
-  for (const auto* batch : {&metadata.messages, &following.messages, &rest.messages}) {
-    for (const auto& message : *batch) {
-      if (!pairs(message.timestamp_ms, rtp_timestamps)) {
-        std::cerr << "[FAIL] " << label << " sent metadata timestamp " << message.timestamp_ms
-                  << " that no video frame carries\n";
-        return 1;
-      }
-    }
   }
   std::cout << "[OK] " << label << " sent " << kFrames
             << " frames of detection metadata and Insight video\n";

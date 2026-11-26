@@ -4,7 +4,7 @@ profile:
 
 model:
   path: <model-path>
-  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
+  labels: support/labels/coco80.txt
   decode_type: yolo26
 
 card:
