@@ -115,6 +115,12 @@ Place each piece of code by the first question it answers yes to:
 - Repository files name no Core commit. Name the Core release, such as `Neat Core 0.6.0 or
   newer`, or the Core issue, such as `core#1081`, because a commit hash tells a reader nothing
   and goes stale.
+- Files, pull request text, and review comments name no specific machine: no board, host,
+  or Insight IP address or hostname, no lab or site name, and no home directory or local
+  path of one person's machine, such as `/Users/<name>` or `~/py-extra`. Code and configs
+  read these values from the config or the command line, and docs and logs write a
+  placeholder, such as `<board-ip>`, `<insight-host>`, or `<path>`, because each reader's
+  values differ and the repository is public.
 - The repository is public. It holds source, docs, and shipped assets only: credentials,
   customer information, internal material, agent plans, scratch notes, and build or runtime
   artifacts stay elsewhere.
@@ -150,7 +156,7 @@ Every pull request feeds what its work taught back into these files:
   built or tuned, such as `GraphLinkOptions::queue_depth` adding no buffering, also goes into
   the matching skill reference, written in full there.
 - **Generalize:** write a lesson brief and to the point, as general as it holds, as a rule
-  with its condition: when X, do Y, because Z. It names the condition, not the example where it
+  with its condition: when X, do Y, because Z. Write it by [the language rules](references/writing.md#language). It names the condition, not the example where it
   was found, and holds for any application that meets the condition. A fact that holds only for one example stays in that example's README.
   A fact about one API, such as a `BoxDecodeType` value or an option default, is stated
   exactly, because it holds wherever that API is used.
