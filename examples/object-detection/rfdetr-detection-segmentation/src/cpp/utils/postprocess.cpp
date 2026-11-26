@@ -59,7 +59,7 @@ std::vector<RankedObject> ranked_objects(std::span<const float> logits,
       break;
     }
     const auto& label = labels[static_cast<std::size_t>(index % kNumClasses)];
-    if (index % kNumClasses != 0 && label != "unused") {
+    if (index % kNumClasses != 0 && label != "N/A") {
       objects.push_back({index / kNumClasses, &label, score});
     }
   }

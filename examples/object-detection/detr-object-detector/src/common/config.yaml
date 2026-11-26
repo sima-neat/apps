@@ -1,15 +1,17 @@
-model:                       # DETR model selection.
-  path: <model-path>         # Example: models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz
+# DETR object detection of a folder of images, saved as annotated PNGs.
+model:
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz
+  # The 91 COCO class IDs DETR scores, one label per line, N/A for the unused IDs; a relative
+  # path starts at the working directory.
+  labels: support/labels/coco91.txt
 
-io:                          # Input and output paths.
-  input_dir: assets/datasets/coco              # Folder containing input images.
-  output_dir: sandbox/detr-object-detector   # Folder for annotated images.
+input:
+  source: assets/datasets/coco  # Folder of .jpg, .jpeg, .png, and .bmp images.
 
-decode:                      # Neat DETR decoder settings.
-  confidence_threshold: 0.70 # Minimum object confidence, above 0 and at most 1.
-  max_draw: 50               # Max detections per image, at least 1.
-  person_only: false         # Keep only COCO person detections when true.
+inference:
+  min_score: 0.70               # Lowest score a detection needs.
+  max_detections: 50            # Boxes kept per image.
 
-runtime:                     # Runtime settings.
-  profile: false             # Time the model on the first image instead of annotating the folder.
-  num_runs: 100              # Number of timed runs when profile is true.
+output:
+  dir: sandbox/detr-object-detector  # Folder for the annotated PNGs.

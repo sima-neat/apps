@@ -15,7 +15,8 @@ import pytest
 from tests.utils.metadata_json_listener import MetadataJsonListener
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-LABELS = set((EXAMPLE_DIR / "src" / "common" / "coco-labels.txt").read_text().splitlines())
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+LABELS = set((APPS_ROOT / "support" / "labels" / "coco91.txt").read_text().splitlines())
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
 
@@ -143,7 +144,7 @@ def test_publishes_insight_video_and_metadata(
     assert last.timestamp_ms > first.timestamp_ms
     entries = json.loads(last.payload)["data"][data_key]
     for entry in entries:
-        assert entry["label"] in LABELS, f"label not in coco-labels.txt: {entry['label']}"
+        assert entry["label"] in LABELS, f"label not in coco91.txt: {entry['label']}"
         assert 0.2 <= entry["confidence"] <= 1.0, "confidence below inference.min_score"
         assert len(entry["bbox"]) == 4
         if task == "segmentation":
