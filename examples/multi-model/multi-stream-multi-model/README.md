@@ -51,12 +51,12 @@ How does a frame move through multi-stream-multi-model?
     └────────────────────────┘                                               └────────────┘
 ```
 
-- One graph and one `Run` hold every stream. Each stream has its own `SimaDecode`, its own model, and its own `Output "results_i"`. On a DevKit, one model slowed to 10 or 1 results/s left the other three streams at 30 results/s.
-- `RtspEncodedInput` sends each stream's encoded video to Insight unchanged. The link to the video sender sends every encoded frame, so each result has its frame in Insight. Insight draws every overlay from the metadata.
-- The link into each model keeps the newest decoded frames. A realtime link lets a model hold 4 frames of its stream, but not here (a Core gap). Measured on a DevKit, the first pull of a frame, from `Output "results_i"` or `Output "frames_i"`, releases its hold on that limit, so a stream never held more than 2. Without `Output "frames_i"`, Core does not count the model's frames against the limit at all. So the decoder's 12 buffers bound the frames each model holds.
+- One graph and one `Run` hold every stream. Each stream has its own `SimaDecode`, its own model, and its own `Output "results_i"`. A slow model slows only its own stream.
+- `RtspEncodedInput` sends each stream's encoded video to Insight unchanged. The link to the video sender sends every encoded frame, so each result has its frame in Insight. The link waits for the sender, so a sender that falls behind holds back the decoder too. Insight draws every overlay from the metadata.
+- The link into each model keeps the newest decoded frames. Core does not hold each model to the link's in-flight limit here, so the decoder's 12 buffers bound the frames a model holds.
 - `Output "frames_i"` keeps only the newest decoded frame. The pull loop reads it to know that the decoder is sending. The RTSP input feeds only the decoder and the video sender, so Core runs the three as one pipeline.
 - One pull loop reads every output in turn. It turns each result into Insight metadata and sends it on the stream's channel.
-- Decoded frames that arrive with no result for 10 seconds stop the application with an error. The first result is allowed 30 seconds, because Core builds the rest of the pipeline on the first frame. On a DevKit with four 1280x720@30 streams and the default models, the largest gap between results over 12 minutes was 0.37 s in C++ and 0.25 s in Python. The first result came 0.6 to 2 s after the first frame. A camera that pauses sends no frames, so it may wait without a limit.
+- Decoded frames that arrive with no result for 10 seconds stop the application with an error, because a stalled model would otherwise leave its stream without results and without an error. The first result is allowed 30 seconds, because Core builds the rest of the pipeline on the first frame. A camera that pauses sends no frames, so it may wait without a limit.
 
 ## Preview
 

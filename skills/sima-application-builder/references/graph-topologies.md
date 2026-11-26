@@ -117,6 +117,15 @@ stream. Do not raise it to add buffering. Use `OutputOptions` on the `Output`, o
   decoder and to a `VideoSender`. Neat reads the stream once and feeds both.
   [Application output](application-output.md) owns the sender options and the link to it.
 - **Many streams, one model:** see [Many streams, one model](#many-streams-one-model).
+- **Many streams, a different model on each:** one parent graph and one `Run`. For each stream,
+  `RtspEncodedInput → SimaDecode → model graph → Output("results_<i>")`, with a
+  `RealtimeLatestByStream` link from the decoder to the model, and one pull loop over every
+  `results_<i>`. A slowed model slows only its own stream: on a DevKit with Neat Core 0.6.2, MLA
+  at 1 GHz, and four 1280x720@30 H.264 streams, one model held to 10 or 1 results/s left the
+  other three at 30 results/s. An oversubscribed MLA was not measured. The link's in-flight
+  cap does not bound such a model's frames: on Neat Core 0.6.2 the link registered none, and a
+  second consumer of the decoder output releases each frame when it pulls it. Bound them with
+  `SimaDecodeOptions::num_buffers`.
 - **Results joined by frame:** before a `graphs::Combine` with `CombinePolicy::ByFrame` or
   `ByPts`, use plain links. A latest-by-stream link drops frames, and the join then waits for
   frames that never arrive.
