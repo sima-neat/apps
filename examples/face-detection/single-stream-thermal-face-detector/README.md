@@ -14,18 +14,44 @@
 ## Concept
 Detects faces and five facial landmarks in a live thermal RTSP stream with YOLOv5s-Face, then sends the overlay to Insight.
 
-The graph decodes the stream once and branches the frames to Insight's video and to the
-model:
-
 ```text
-RtspDecodedInput (H.264 to NV12) --> Branch --> "video": VideoSender (H.264 RTP/UDP to Insight)
-                                            \--> "model": yolov5s-face (six raw heads)
-                                                    --> Output "detections" --> host decode
-                                                    --> MetadataSender (pose-estimation to Insight)
+How does a frame move through single-stream-thermal-face-detector?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                                               ┆
+┆  ┌────────────────────────────────┐  H.264 frames       ┌──────────────────────┐  ┆
+┆  │ RtspEncodedInput               │────────────────────►│ VideoSender          │──┼─────┐
+┆  └────────────────────────────────┘  as received        └──────────────────────┘  ┆     │
+┆            │ encoded frames                                                       ┆     │ video
+┆            ▼                                                                      ┆     │
+┆  ┌────────────────────────────────┐                                               ┆     │
+┆  │ SimaDecode                     │                                               ┆     │
+┆  └────────────────────────────────┘                                               ┆     │
+┆            │ NV12 frames                                                          ┆     │
+┆            ▼                                                                      ┆     │
+┆  ┌────────────────────────────────┐                                               ┆     │
+┆  │ yolov5s-face Model             │                                               ┆     │
+┆  └────────────────────────────────┘                                               ┆     │
+┆            │ six raw heads                                                        ┆     │
+┆            ▼                                                                      ┆     │
+┆  ┌────────────────────────────────┐                                               ┆     │
+┆  │ Output "detections"            │                                               ┆     │
+┆  └────────────────────────────────┘                                               ┆     │
+╰┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯     │
+             ▼ pull                                                                       │
+   ┌────────────────────────────────┐                                                     │
+   │ yolov5_face decode             │                                                     │
+   └────────────────────────────────┘                                                     │
+             │ faces, five landmarks                                                      │
+             ▼                                                                            ▼
+   ┌────────────────────────────────┐                                                ┌─────────┐
+   │ MetadataSender                 │───────────────────────────────────────────────►│ Insight │
+   └────────────────────────────────┘   poses as JSON                                └─────────┘
 ```
 
-Both branch links keep only the newest frame, so a slow branch drops frames instead of holding
-back the stream.
+The H.264 stream goes to Insight as received, while the decoder feeds the model. Plain links
+pass every received frame to both, so each face message carries the timestamp of a frame sent to
+Insight, and Insight draws the landmarks on the frame they came from.
 
 Each frame sends one `pose-estimation` message with the left eye, right eye, nose tip, and both mouth corners. Insight draws them as labeled dots. The application sends one metadata type because Insight shows only one type per channel at a time.
 

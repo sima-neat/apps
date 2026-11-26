@@ -1,8 +1,8 @@
 """Detect faces and their five landmarks in one thermal RTSP stream with yolov5s-face, shown in
 Insight.
 
-The decoded frames branch to Insight's video and to the model. The model's six raw heads are
-decoded on the host, and Insight receives every frame's faces as a pose overlay.
+The H.264 stream goes to Insight as received, and its decoded frames feed the model. The model's
+six raw heads are decoded on the host, and Insight receives every frame's faces as a pose overlay.
 """
 
 from __future__ import annotations
@@ -49,53 +49,43 @@ def model_options() -> pyneat.ModelOptions:
     return options
 
 
-def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspDecodedInputOptions:
-    """Receive the H.264 stream and decode it to NV12 frames of the stream's size and rate."""
-    options = pyneat.RtspDecodedInputOptions()
+def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedInputOptions:
+    """Receive the H.264 stream, encoded."""
+    options = pyneat.RtspEncodedInputOptions()
     options.url = config.string("input.source")
     options.tcp = config.boolean("input.rtsp.tcp")
     options.latency_ms = config.integer("input.rtsp.latency_ms")
     options.fallback_h264_width = stream.width
     options.fallback_h264_height = stream.height
     options.fallback_h264_fps = stream.fps
-    options.output_caps.enable = True
-    options.output_caps.width = stream.width
-    options.output_caps.height = stream.height
-    options.output_caps.fps = stream.fps
     return options
 
 
-def video_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
-    """The "video" branch: decoded frames encoded as H.264 for Insight."""
-    encode = pyneat.SimaEncodeOptions()
-    encode.fps = stream.fps
-    options = pyneat.VideoSenderOptions.from_raw(encode)
-    options.host = config.string("output.insight.host")
-    options.video_port_base = config.integer("output.insight.video_port_base")
-    graph = pyneat.Graph("video")
-    graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(options))
+def decoder_graph(stream: RtspStreamInfo) -> pyneat.Graph:
+    """Hardware decode of the H.264 stream to NV12 frames of the stream's size and rate."""
+    decode = pyneat.SimaDecodeOptions()
+    decode.dec_width = stream.width
+    decode.dec_height = stream.height
+    decode.dec_fps = stream.fps
+    graph = pyneat.Graph("decoder")
+    graph.add(pyneat.nodes.sima_decode(decode))
     return graph
 
 
-def model_graph(model: pyneat.Model) -> pyneat.Graph:
-    """The "model" branch: decoded frames into the model."""
-    graph = pyneat.Graph("model")
-    graph.connect(pyneat.nodes.input("model"), model)
-    return graph
-
-
-def detections_graph() -> pyneat.Graph:
-    """The "detections" output the pull loop reads."""
-    graph = pyneat.Graph("detections")
+def detector_graph(model: pyneat.Model) -> pyneat.Graph:
+    """Decoded frames -> model -> "detections" output."""
+    graph = pyneat.Graph("detector")
+    graph.add(model.graph())
     graph.add(pyneat.nodes.output("detections"))
     return graph
 
 
-def live_link() -> pyneat.GraphLinkOptions:
-    """Pass on only the newest frame, so a slow branch cannot hold back the stream."""
-    link = pyneat.GraphLinkOptions()
-    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    return link
+def video_options(config: Config) -> pyneat.VideoSenderOptions:
+    """The H.264 stream goes to Insight as received."""
+    options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.H264)
+    options.host = config.string("output.insight.host")
+    options.video_port_base = config.integer("output.insight.video_port_base")
+    return options
 
 
 def metadata_options(config: Config) -> pyneat.MetadataSenderOptions:
@@ -176,16 +166,16 @@ def main(argv: list[str] | None = None) -> int:
     model_path = args.config.absolute().parent / config.string("model.path")
     model = pyneat.Model(str(model_path), model_options())
 
-    source = pyneat.groups.rtsp_decoded_input(rtsp_options(config, stream))
-    branch = pyneat.graphs.branch("source", ["video", "model"])
-    video = video_graph(config, stream)
-    detector = model_graph(model)
+    source = pyneat.groups.rtsp_encoded_input(rtsp_options(config, stream))
+    frames = decoder_graph(stream)
+    detector = detector_graph(model)
+    video = pyneat.groups.video_sender(video_options(config))
 
     graph = pyneat.Graph()
-    graph.connect(source, branch)
-    graph.connect(branch, video, live_link())
-    graph.connect(branch, detector, live_link())
-    graph.connect(detector, detections_graph())
+    graph.connect(source, frames)
+    # A plain link lets Core tee the encoded stream to the decoder and the video sender.
+    graph.connect(source, video)
+    graph.connect(frames, detector)
 
     metadata_sender = pyneat.MetadataSender(metadata_options(config))
     stop = stop_on_signals()

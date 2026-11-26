@@ -140,10 +140,11 @@ class TestE2E:
                 assert pose["label"] == LABELS[0]
                 assert [point["name"] for point in pose["keypoints"]] == LANDMARK_NAMES
                 assert all(point["confidence"] > MIN_SCORE for point in pose["keypoints"])
-        # The example encodes the decoded frames as H.264 (RTP payload type 96) for Insight.
+        # The H.264 stream goes to Insight as received (RTP payload type 96).
         assert headers and len(headers[0]) == 12 and headers[0][0] >> 6 == 2
         assert headers[0][1] & 0x7F == 96
-        # Insight draws each message's poses on the video frame its timestamp names.
+        # Insight draws each message's poses on the video frame its timestamp names. Every received
+        # frame goes to Insight and an RTSP frame carries its timestamp, so every message pairs.
         rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers}
         unpaired = [m.timestamp_ms for m in messages if not _pairs(m.timestamp_ms, rtp_timestamps)]
         assert not unpaired, f"metadata timestamps with no video frame: {unpaired[:5]}"

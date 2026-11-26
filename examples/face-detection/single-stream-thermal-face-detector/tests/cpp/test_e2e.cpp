@@ -204,12 +204,13 @@ int main(int argc, char** argv) {
               poses_problem(nlohmann::json::parse(message.payload).at("data").at("poses"), label);
         }
       }
-      // The example encodes the decoded frames as H.264 (RTP payload type 96) for Insight.
+      // The H.264 stream goes to Insight as received (RTP payload type 96).
       if (problem.empty() && (headers.empty() || (headers.front()[0] >> 6) != 2 ||
                               (headers.front()[1] & 0x7F) != 96)) {
         problem = "no RTP video with payload type 96 reached Insight";
       }
-      // Insight draws each message's poses on the video frame its timestamp names.
+      // Insight draws each message's poses on the video frame its timestamp names. Every received
+      // frame goes to Insight and an RTSP frame carries its timestamp, so every message pairs.
       std::set<uint32_t> rtp_timestamps;
       for (const auto& header : headers) {
         rtp_timestamps.insert(static_cast<uint32_t>(header[4]) << 24 | header[5] << 16 |

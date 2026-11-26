@@ -13,8 +13,9 @@
 // limitations under the License.
 
 // Detects faces and their five landmarks in one thermal RTSP stream with yolov5s-face, shown in
-// Insight. The decoded frames branch to Insight's video and to the model. The model's six raw
-// heads are decoded on the host, and Insight receives every frame's faces as a pose overlay.
+// Insight. The H.264 stream goes to Insight as received, and its decoded frames feed the model.
+// The model's six raw heads are decoded on the host, and Insight receives every frame's faces as
+// a pose overlay.
 
 #include "neat.h"
 #include "sima_examples/config.h"
@@ -32,6 +33,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -69,55 +71,44 @@ neat::Model::Options model_options() {
   return options;
 }
 
-// Receive the H.264 stream and decode it to NV12 frames of the stream's size and rate.
-groups::RtspDecodedInputOptions rtsp_options(const sima_examples::Config& config,
+// Receive the H.264 stream, encoded.
+groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config,
                                              const sima_examples::RtspStreamInfo& stream) {
-  groups::RtspDecodedInputOptions options;
+  groups::RtspEncodedInputOptions options;
   options.url = config.string("input.source");
   options.tcp = config.boolean("input.rtsp.tcp");
   options.latency_ms = config.integer("input.rtsp.latency_ms");
   options.fallback_h264_width = stream.width;
   options.fallback_h264_height = stream.height;
   options.fallback_h264_fps = stream.fps;
-  options.output_caps.enable = true;
-  options.output_caps.width = stream.width;
-  options.output_caps.height = stream.height;
-  options.output_caps.fps = stream.fps;
   return options;
 }
 
-// The "video" branch: decoded frames encoded as H.264 for Insight.
-neat::Graph video_graph(const sima_examples::Config& config,
-                        const sima_examples::RtspStreamInfo& stream) {
-  neat::SimaEncodeOptions encode;
-  encode.fps = stream.fps;
-  auto options = groups::VideoSenderOptions::FromRaw(encode);
-  options.host = config.string("output.insight.host");
-  options.video_port_base = config.integer("output.insight.video_port_base");
-  neat::Graph graph("video");
-  graph.connect(neat::nodes::Input("video"), groups::VideoSender(options));
+// Hardware decode of the H.264 stream to NV12 frames of the stream's size and rate.
+neat::Graph decoder_graph(const sima_examples::RtspStreamInfo& stream) {
+  neat::SimaDecodeOptions decode;
+  decode.dec_width = stream.width;
+  decode.dec_height = stream.height;
+  decode.dec_fps = stream.fps;
+  neat::Graph graph("decoder");
+  graph.add(neat::nodes::SimaDecode(std::move(decode)));
   return graph;
 }
 
-// The "model" branch: decoded frames into the model.
-neat::Graph model_graph(neat::Model& model) {
-  neat::Graph graph("model");
-  graph.connect(neat::nodes::Input("model"), model);
-  return graph;
-}
-
-// The "detections" output the pull loop reads.
-neat::Graph detections_graph() {
-  neat::Graph graph("detections");
+// Decoded frames -> model -> "detections" output.
+neat::Graph detector_graph(neat::Model& model) {
+  neat::Graph graph("detector");
+  graph.add(model.graph());
   graph.add(neat::nodes::Output("detections"));
   return graph;
 }
 
-// Pass on only the newest frame, so a slow branch cannot hold back the stream.
-neat::GraphLinkOptions live_link() {
-  neat::GraphLinkOptions link;
-  link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
-  return link;
+// The H.264 stream goes to Insight as received.
+groups::VideoSenderOptions video_options(const sima_examples::Config& config) {
+  auto options = groups::VideoSenderOptions::Passthrough(groups::RtspCodec::H264);
+  options.host = config.string("output.insight.host");
+  options.video_port_base = config.integer("output.insight.video_port_base");
+  return options;
 }
 
 neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config) {
@@ -203,16 +194,16 @@ int run_app(const fs::path& config_path) {
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
   neat::Model model(model_path.string(), model_options());
 
-  const neat::Graph source = groups::RtspDecodedInput(rtsp_options(config, stream));
-  const neat::Graph branch = neat::graphs::Branch("source", {"video", "model"});
-  const neat::Graph video = video_graph(config, stream);
-  const neat::Graph detector = model_graph(model);
+  const neat::Graph source = groups::RtspEncodedInput(rtsp_options(config, stream));
+  const neat::Graph frames = decoder_graph(stream);
+  const neat::Graph detector = detector_graph(model);
+  const neat::Graph video = groups::VideoSender(video_options(config));
 
   neat::Graph graph;
-  graph.connect(source, branch);
-  graph.connect(branch, video, live_link());
-  graph.connect(branch, detector, live_link());
-  graph.connect(detector, detections_graph());
+  graph.connect(source, frames);
+  // A plain link lets Core tee the encoded stream to the decoder and the video sender.
+  graph.connect(source, video);
+  graph.connect(frames, detector);
 
   std::string error;
   neat::MetadataSender metadata_sender(metadata_options(config), &error);

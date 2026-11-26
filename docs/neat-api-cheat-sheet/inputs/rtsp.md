@@ -211,7 +211,7 @@ parser. The tables above describe what Core does.
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`RtspEncodedInput`)
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`RtspEncodedInput`)
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (`RtspDecodedInput`)
-- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/) (`RtspDecodedInput`, `output_caps`)
+- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/) (`RtspEncodedInput` with `SimaDecode`, H.264 stream to Insight)
 
 ## Source
 
