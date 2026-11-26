@@ -9,10 +9,12 @@
 #include "sima_examples/testing/test_process.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -29,10 +31,14 @@ namespace {
 constexpr const char* kExampleName = "multi-stream-multi-model";
 const std::vector<std::string> kLabels = {"person", "bicycle", "car"};
 
+using FrameId = std::optional<std::int64_t>;
+constexpr FrameId kNone = std::nullopt;
+
 // The error observe() throws for one round, or "" when it throws none.
-std::string error_of(PendingResults& pending, bool frame, bool result, double now_s) {
+std::string error_of(PendingResults& pending, FrameId frame_id, FrameId result_frame_id,
+                     double now_s) {
   try {
-    pending.observe(frame, result, now_s);
+    pending.observe(frame_id, result_frame_id, now_s);
   } catch (const std::runtime_error& error) {
     return error.what();
   }
@@ -40,8 +46,8 @@ std::string error_of(PendingResults& pending, bool frame, bool result, double no
 }
 
 // One round that must not throw. A throw outside error_of would end the test binary.
-bool observes(PendingResults& pending, bool frame, bool result, double now_s) {
-  const std::string error = error_of(pending, frame, result, now_s);
+bool observes(PendingResults& pending, FrameId frame_id, FrameId result_frame_id, double now_s) {
+  const std::string error = error_of(pending, frame_id, result_frame_id, now_s);
   return expect_true(error.empty(),
                      "the round at " + std::to_string(now_s) + " s passes: " + error);
 }
@@ -291,10 +297,10 @@ bool test_data_json_leaves_out_the_lowest_confidence_entries() {
 
 bool test_late_result_names_the_stream_and_model() {
   PendingResults pending(2, "models/m.tar.gz", 10.0, 30.0);
-  bool ok = observes(pending, true, true, 100.0);
-  ok &= expect_true(error_of(pending, true, false, 101.0).empty(), "a frame is pending");
-  ok &= expect_true(error_of(pending, false, false, 111.0).empty(), "the deadline has not passed");
-  const std::string error = error_of(pending, false, false, 111.5);
+  bool ok = observes(pending, 7, 7, 100.0);
+  ok &= expect_true(error_of(pending, 8, kNone, 101.0).empty(), "a frame is pending");
+  ok &= expect_true(error_of(pending, kNone, kNone, 111.0).empty(), "the deadline has not passed");
+  const std::string error = error_of(pending, kNone, kNone, 111.5);
   ok &= expect_true(error == "stream 2: model models/m.tar.gz returned no result for 10 s while "
                              "its decoder sent frames",
                     "the error names the stream and model: " + error);
@@ -303,41 +309,74 @@ bool test_late_result_names_the_stream_and_model() {
 
 bool test_later_frames_keep_the_first_pending_time() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
-  bool ok = observes(pending, false, true, 100.0);
-  ok &= observes(pending, true, false, 101.0);
-  ok &= observes(pending, true, false, 106.0);
-  ok &= expect_true(!error_of(pending, true, false, 111.5).empty(),
+  bool ok = observes(pending, kNone, 7, 100.0);
+  ok &= observes(pending, 8, kNone, 101.0);
+  ok &= observes(pending, 9, kNone, 106.0);
+  ok &= expect_true(!error_of(pending, 10, kNone, 111.5).empty(),
                     "the deadline counts from the first pending frame");
   return ok;
 }
 
 bool test_result_clears_the_pending_frame() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
-  bool ok = observes(pending, false, true, 100.0);
-  ok &= observes(pending, true, false, 101.0);
-  ok &= observes(pending, false, true, 105.0);
-  ok &= expect_true(error_of(pending, false, false, 200.0).empty(),
+  bool ok = observes(pending, kNone, 7, 100.0);
+  ok &= observes(pending, 8, kNone, 101.0);
+  ok &= observes(pending, kNone, 8, 105.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 200.0).empty(),
                     "a result clears the pending frame");
-  ok &= observes(pending, true, false, 205.0);
-  ok &= expect_true(error_of(pending, false, false, 215.0).empty(),
+  ok &= observes(pending, 9, kNone, 205.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 215.0).empty(),
                     "the next frame starts a new deadline");
-  ok &= expect_true(!error_of(pending, false, false, 215.5).empty(), "the new deadline passes");
+  ok &= expect_true(!error_of(pending, kNone, kNone, 215.5).empty(), "the new deadline passes");
   return ok;
 }
 
 bool test_frame_with_its_result_in_one_round_is_not_pending() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
-  bool ok = observes(pending, true, true, 100.0);
-  ok &= expect_true(error_of(pending, false, false, 1'000'000.0).empty(),
+  bool ok = observes(pending, 7, 7, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 1'000'000.0).empty(),
                     "a frame with its result starts no deadline");
+  return ok;
+}
+
+bool test_newer_frame_with_a_result_in_one_round_starts_the_deadline() {
+  // The model holds frame 8 and returns nothing more, so no later frame restarts the deadline.
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, 8, 7, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 110.0).empty(), "the deadline has not passed");
+  const std::string error = error_of(pending, kNone, kNone, 110.5);
+  ok &= expect_true(
+      error == "stream 0: model m.tar.gz returned no result for 10 s while its decoder sent frames",
+      "a frame newer than the result starts the deadline: " + error);
+  return ok;
+}
+
+bool test_frame_no_newer_than_the_last_result_is_not_pending() {
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, kNone, 8, 100.0);
+  ok &= observes(pending, 7, kNone, 101.0);
+  ok &= observes(pending, 8, kNone, 102.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 1'000'000.0).empty(),
+                    "a frame no newer than the last result starts no deadline");
+  return ok;
+}
+
+bool test_frame_with_an_unknown_id_is_pending_only_without_a_result() {
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, -1, -1, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 1'000'000.0).empty(),
+                    "an unknown frame with a result starts no deadline");
+  ok &= observes(pending, -1, kNone, 1'000'001.0);
+  ok &= expect_true(!error_of(pending, kNone, kNone, 1'000'011.5).empty(),
+                    "an unknown frame without a result starts the deadline");
   return ok;
 }
 
 bool test_first_result_has_its_own_deadline() {
   PendingResults pending(1, "m.tar.gz", 10.0, 30.0);
-  bool ok = observes(pending, true, false, 100.0);
-  ok &= expect_true(error_of(pending, false, false, 125.0).empty(), "the first result has 30 s");
-  const std::string error = error_of(pending, false, false, 130.5);
+  bool ok = observes(pending, 0, kNone, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 125.0).empty(), "the first result has 30 s");
+  const std::string error = error_of(pending, kNone, kNone, 130.5);
   ok &= expect_true(
       error == "stream 1: model m.tar.gz returned no result for 30 s while its decoder sent frames",
       "the first deadline passes: " + error);
@@ -346,10 +385,10 @@ bool test_first_result_has_its_own_deadline() {
 
 bool test_paused_camera_waits_without_a_limit() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
-  bool ok = expect_true(error_of(pending, false, false, 1'000'000.0).empty(),
-                        "no frame, no deadline");
-  ok &= observes(pending, false, true, 1'000'001.0);
-  ok &= expect_true(error_of(pending, false, false, 2'000'000.0).empty(),
+  bool ok =
+      expect_true(error_of(pending, kNone, kNone, 1'000'000.0).empty(), "no frame, no deadline");
+  ok &= observes(pending, kNone, 7, 1'000'001.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 2'000'000.0).empty(),
                     "no frame after the last result, no deadline");
   return ok;
 }
@@ -510,6 +549,9 @@ int main(int argc, char** argv) {
   ok &= test_later_frames_keep_the_first_pending_time();
   ok &= test_result_clears_the_pending_frame();
   ok &= test_frame_with_its_result_in_one_round_is_not_pending();
+  ok &= test_newer_frame_with_a_result_in_one_round_starts_the_deadline();
+  ok &= test_frame_no_newer_than_the_last_result_is_not_pending();
+  ok &= test_frame_with_an_unknown_id_is_pending_only_without_a_result();
   ok &= test_first_result_has_its_own_deadline();
   ok &= test_paused_camera_waits_without_a_limit();
   ok &= test_mapping_list_reads_each_entry_by_field();

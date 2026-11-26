@@ -33,6 +33,7 @@
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -356,7 +357,9 @@ void send_results(neat::Run& run, std::vector<Stream>& streams, int max_detectio
       const std::string frames_name = frames_output(index);
       const bool frame_arrived = sima_examples::pull_status_has_sample(
           run.pull(frames_name, 0, frame, &error), frames_name, error, run.last_error());
-      stream.pending.observe(frame_arrived, result_arrived, now);
+      stream.pending.observe(
+          frame_arrived ? std::optional<std::int64_t>(frame.frame_id) : std::nullopt,
+          result_arrived ? std::optional<std::int64_t>(sample.frame_id) : std::nullopt, now);
       if (!result_arrived) {
         continue;
       }

@@ -310,8 +310,12 @@ def send_results(
                     f"{results_output(index)} output closed unexpectedly"
                     + (f": {error}" if error else "")
                 )
-            frame_arrived = run.pull(frames_output(index), 0) is not None
-            stream.pending.observe(frame_arrived, sample is not None, now_s)
+            frame = run.pull(frames_output(index), 0)
+            stream.pending.observe(
+                frame.frame_id if frame is not None else None,
+                sample.frame_id if sample is not None else None,
+                now_s,
+            )
             if sample is None:
                 continue
             pulled = True

@@ -155,10 +155,12 @@ def test_data_json_leaves_out_the_lowest_confidence_entries():
     assert insight_metadata.data_json("poses", []) == ('{"poses":[]}', 0)
 
 
-def error_of(pending: PendingResults, frame: bool, result: bool, now_s: float) -> str:
+def error_of(
+    pending: PendingResults, frame_id: int | None, result_frame_id: int | None, now_s: float
+) -> str:
     """The error `observe` raises for one round, or "" when it raises none."""
     try:
-        pending.observe(frame, result, now_s)
+        pending.observe(frame_id, result_frame_id, now_s)
     except RuntimeError as error:
         return str(error)
     return ""
@@ -171,53 +173,79 @@ def test_deadlines_are_the_ones_the_readme_names():
 
 def test_late_result_names_the_stream_and_model():
     pending = PendingResults(2, "models/m.tar.gz", 10.0, 30.0)
-    pending.observe(True, True, 100.0)
-    assert error_of(pending, True, False, 101.0) == ""
-    assert error_of(pending, False, False, 111.0) == ""
-    assert error_of(pending, False, False, 111.5) == (
+    pending.observe(7, 7, 100.0)
+    assert error_of(pending, 8, None, 101.0) == ""
+    assert error_of(pending, None, None, 111.0) == ""
+    assert error_of(pending, None, None, 111.5) == (
         "stream 2: model models/m.tar.gz returned no result for 10 s while its decoder sent frames"
     )
 
 
 def test_later_frames_keep_the_first_pending_time():
     pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
-    pending.observe(False, True, 100.0)
-    pending.observe(True, False, 101.0)
-    pending.observe(True, False, 106.0)
-    assert error_of(pending, True, False, 111.5) != ""
+    pending.observe(None, 7, 100.0)
+    pending.observe(8, None, 101.0)
+    pending.observe(9, None, 106.0)
+    assert error_of(pending, 10, None, 111.5) != ""
 
 
 def test_result_clears_the_pending_frame():
     pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
-    pending.observe(False, True, 100.0)
-    pending.observe(True, False, 101.0)
-    pending.observe(False, True, 105.0)
-    assert error_of(pending, False, False, 200.0) == ""
-    pending.observe(True, False, 205.0)
-    assert error_of(pending, False, False, 215.0) == ""
-    assert error_of(pending, False, False, 215.5) != ""
+    pending.observe(None, 7, 100.0)
+    pending.observe(8, None, 101.0)
+    pending.observe(None, 8, 105.0)
+    assert error_of(pending, None, None, 200.0) == ""
+    pending.observe(9, None, 205.0)
+    assert error_of(pending, None, None, 215.0) == ""
+    assert error_of(pending, None, None, 215.5) != ""
 
 
 def test_frame_with_its_result_in_one_round_is_not_pending():
     pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
-    pending.observe(True, True, 100.0)
-    assert error_of(pending, False, False, 1_000_000.0) == ""
+    pending.observe(7, 7, 100.0)
+    assert error_of(pending, None, None, 1_000_000.0) == ""
+
+
+def test_newer_frame_with_a_result_in_one_round_starts_the_deadline():
+    # The model holds frame 8 and returns nothing more, so no later frame restarts the deadline.
+    pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
+    pending.observe(8, 7, 100.0)
+    assert error_of(pending, None, None, 110.0) == ""
+    assert error_of(pending, None, None, 110.5) == (
+        "stream 0: model m.tar.gz returned no result for 10 s while its decoder sent frames"
+    )
+
+
+def test_frame_no_newer_than_the_last_result_is_not_pending():
+    pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
+    pending.observe(None, 8, 100.0)
+    pending.observe(7, None, 101.0)
+    pending.observe(8, None, 102.0)
+    assert error_of(pending, None, None, 1_000_000.0) == ""
+
+
+def test_frame_with_an_unknown_id_is_pending_only_without_a_result():
+    pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
+    pending.observe(-1, -1, 100.0)
+    assert error_of(pending, None, None, 1_000_000.0) == ""
+    pending.observe(-1, None, 1_000_001.0)
+    assert error_of(pending, None, None, 1_000_011.5) != ""
 
 
 def test_first_result_has_its_own_deadline():
     pending = PendingResults(1, "m.tar.gz", 10.0, 30.0)
-    pending.observe(True, False, 100.0)
-    assert error_of(pending, False, False, 125.0) == ""
-    assert error_of(pending, False, False, 130.5) == (
+    pending.observe(0, None, 100.0)
+    assert error_of(pending, None, None, 125.0) == ""
+    assert error_of(pending, None, None, 130.5) == (
         "stream 1: model m.tar.gz returned no result for 30 s while its decoder sent frames"
     )
 
 
 def test_paused_camera_waits_without_a_limit():
     pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
-    assert error_of(pending, False, False, 1_000_000.0) == ""
-    pending.observe(False, True, 1_000_001.0)
-    assert error_of(pending, False, False, 2_000_000.0) == ""
+    assert error_of(pending, None, None, 1_000_000.0) == ""
+    pending.observe(None, 7, 1_000_001.0)
+    assert error_of(pending, None, None, 2_000_000.0) == ""
 
 
 class StoppingRun(FakeRun):
@@ -244,6 +272,8 @@ class FakeSender:
 
 
 RESULT = SimpleNamespace(pts_ns=2_000_000, frame_id=7)
+RESULT_FRAME = SimpleNamespace(frame_id=7)
+NEXT_FRAME = SimpleNamespace(frame_id=8)
 
 
 def fake_stream(deadline_s: float, first_result_s: float):
@@ -264,10 +294,10 @@ def no_decode(monkeypatch):
 
 
 def test_send_results_stops_a_model_that_stops_returning_results(no_decode):
-    # Round 1: a result and a frame. Round 2: a frame. Round 3: nothing, past the deadline.
+    # Round 1: a result and its frame. Round 2: a frame. Round 3: nothing, past the deadline.
     stop = threading.Event()
     run = StoppingRun(
-        stop, ("sample", RESULT), ("sample", object()), "timeout", ("sample", object()),
+        stop, ("sample", RESULT), ("sample", RESULT_FRAME), "timeout", ("sample", NEXT_FRAME),
         "timeout", "timeout",
     )
     stream = fake_stream(0.0, 60.0)
@@ -282,9 +312,22 @@ def test_send_results_stops_a_model_that_stops_returning_results(no_decode):
 
 def test_send_results_stops_a_model_that_never_returns_a_result(no_decode):
     stop = threading.Event()
-    run = StoppingRun(stop, "timeout", ("sample", object()), "timeout", "timeout")
+    run = StoppingRun(stop, "timeout", ("sample", NEXT_FRAME), "timeout", "timeout")
     with pytest.raises(RuntimeError) as error:
         main_module.send_results(run, [fake_stream(60.0, 0.0)], 50, 0, stop)
+    assert str(error.value) == (
+        "stream 0: model models/m.tar.gz returned no result for 0 s while its decoder sent frames"
+    )
+
+
+def test_send_results_stops_a_model_that_holds_a_frame_pulled_with_a_result(no_decode):
+    # Round 1: a result and a newer frame, which the model never returns. Then nothing.
+    stop = threading.Event()
+    run = StoppingRun(
+        stop, ("sample", RESULT), ("sample", NEXT_FRAME), *["timeout"] * 4
+    )
+    with pytest.raises(RuntimeError) as error:
+        main_module.send_results(run, [fake_stream(0.0, 60.0)], 50, 0, stop)
     assert str(error.value) == (
         "stream 0: model models/m.tar.gz returned no result for 0 s while its decoder sent frames"
     )

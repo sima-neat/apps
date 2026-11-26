@@ -14,14 +14,21 @@ PendingResults::PendingResults(int stream_index, std::string model_path, double 
     : stream_index_(stream_index), model_path_(std::move(model_path)), deadline_s_(deadline_s),
       first_result_s_(first_result_s) {}
 
-void PendingResults::observe(bool frame_arrived, bool result_arrived, double now_s) {
-  if (result_arrived) {
+void PendingResults::observe(std::optional<std::int64_t> frame_id,
+                             std::optional<std::int64_t> result_frame_id, double now_s) {
+  if (result_frame_id) {
     has_result_ = true;
+    last_result_frame_id_ = *result_frame_id;
     pending_since_.reset();
-    return;
   }
-  if (frame_arrived && !pending_since_) {
-    pending_since_ = now_s;
+  if (frame_id && !pending_since_) {
+    // With an unknown ID, a frame pulled with a result may be that result's own.
+    const bool newer = *frame_id >= 0 && last_result_frame_id_ >= 0
+                           ? *frame_id > last_result_frame_id_
+                           : !result_frame_id;
+    if (newer) {
+      pending_since_ = now_s;
+    }
   }
   const double limit_s = has_result_ ? deadline_s_ : first_result_s_;
   if (pending_since_ && now_s - *pending_since_ > limit_s) {

@@ -6,21 +6,23 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
 namespace pending_results {
 
-// A frame that arrives after the last result starts a deadline: `first_result_s` for the first
-// result, while Core builds the pipeline, then `deadline_s`. A paused camera starts none.
+// A frame newer than the last result starts a deadline: `first_result_s` for the first result,
+// while Core builds the pipeline, then `deadline_s`. A paused camera starts none.
 class PendingResults {
 public:
   PendingResults(int stream_index, std::string model_path, double deadline_s,
                  double first_result_s);
 
-  // Records one pull round of the stream, then throws when its pending result is late. A frame
-  // that arrives with a result in the same round starts no deadline: the result may be its own.
-  void observe(bool frame_arrived, bool result_arrived, double now_s);
+  // Records one pull round, given the frame ID of the frame and of the result it pulled (none for
+  // no pull), then throws when the pending result is late. An ID of -1 is unknown.
+  void observe(std::optional<std::int64_t> frame_id, std::optional<std::int64_t> result_frame_id,
+               double now_s);
 
 private:
   int stream_index_;
@@ -28,6 +30,7 @@ private:
   double deadline_s_;
   double first_result_s_;
   bool has_result_ = false;
+  std::int64_t last_result_frame_id_ = -1;
   std::optional<double> pending_since_;
 };
 
