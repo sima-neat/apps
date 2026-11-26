@@ -1,11 +1,13 @@
 #include "sima_examples/config.h"
 #include "sima_examples/detection_egress.h"
+#include "sima_examples/rtsp_probe.h"
 #include "sima_examples/testing/test_checks.h"
 
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -135,6 +137,45 @@ bool test_frame_metadata_copies_the_sample_identity() {
                      "frame_metadata copies the sample identity and sets no RTP timestamp");
 }
 
+// tests/scripts/test_rtsp_probe.py covers the Python probe. The C++ probe reads a real stream, so
+// the DevKit run checks its size check.
+bool test_configured_streams_need_no_probe() {
+  const sima_examples::RtspStreamInfo configured{1280, 720, 30};
+  // Fully configured streams are not probed, so these URLs are never opened.
+  const auto streams = sima_examples::probe_rtsp_streams(
+      {"rtsp://unused/a", "rtsp://unused/b", "rtsp://unused/a"}, true, configured);
+  bool ok = expect_true(streams.size() == 3, "probe_rtsp_streams returns one entry per URL");
+  for (const auto& stream : streams) {
+    ok &= expect_true(stream.width == 1280 && stream.height == 720 && stream.fps == 30,
+                      "probe_rtsp_streams keeps the configured size and rate");
+  }
+  return ok;
+}
+
+// The C++ config reader's error names the key and the value, as in Python.
+bool test_a_value_of_the_wrong_type_names_its_key() {
+  const fs::path path =
+      fs::temp_directory_path() / "high-density-multi-stream-object-detector-wrong-type.yaml";
+  std::ofstream(path) << "inference:\n  max_detections: many\n  min_score: high\n";
+  const auto config = sima_examples::Config::load(path);
+  const auto error = [](const auto& read) {
+    try {
+      read();
+    } catch (const std::exception& e) {
+      return std::string(e.what());
+    }
+    return std::string("no error");
+  };
+  const std::string integer = error([&] { (void)config.integer("inference.max_detections"); });
+  const std::string number = error([&] { (void)config.number("inference.min_score"); });
+  fs::remove(path);
+  bool ok = expect_true(integer == "inference.max_detections must be an integer, got 'many'",
+                        "a wrong integer names its key: " + integer);
+  ok &= expect_true(number == "inference.min_score must be a number, got 'high'",
+                    "a wrong number names its key: " + number);
+  return ok;
+}
+
 // The checks the application leaves to its config: the values it reads are usable.
 bool test_shipped_profiles_load() {
   const fs::path common_dir =
@@ -165,6 +206,8 @@ int main() {
   ok &= test_serialize_builds_insight_payload();
   ok &= test_boxes_are_clipped_to_the_frame_before_their_size_is_measured();
   ok &= test_frame_metadata_copies_the_sample_identity();
+  ok &= test_configured_streams_need_no_probe();
+  ok &= test_a_value_of_the_wrong_type_names_its_key();
   ok &= test_shipped_profiles_load();
   return ok ? 0 : 1;
 }

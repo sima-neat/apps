@@ -218,4 +218,3 @@ parser. The tables above describe what Core does.
 
 - C++ header: `include/nodes/groups/RtspDecodedInput.h` (`RtspDecodedInputOptions`, `RtspDecodedInput`), `include/nodes/groups/RtspEncodedInput.h` (`RtspEncodedInputOptions`, `RtspEncodedInput`), `include/nodes/groups/RtspCodec.h` (`RtspCodec`)
 - Python binding: `python/src/module.cpp`, `RtspCodec`, `RtspEncodedInputOptions`, `RtspDecodedInputOptions`, `RtspDecodedInputOutputCaps`, `groups.rtsp_encoded_input`, `groups.rtsp_decoded_input`
-- Core commit: `7e5317be`

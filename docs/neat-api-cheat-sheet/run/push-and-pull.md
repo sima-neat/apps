@@ -213,4 +213,3 @@ or `DropIncoming`, and the frame was not accepted.
   (`PullStatus`, `PullError`)
 - Python binding: `python/src/module.cpp`, `nb::class_<Run>`,
   `nb::enum_<PullStatus>`, `nb::class_<PullError>`
-- Core commit: `c68a5241`

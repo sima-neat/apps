@@ -89,7 +89,7 @@ processor, the board's general-purpose CPU.
 | Type | `type` | `type` | `SimaDecodeType::H264` | Encoded input type. See the `SimaDecodeType` table | The stream is H.265, JPEG or MJPEG. Every shipped example sets it |
 | Allocator type | `sima_allocator_type` | `sima_allocator_type` | `2` | Memory allocator for the decoded frames | Not changed in any shipped example; keep the default |
 | Output format | `out_format` | `out_format` | `NV12` | Pixel format of the decoded frames. With `raw_output = true`: `NV12`, `I420`, or `NV16` for JPEG and MJPEG. With `false`, any raw format. `I420` turns off zero-copy output | A 4:2:2 USB camera: `single-stream-object-detector` sets `usb_camera_info().decoded_format`, which can be `NV16` |
-| Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder, also used as the name of its output buffer. Empty names it `n<index>_decoder` | The examples set `"decoder"` |
+| Decoder name | `decoder_name` | `decoder_name` | `""` | Name of the decoder, also used as the name of its output buffer. Empty names it `n<index>_decoder` | The examples set `"decoder"`, because a `Model` reads the buffer named by `Model::Options::upstream_name`, which is `"decoder"` by default |
 | Raw output | `raw_output` | `raw_output` | `true` | `true` outputs the decoder's frames in SiMa memory. `false` adds a format converter and outputs `out_format` in system memory | Not changed in any shipped example; keep the default |
 | Next element | `next_element` | `next_element` | `""` | Tells the decoder which processor reads its output: `CVU` or `APU` | `high-density-multi-stream-object-detector` sets `CVU` for decoded frames that go to the model |
 | Decode width | `dec_width` | `dec_width` | `-1` | Width of the decoded frames. `-1` takes it from the stream | The examples set the stream width they probed |
@@ -183,4 +183,3 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
 
 - C++ header: `include/nodes/sima/SimaDecode.h` (`SimaDecodeType`, `SimaDecodeOptions`, `SimaDecode`), `include/nodes/common/Caps.h` (`CapsRaw`, `CapsNV12SysMem`, `CapsI420`), `include/contracts/ContractTypes.h` (`CapsMemory`), `include/nodes/common/VideoConvert.h`, `include/nodes/common/VideoScale.h`, `include/nodes/common/VideoRate.h`, `include/builder/NextCpuPolicy.h` (APU)
 - Python binding: `python/src/module.cpp`, `SimaDecodeType`, `SimaDecodeOptions`, `CapsMemory`, `nodes.sima_decode`, `nodes.caps_raw`, `nodes.format_filter`, `nodes.caps_nv12_sys_mem`, `nodes.video_convert`, `nodes.video_scale`, `nodes.video_rate`
-- Core commit: `7e5317be`

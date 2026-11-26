@@ -76,7 +76,7 @@ Complete flow: [single-stream-thermal-face-detector](../../../examples/face-dete
 | Option | C++ | Python | Default | What it does | Why and when to change it |
 |---|---|---|---|---|---|
 | Policy | `policy` | `policy` | `GraphLinkPolicy::Default` | Chooses how the link behaves when the receiver is slow. See the next table | Set `RealtimeLatestByStream` on live video branches |
-| Stream ID | `stream_id` | `stream_id` | `""` | Stable stream identity stamped on samples before realtime scheduling. Empty derives the identity from the source link | Several cameras share a model and you need to tell their results apart, count drops per camera, or keep IDs stable across restarts |
+| Stream ID | `stream_id` | `stream_id` | `""` | Stable stream identity stamped on samples before realtime scheduling. Empty derives the identity from the source link. With one source, the pulled sample carries the decoder name instead (see Pitfalls) | Several cameras share a model and you need to tell their results apart, count drops per camera, or keep IDs stable across restarts |
 | Inflight per stream | `max_inflight_per_stream` | `max_inflight_per_stream` | `-1` (the framework default, 4) | Maximum decoded frames one stream may have in the graph at once. Applies only to realtime links that carry raw decoder frames | A stream must keep more frames in flight to reach its frame rate, or fewer to leave decoder buffers for others |
 | Inflight total | `max_inflight_total` | `max_inflight_total` | `-1` (the per-stream limits added up, at most 8) | Maximum decoded frames all streams together may have in the graph. Applies only to realtime links that carry raw decoder frames | More than two streams share one model: the default total of 8 caps them below their per-stream limits. The pose estimator sets 16 for four streams |
 
@@ -96,6 +96,9 @@ None. Python has every field and both policy values.
 
 ## Pitfalls
 
+- **One source ignores `stream_id`.** With a single source, the pulled `Sample.stream_id` is the
+  decoder name, not the link's `stream_id`. An application that parses the ID as a stream index
+  fails. Fix: route by position when there is one source.
 - **A slow video branch slows the model.** With `Default` on the branch that
   sends video to Insight, a slow network makes the sender wait, which holds back
   the shared source and the model branch with it. Symptom: model frame rate drops
@@ -129,4 +132,3 @@ None. Python has every field and both policy values.
 
 - C++ header: `include/pipeline/GraphOptions.h` (`GraphLinkPolicy`, `GraphLinkOptions`), `include/pipeline/Graph.h` (`Graph::connect`)
 - Python binding: `python/src/module.cpp`, `GraphLinkPolicy`, `GraphLinkOptions`, `Graph.connect`
-- Core commit: `c68a5241`

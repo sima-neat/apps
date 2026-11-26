@@ -137,4 +137,3 @@ close but not right.
 
 - C++ headers: `include/nodes/common/Output.h`, `include/nodes/common/Caps.h` (`nodes::Custom`)
 - Python binding: `python/src/module.cpp`, `OutputOptions`, `CombinePolicy`, `nodes.output`, `nodes.custom`
-- Core commit: `3f8b8d04`
