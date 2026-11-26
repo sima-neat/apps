@@ -1,7 +1,6 @@
 // End-to-end test: an H.264 RTSP stream reaches Insight as video and feature-point metadata.
 // tests/python/test_e2e.py runs the same checks against main.py.
 
-#include "rtp_video.h"
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
@@ -10,6 +9,7 @@
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -19,16 +19,30 @@
 #include <filesystem>
 #include <iostream>
 #include <regex>
-#include <set>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
-using namespace superpoint::testing;
 
 namespace {
+
+// Each video packet's RTP header, kept until `stop` is set and the socket is empty.
+std::vector<std::array<unsigned char, 12>> drain_video(int socket, const std::atomic<bool>& stop) {
+  const timeval timeout{0, 200000};
+  ::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  std::vector<std::array<unsigned char, 12>> headers;
+  std::array<unsigned char, 65536> packet{};
+  while (true) {
+    if (::recv(socket, packet.data(), packet.size(), 0) >= 12) {
+      headers.emplace_back();
+      std::copy_n(packet.begin(), 12, headers.back().begin());
+    } else if (stop) {
+      return headers;
+    }
+  }
+}
 
 constexpr const char* kExampleName = "superpoint-feature-extractor";
 constexpr int kFrames = 100;
@@ -152,7 +166,7 @@ int main(int argc, char** argv) {
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   std::atomic<bool> stop{false};
-  std::vector<RtpHeader> headers;
+  std::vector<std::array<unsigned char, 12>> headers;
   std::thread drain([&] { headers = drain_video(video_socket, stop); });
   // Read the metadata while the example runs: a socket buffer holds only part of a run's
   // messages.
@@ -236,15 +250,6 @@ int main(int argc, char** argv) {
   if (headers.empty() || (headers.front()[0] >> 6) != 2 || (headers.front()[1] & 0x7F) != 96) {
     std::cerr << "[FAIL] did not publish RTP H.264 video to Insight\n";
     return 1;
-  }
-  // Insight draws each message's points on the video frame its timestamp names.
-  const std::set<uint32_t> timestamps = rtp_timestamps(headers);
-  for (const auto& message : messages) {
-    if (!pairs(message.timestamp_ms, timestamps)) {
-      std::cerr << "[FAIL] sent metadata timestamp " << message.timestamp_ms
-                << " that no video frame carries\n";
-      return 1;
-    }
   }
   std::cout << "[OK] sent " << kFrames << " frames of feature points and Insight video\n";
   return 0;

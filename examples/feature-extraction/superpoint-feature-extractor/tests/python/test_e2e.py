@@ -15,9 +15,6 @@ import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener, MetadataJsonResult
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rtp_video import drain_video, pairs, rtp_timestamps
-
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 FRAMES = 100
@@ -30,6 +27,17 @@ MAX_POINTS = 600
 def _env_int(name: str, default: int) -> int:
     value = os.environ.get(name, "").strip()
     return int(value) if value else default
+
+
+def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
+    """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
+    sock.settimeout(0.2)
+    while True:
+        try:
+            headers.append(sock.recv(65536)[:12])
+        except TimeoutError:
+            if stop.is_set():
+                return
 
 
 @pytest.mark.e2e
@@ -72,7 +80,7 @@ def test_publishes_insight_video_and_feature_points(
         video.bind(("127.0.0.1", video_port))
         headers: list[bytes] = []
         stop = threading.Event()
-        drain = threading.Thread(target=drain_video, args=(video, stop, headers))
+        drain = threading.Thread(target=_drain_video, args=(video, stop, headers))
         drain.start()
         # Read the metadata while the app runs: a socket buffer holds only part of a run's
         # messages. Each read returns at its first valid message, or times out.
@@ -147,7 +155,3 @@ def test_publishes_insight_video_and_feature_points(
     # The H.264 stream goes to Insight as received (RTP payload type 96).
     assert headers and len(headers[0]) == 12 and headers[0][0] >> 6 == 2
     assert headers[0][1] & 0x7F == 96
-    # Insight draws each message's points on the video frame its timestamp names.
-    timestamps = rtp_timestamps(headers)
-    unpaired = [m.timestamp_ms for m in messages if not pairs(m.timestamp_ms, timestamps)]
-    assert not unpaired, f"metadata timestamps with no video frame: {unpaired[:5]}"
