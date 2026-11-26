@@ -26,10 +26,13 @@ setup belongs to the Insight documentation or the installed Insight skill.
   decoder and the `VideoSender`. With `VideoSenderOptions::async` left `false`, Core runs the
   sender behind a `tee` in the source's pipeline. Choose the link to the sender:
   - A `GraphLinkOptions` with `policy = GraphLinkPolicy::RealtimeLatestByStream` keeps at most
-    one pending encoded frame for the sender and replaces it when the network is slow, so the
-    preview never holds back the decoder. The high-density example uses it.
+    one pending encoded frame for the sender and replaces it with each newer one, so the
+    preview never holds back the decoder. A burst of encoded frames drops some even on a fast
+    network, and their metadata arrives with no frame to draw on. The high-density example uses it.
   - A plain `connect` sends every encoded frame, and a slow sender can hold back the decoder.
-    The RF-DETR example uses it for H.264, H.265, and MJPEG.
+    Choose it when every metadata message must pair with its frame, such as a tracker's tracks.
+    The RF-DETR example uses it for H.264, H.265, and MJPEG, and the tiny-drone tracker for
+    its tracks.
 - **Decoded frames re-encoded:** connect the decoder to a `FromRaw` sender with a
   `RealtimeLatestByStream` link and small `max_inflight_per_stream` and `max_inflight_total`,
   so the encoder cannot hold the frames the decoder needs. Use it only when the source codec is
@@ -77,6 +80,15 @@ setup belongs to the Insight documentation or the installed Insight skill.
   `multipartdemux` stamps a JPEG part only when it ends in a new HTTP chunk. Send `-1` for
   those frames, and expect some boxes from an HTTP source to show unpaired.
 - `frame_id` is the `Sample`'s `frame_id` as a string. Insight reports it in its statistics.
+
+### Track overlay payload
+
+When the application follows objects across frames, send `type` `tracking` with the entries
+in `data.tracks` instead of `data.objects`. Each entry has the box entry's fields, and its `id`
+is the track ID, such as `"7"`. Insight colors a track by its `id`, separately on each channel,
+and draws its trail. Entries without an `id` draw in one color. `timestamp` and `frame_id` work
+as for boxes. See "Metadata colors" in
+[Insight: the video viewer](https://github.com/sima-neat/insight/blob/main/docs/user-interface.md).
 
 ## Oriented boxes
 

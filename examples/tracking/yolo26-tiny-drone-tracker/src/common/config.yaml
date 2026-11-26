@@ -1,53 +1,41 @@
+# YOLO26 tiny-drone tracking of up to four RTSP streams with one shared model, shown in Insight.
 model:
-  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
-
-streams:
-  - <tiny-drone-rtsp-url>
+  # Compiled model package. A relative path starts at this file.
+  path: ../../../../../models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
 
 input:
-  codec: h264
-  tcp: true
-  latency_ms: 100
-
-runtime:
-  profile: true
-  warmup_frames: 30
+  source:                       # One to four RTSP URLs, the most the example is tested with.
+                                # Stream i goes to Insight channel i.
+    - <rtsp-url-1>
+    - <rtsp-url-2>
+  codec: h264                   # h264 or h265, for every stream.
+  width: 0                      # 0 reads each stream's frame size and rate with a probe. Every
+  height: 0                     # stream needs the same size. Set them only for a stream that
+                                # does not report them.
+  fps: 0
+  rtsp:
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0
-  fps: 0                       # Output/inference FPS; 0 keeps the source rate.
-  max_inflight_per_stream: 4
-  max_inflight_total: 4
-  num_classes: 1
-  target_class_id: 0
-  target_label: drone
-  min_score: 0.05
-  nms_iou: 0.60
-  max_detections: 100
-
-tracking:
-  high_score_threshold: 0.20
-  new_track_threshold: 0.30
-  match_iou_threshold: 0.05
-  center_distance_enabled: true
-  max_center_distance: 3.0
-  velocity_momentum: 0.75
-  max_missing_frames: 30
-  min_confirmed_hits: 2
-  max_active_tracks: 256
+  frames: 0                     # Frames each stream sends before the app stops. 0 runs until
+                                # stopped.
+  min_score: 0.05               # Lowest score a detection needs. Low, so faint drones reach
+                                # the tracker, which needs higher scores to start tracks.
+  nms_iou: 0.60                 # Overlap at which NMS drops the weaker box.
+  max_detections: 100           # Boxes kept per frame.
 
 output:
   insight:
-    host: <insight-host-ip>
-    video_port_base: 9000
-    metadata_port_base: 9100
-  video_enabled: true
-  debug_dir: null
-  save_every: 0
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Stream i sends video to this port + i.
+    metadata_port_base: 9100    # Stream i sends tracks to this port + i.
 
-# Test harness settings only. Normal example runs ignore this section.
-testing:
-  e2e:
-    output:
-      save_every: 10
-      total_saved_frames: 20
+app:
+  tracking:
+    high_score_threshold: 0.20  # Score that lets a detection continue any track. A lower score
+                                # only continues a confirmed track.
+    new_track_threshold: 0.30   # Score an unmatched detection needs to start a track.
+    max_missing_frames: 30      # Frames a track survives without a match, counted at input.fps,
+                                # or at the probed rate when input.fps is 0.
+    min_confirmed_hits: 2       # Detections, counting the first, before a track goes to Insight.

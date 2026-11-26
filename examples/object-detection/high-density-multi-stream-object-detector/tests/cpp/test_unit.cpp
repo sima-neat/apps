@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -76,6 +77,46 @@ bool test_serialize_builds_insight_payload() {
                     "metadata marks a frame without PTS");
   ok &= expect_true(!parsed_no_pts.contains("rtp_timestamp"),
                     "metadata omits RTP timestamp when source PTS is absent");
+  return ok;
+}
+
+struct TestTrack : TestBox {
+  int track_id = 0;
+};
+
+// Boxes on a 640x480 frame and the [x, y, width, height] Insight gets: both corners are clipped to
+// the frame first, then the size is measured. tests/scripts/test_detection_egress.py checks the
+// same boxes in Python.
+bool test_boxes_are_clipped_to_the_frame_before_their_size_is_measured() {
+  const std::vector<std::pair<TestBox, std::vector<float>>> cases{
+      {{-44.59f, 10.0f, 136.98f, 90.0f, 0.8f, 0}, {0.0f, 10.0f, 136.0f, 80.0f}},
+      {{600.0f, 400.0f, 700.0f, 500.0f, 0.8f, 0}, {600.0f, 400.0f, 40.0f, 80.0f}},
+      {{-200.0f, -200.0f, -10.0f, -10.0f, 0.8f, 0}, {0.0f, 0.0f, 0.0f, 0.0f}},
+      {{700.0f, 10.0f, 760.0f, 50.0f, 0.8f, 0}, {640.0f, 10.0f, 0.0f, 40.0f}},
+      // int(x2) - int(x1), not int(x2 - x1), which would give 29 x 39.
+      {{10.6f, 20.6f, 40.4f, 60.4f, 0.8f, 0}, {10.0f, 20.0f, 30.0f, 40.0f}},
+      // A NaN corner clips to 0, as in Core.
+      {{std::numeric_limits<float>::quiet_NaN(), 10.0f, 40.0f, 50.0f, 0.8f, 0},
+       {0.0f, 10.0f, 40.0f, 40.0f}},
+  };
+  const std::vector<std::string> labels{"person"};
+  const sima_examples::detection_egress::FrameMetadata frame;
+  bool ok = true;
+  for (const auto& [box, bbox] : cases) {
+    const auto parsed = nlohmann::json::parse(sima_examples::detection_egress::serialize(
+        std::vector<TestBox>{box}, labels, 640, 480, frame));
+    TestTrack track;
+    static_cast<TestBox&>(track) = box;
+    track.track_id = 5;
+    const auto entries = sima_examples::detection_egress::track_entries(
+        std::vector<TestTrack>{track}, labels, 640, 480);
+    const std::string name = nlohmann::json(bbox).dump();
+    ok &= expect_true(parsed.at("data").at("objects").at(0).at("bbox") == nlohmann::json(bbox),
+                      "a box is clipped to the frame before its size is measured: " + name);
+    ok &= expect_true(entries.size() == 1 && entries.at(0).at("id") == "5" &&
+                          entries.at(0).at("bbox") == nlohmann::json(bbox),
+                      "track_entries clips a track as a box: " + name);
+  }
   return ok;
 }
 
@@ -167,6 +208,7 @@ bool test_shipped_profiles_load() {
 int main() {
   bool ok = true;
   ok &= test_serialize_builds_insight_payload();
+  ok &= test_boxes_are_clipped_to_the_frame_before_their_size_is_measured();
   ok &= test_frame_metadata_copies_the_sample_identity();
   ok &= test_configured_streams_need_no_probe();
   ok &= test_a_value_of_the_wrong_type_names_its_key();
