@@ -128,6 +128,9 @@ When the user names a model, look for a compiled package in the
   some outputs, such as the RF-DETR transformer's `Owned` results. In Python,
   `to_numpy(copy=False)` reads a CPU result in place. `copy_payload_bytes()` makes another
   copy.
+- `Tensor.from_numpy` rejects a read-only array, such as a NumPy view over the bytes from
+  `copy_payload_bytes()`, with `BufferError: Cannot export readonly array`. Pass a writable
+  array, for example a `.copy()` of only the plane you need.
 
 ## Run the model directly
 
