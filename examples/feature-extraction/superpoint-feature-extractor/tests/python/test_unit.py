@@ -1,9 +1,5 @@
-"""Unit tests for the SuperPoint feature extractor: the checks the application leaves to its config,
-the frames luma rejects, the pull loop's stop at end of stream, and the mapping of feature points
-onto the source frame. tests/cpp/test_unit.cpp runs the same checks in C++, except luma's and the
-pull loop's: C++ luma is in main.cpp, which the C++ unit test does not compile, and C++ pull
-returns PullStatus::Closed at end of stream.
-"""
+"""Unit tests: the config checks, the frames luma rejects, the pull loop's stop at end of stream,
+and the feature-point mapping. tests/cpp/test_unit.cpp runs all but luma's and the stop's."""
 
 from __future__ import annotations
 

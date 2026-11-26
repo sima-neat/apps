@@ -712,9 +712,8 @@ bool test_paired_pose_content_validation() {
 // Ordered from no pair to a full match, so each port reports the closest it came.
 enum class PortPairing { kNoPair, kContentMismatch, kNoPtsMatch, kMatched };
 
-// Every message carries its port's stream id and 33 valid keypoints per pose, every port
-// publishes a 2D/3D pair matched in content and video PTS, and one pair is non-empty.
-// has_video_pts(port offset, timestamp ms) says whether that port's video carried the PTS.
+// Each message has its port's stream id and 33 valid keypoints per pose. Each port sends a 2D/3D
+// pair matched in content and in a video PTS has_video_pts(port, ms) finds. One pair has a pose.
 bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_port_base,
                        int num_ports, const std::function<bool(int, int64_t)>& has_video_pts,
                        std::string& error) {

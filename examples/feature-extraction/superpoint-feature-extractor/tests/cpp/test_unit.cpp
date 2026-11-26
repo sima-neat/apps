@@ -1,7 +1,5 @@
-// Unit tests for the SuperPoint feature extractor: the checks the application leaves to its config
-// and the mapping of feature points onto the source frame. tests/python/test_unit.py runs the same
-// checks in Python, plus the frames luma rejects, since C++ luma is in main.cpp, which this test
-// does not compile, and the pull loop's stop at end of stream, since C++ gets PullStatus::Closed.
+// Unit tests: the config checks and the feature-point mapping. tests/python/test_unit.py also tests
+// luma, which C++ keeps in main.cpp, and the stop at end of stream, which C++ reads as Closed.
 
 #include "../../src/cpp/utils/feature_points.h"
 #include "sima_examples/config.h"
