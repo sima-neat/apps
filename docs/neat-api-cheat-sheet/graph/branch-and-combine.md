@@ -135,4 +135,3 @@ A hand-built fan-in on a plain `nodes::Output` takes the same values through
 
 - C++ header: `include/graphs/Fragments.h` (`Branch`, `Combine`), `include/nodes/common/Output.h` (`CombinePolicy`)
 - Python binding: `python/src/module.cpp`, `pyneat.graphs.branch`, `pyneat.graphs.combine`, `CombinePolicy`
-- Core commit: `c68a5241`
