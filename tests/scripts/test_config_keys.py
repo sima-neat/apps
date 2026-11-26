@@ -39,7 +39,6 @@ PENDING_EXAMPLES = {
     "image-classification-explorer",
     "mipi-multi-model",
     "multi-stream-blazepose3d",
-    "multi-stream-obb-detector",
     "multi-stream-object-detector",
     "multi-stream-pose-estimator",
     "multi-stream-tracker",

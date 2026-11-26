@@ -53,7 +53,8 @@ option and show each default. Set only the options whose default does not fit. C
   them to the stream's own size and rate. The model's preprocessing resizes later.
 - `next_element` selects the decoder's downstream consumer, `"CVU"` or `"APU"`. The
   high-density example sets `"CVU"`, where its frames go to the model's EV74 preprocessing.
-  `decoder_name` only overrides the element name.
+  `decoder_name` names the element and its output buffer. The model's preprocessing reads the
+  buffer named by `Model::Options::upstream_name`, `"decoder"` by default.
 - `num_buffers`, `input_buffers`, `decoder_tuning`, and `memory_opt` trade memory for
   throughput. The high-density example sets all four for many streams, and the RF-DETR example
   raises only `num_buffers` (to 32) for MJPEG. The `sima-application-optimizer` skill's tuning
@@ -179,7 +180,8 @@ run = graph.build(run_options)
 - `detector_link(index)` is a `GraphLinkOptions` with
   `policy = GraphLinkPolicy::RealtimeLatestByStream`, `stream_id = f"stream{index}"`,
   `max_inflight_per_stream`, and `max_inflight_total`. The pulled `Sample` carries the
-  `stream_id`, so one pull loop on `detections` routes each result to its stream.
+  `stream_id`, so one pull loop on `detections` routes each result to its stream. With one
+  source, the sample carries the decoder name instead, so route it to stream 0.
 - `RunOptions` sets `preset = RunPreset::Realtime`, `queue_depth`, and
   `output_memory = OutputMemory::ZeroCopy`.
 

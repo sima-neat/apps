@@ -339,4 +339,3 @@ These calls ask a loaded model about itself. All of them except
   `VerboseOptions`, `ProcessCvuOptions`, `ProcessMlaOptions`,
   `AdvancedExecutionOptions`, `Model`, `ModelRunner`, `TensorConstraint`,
   `ModelInfo` and `PreprocessRequirements`
-- Core commit: `961c9375`

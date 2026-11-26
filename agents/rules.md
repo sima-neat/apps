@@ -112,6 +112,9 @@ Place each piece of code by the first question it answers yes to:
   there, start the streams, and copy their URLs into the config.
 - A change to a rule every README follows accounts for every example and updates the
   template, the validator, and the contract tests that can check it.
+- Repository files name no Core commit. Name the Core release, such as `Neat Core 0.6.0 or
+  newer`, or the Core issue, such as `core#1081`, because a commit hash tells a reader nothing
+  and goes stale.
 - The repository is public. It holds source, docs, and shipped assets only: credentials,
   customer information, internal material, agent plans, scratch notes, and build or runtime
   artifacts stay elsewhere.
@@ -132,7 +135,7 @@ Every pull request feeds what its work taught back into these files:
 - **Check:** before an example uses, sets, or changes a Core API, read its cheat sheet page
   and compare it with the header and `python/src/module.cpp` at the Core that
   `deps/manifest.json` names as `neat-core`. A wrong or missing option, default, or language
-  difference is fixed in the same pull request, and the page's Core commit is updated.
+  difference is fixed in the same pull request.
 - **Lesson:** a finding the work established, by reading Core source or by a measurement on a
   board, goes where it applies:
 

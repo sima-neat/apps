@@ -144,6 +144,19 @@ destructor stops the runtime. Dropping it earlier than you meant to — for
 example by letting a local go out of scope at the end of a setup function —
 tears the pipeline down.
 
+**Lines printed just before exit can be lost on a pipe or a file.** When Core
+starts GStreamer with `SIMA_GST_SUPPRESS_DEVICE_LOGS` left at its default of on,
+it moves fd 1 and fd 2 into pipes that a detached thread filters and forwards
+(`start_stdio_filter`). Output that reaches the pipe only during exit, such as
+the stdout buffer that `exit()` flushes, can be lost, because the process can
+end before the thread writes it. On a terminal, stdout is line-buffered, so
+each line reaches the pipe when it is printed. Symptom: piped through `cat` or
+read by a test, the last lines are missing and the exit code is 0. CI saw it
+after an RTSP MJPEG run. Fix: flush each result line when you print it, with
+`std::endl` in C++ or `print(..., flush=True)` in Python. This narrows the race
+but does not close it. `SIMA_GST_SUPPRESS_DEVICE_LOGS=0` skips the filter, and
+the device logs then reach the console.
+
 ## Used in
 
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — `Realtime`, `ZeroCopy`, `queue_depth` from config, `overflow_policy` left `Auto`
@@ -161,6 +174,8 @@ tears the pipeline down.
 - Python binding: `python/src/module.cpp`, `nb::class_<RunOptions>`,
   `nb::class_<RunAdvancedOptions>`, `nb::enum_<RunPreset>`, `nb::class_<Run>`
 - The preset depths and the sync defaults are runtime behavior, not header
-  values. They were read from Core at the commit below and are not part of the
-  published API.
-- Core commit: `c68a5241`
+  values. They were read from Core source and are not part of the published
+  API.
+- The stdout and stderr forwarding: `src/gst/GstInit.cpp`, `start_stdio_filter` (which
+  detaches its thread) and `install_stdio_filters` (installed while
+  `SIMA_GST_SUPPRESS_DEVICE_LOGS` is on).

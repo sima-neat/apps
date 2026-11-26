@@ -158,4 +158,3 @@ other threads send
 
 - C++ header: `include/nodes/io/MetadataSender.h`
 - Python binding: `python/src/module.cpp`, `MetadataSenderOptions`, `MetadataSenderSendOptions`, `MetadataSenderStats`, `MetadataSender`
-- Core commit: `7e5317be`

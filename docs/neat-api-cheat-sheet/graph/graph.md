@@ -173,4 +173,3 @@ Most other live examples build a `Graph` as well.
 
 - C++ header: `include/pipeline/Graph.h`, `include/pipeline/GraphOptions.h`
 - Python binding: `python/src/module.cpp`, `Graph`, `GraphOptions`, `AdvancedExecutionOptions`
-- Core commit: `c68a5241`

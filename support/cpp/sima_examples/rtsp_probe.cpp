@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <map>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace sima_examples {
 namespace {
@@ -44,6 +47,38 @@ RtspStreamInfo probe_rtsp_stream_info(const std::string& url, bool tcp,
     throw std::runtime_error("failed to probe RTSP frame rate: " + url + "; set input.fps");
   }
   return info;
+}
+
+std::vector<RtspStreamInfo> probe_rtsp_streams(const std::vector<std::string>& urls, bool tcp,
+                                               const RtspStreamInfo& configured) {
+  std::map<std::string, RtspStreamInfo> by_url;
+  std::string first_url;
+  for (const auto& url : urls) {
+    if (by_url.count(url) > 0) {
+      continue;
+    }
+    const RtspStreamInfo stream = probe_rtsp_stream_info(url, tcp, configured);
+    by_url[url] = stream;
+    if (first_url.empty()) {
+      first_url = url;
+      continue;
+    }
+    // Core gap: a model shared by several streams accepts one input size, and a stream of
+    // another size fails the build with "input spec mismatch".
+    const RtspStreamInfo& first = by_url.at(first_url);
+    if (stream.width != first.width || stream.height != first.height) {
+      throw std::runtime_error(
+          "every input.source stream needs the same frame size, because the streams share one "
+          "model: " +
+          first_url + " is " + std::to_string(first.width) + "x" + std::to_string(first.height) +
+          ", " + url + " is " + std::to_string(stream.width) + "x" + std::to_string(stream.height));
+    }
+  }
+  std::vector<RtspStreamInfo> streams;
+  for (const auto& url : urls) {
+    streams.push_back(by_url.at(url));
+  }
+  return streams;
 }
 
 bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,

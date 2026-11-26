@@ -88,10 +88,15 @@ When the user names a model, look for a compiled package in the
 - Pose decoders: choose by the box heads in `output_specs()`. 64-channel DFL box heads mean
   `YoloV8Pose`, and 4-channel l/t/r/b box heads mean `YoloV26Pose`. `YoloV26Pose` on a YOLOv8
   package returns valid-looking scores and wrong boxes.
-- Oriented boxes: `YoloV26Obb` requires `nms_iou_threshold = 0` and a positive `top_k`.
+- Oriented boxes: `YoloV26Obb` requires `nms_iou_threshold = 0` and a positive `top_k`. A
+  nonzero threshold fails the build with `YOLO26-OBB does not support per-tile NMS`.
   `YoloV8Obb`, used for YOLOv8 and YOLO11 oriented boxes, runs NMS and needs a nonzero
-  threshold. The `object-detection/multi-stream-obb-detector` example switches both values with
-  its model family.
+  threshold. When one application serves both families, pick the decoder from the model family
+  and set the threshold only for `YoloV8Obb`.
+- Oriented boxes need one scale on both axes. They work when the stream, scaled to the model
+  input, has whole-pixel sides, as 16:9 sizes do. With a 1024x1024 model input, such as
+  yolo26n_obb's, a 640x512 stream scales to 1024x819.2 and fails with
+  `oriented boxes require equal authoritative affine scales`.
 - `BoxDecodeType::Ssd` selects the supported prepared SSD recipes. It does not infer a decoder
   from tensor shapes.
 

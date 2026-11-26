@@ -166,4 +166,3 @@ Not used in Apps.
 - Python binding: `python/src/module.cpp`, `BenchmarkOptions`,
   `BenchmarkReport`, `MlaLayer`, `MlaLayerStats`, `MlaStage`, `MlaStageStats`,
   `Telemetry` and `Model.benchmark`
-- Core commit: `6ed16525`
