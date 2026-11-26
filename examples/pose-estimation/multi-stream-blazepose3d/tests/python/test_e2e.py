@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import importlib.util
 import json
 import math
@@ -10,7 +11,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -495,6 +495,15 @@ def paired_pose_content_matches(overlay, auxiliary) -> bool:
     )
 
 
+class PortPairing(enum.IntEnum):
+    """Ordered from no pair to a full match, so each port reports the closest it came."""
+
+    NO_PAIR = 0
+    CONTENT_MISMATCH = 1
+    NO_PTS_MATCH = 2
+    MATCHED = 3
+
+
 def metadata_problem(
     messages,
     metadata_port_base: int,
@@ -502,8 +511,8 @@ def metadata_problem(
     video: RtpVideoListener | None = None,
 ) -> str | None:
     """Every message carries its port's stream id and 33 valid keypoints per pose
-    (image and world for 2D poses), every port publishes a 2D/3D pair for one
-    frame, and one such pair is non-empty."""
+    (image and world for 2D poses), every port publishes a 2D/3D pair matched in
+    content and, with `video`, in video PTS, and one such pair is non-empty."""
     pose_frames: dict[str, dict[tuple, list]] = {
         "pose-estimation": {},
         "auxiliary-visualization": {},
@@ -524,28 +533,41 @@ def metadata_problem(
             return f"a {message.metadata_type} pose did not satisfy the advertised schema"
         frame = (message.port, message.timestamp_ms, message.frame_id)
         pose_frames[message.metadata_type][frame] = poses
+    overlay = pose_frames["pose-estimation"]
     world = pose_frames["auxiliary-visualization"]
-    paired = {
-        frame: poses
-        for frame, poses in pose_frames["pose-estimation"].items()
-        if frame in world and paired_pose_content_matches(poses, world[frame])
-    }
-    if not paired:
-        return "no stream published a non-empty content-matched 2D/3D pair for one frame"
-    if len({port for port, _, _ in paired}) < num_ports:
-        return "not every metadata port published a content-matched 2D/3D pair for one frame"
-    if video is not None:
-        paired = {
-            frame: poses
-            for frame, poses in paired.items()
-            if video.has_correlated_timestamp(
-                frame[0] - metadata_port_base,
-                frame[1],
+    # Every accepted frame publishes a pair, even without people, so every port must match one.
+    # The listener binds only the configured ports, so every offset is in range.
+    pairing = [PortPairing.NO_PAIR] * num_ports
+    nonempty_pair = False
+    for frame, poses in overlay.items():
+        if frame not in world:
+            continue
+        offset = frame[0] - metadata_port_base
+        if not paired_pose_content_matches(poses, world[frame]):
+            found = PortPairing.CONTENT_MISMATCH
+        elif video is not None and not video.has_correlated_timestamp(offset, frame[1]):
+            found = PortPairing.NO_PTS_MATCH
+        else:
+            found = PortPairing.MATCHED
+            nonempty_pair = nonempty_pair or bool(poses)
+        pairing[offset] = max(pairing[offset], found)
+    for offset, found in enumerate(pairing):
+        port = metadata_port_base + offset
+        if found == PortPairing.NO_PAIR:
+            frames_2d = sum(1 for frame in overlay if frame[0] == port)
+            frames_3d = sum(1 for frame in world if frame[0] == port)
+            return (
+                f"metadata port {port} published no 2D/3D pair for one frame "
+                f"({frames_2d} 2D and {frames_3d} 3D frames)"
             )
-        }
-        if len({port for port, _, _ in paired}) < num_ports:
-            return "not every metadata port published a pair correlated to video PTS"
-    if not any(paired.values()):
+        if found == PortPairing.CONTENT_MISMATCH:
+            return f"metadata port {port} published 2D/3D pairs whose 2D and 3D poses differ"
+        if found == PortPairing.NO_PTS_MATCH:
+            return (
+                f"metadata port {port} published content-matched 2D/3D pairs "
+                "with no video PTS match"
+            )
+    if not nonempty_pair:
         return "no stream published a non-empty content-matched 2D/3D pair for one frame"
     return None
 
@@ -610,13 +632,20 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
     correlated_video = SimpleNamespace(has_correlated_timestamp=lambda _port, timestamp: timestamp == 1)
     assert metadata_problem(empty + pair, 9100, 2, correlated_video) is None
     uncorrelated_video = SimpleNamespace(has_correlated_timestamp=lambda _port, _timestamp: False)
-    assert "correlated to video PTS" in metadata_problem(
-        empty + pair, 9100, 2, uncorrelated_video
+    assert metadata_problem(empty + pair, 9100, 2, uncorrelated_video) == (
+        "metadata port 9100 published content-matched 2D/3D pairs with no video PTS match"
     )
-    assert "every metadata port" in metadata_problem(pair, 9100, 2)
-    assert "every metadata port" in metadata_problem(empty + pair[:1], 9100, 2)
-    split = [pair[0], message(9101, "auxiliary-visualization", "2", 2)]
-    assert "non-empty" in metadata_problem(split, 9100, 2)
+    assert metadata_problem(pair, 9100, 2) == (
+        "metadata port 9100 published no 2D/3D pair for one frame (0 2D and 0 3D frames)"
+    )
+    assert metadata_problem(empty + pair[:1], 9100, 2) == (
+        "metadata port 9101 published no 2D/3D pair for one frame (1 2D and 0 3D frames)"
+    )
+    split = empty + [pair[0], message(9101, "auxiliary-visualization", "2", 2)]
+    assert metadata_problem(split, 9100, 2) == (
+        "metadata port 9101 published no 2D/3D pair for one frame (1 2D and 1 3D frames)"
+    )
+    assert "non-empty" in metadata_problem(empty, 9100, 1)
     assert "stream id" in metadata_problem([message(9100, "pose-estimation", "1", 1, "x")], 9100, 1)
     short_2d = message(9100, "pose-estimation", "1", 1, image_points=32)
     assert "advertised schema" in metadata_problem([short_2d], 9100, 1)
@@ -677,7 +706,9 @@ def test_metadata_problem_requires_pairs_on_every_port_and_stream_ids():
         else:
             pose[field] = value
         auxiliary.payload = json.dumps(payload)
-        assert "content-matched" in metadata_problem([overlay, auxiliary], 9100, 1)
+        assert metadata_problem([overlay, auxiliary], 9100, 1) == (
+            "metadata port 9100 published 2D/3D pairs whose 2D and 3D poses differ"
+        )
 
 
 @pytest.mark.e2e
@@ -765,23 +796,40 @@ class TestE2E:
                 INSIGHT_HOST, video_port_base, len(urls), codec
             ) as video,
         ):
-            process = subprocess.run(
-                [sys.executable, str(MAIN_PY), "--config", str(config)],
-                cwd=str(EXAMPLE_DIR),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=test_timeout_ms / 1000,
+            # Read during the run, so no message waits long enough to overflow the socket
+            # buffer. Each read returns once every port has a pair, or times out.
+            stop = threading.Event()
+            reads = []
+
+            def read_until_stopped() -> None:
+                while not stop.is_set():
+                    reads.append(listener.wait_for_messages(0.2))
+
+            read_metadata = threading.Thread(target=read_until_stopped)
+            read_metadata.start()
+            try:
+                process = subprocess.run(
+                    [sys.executable, str(MAIN_PY), "--config", str(config)],
+                    cwd=str(EXAMPLE_DIR),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=test_timeout_ms / 1000,
+                )
+            finally:
+                stop.set()
+                read_metadata.join()
+            # The datagrams that arrived after the last read.
+            rest = listener.drain_pending()
+            errors = [read.error for read in reads if read.error and not read.timed_out]
+            if rest.error:
+                errors.append(rest.error)
+            messages = [message for read in reads for message in read.messages] + rest.messages
+            problem = (
+                f"metadata listener: {errors[0]}"
+                if errors
+                else metadata_problem(messages, metadata_port_base, len(urls), video)
             )
-            # The application has exited; drain the buffered metadata until every
-            # port holds a 2D/3D pair, one of them non-empty, or a message is invalid.
-            messages = []
-            problem = "no metadata was received"
-            deadline = time.monotonic() + 10.0
-            while problem is not None and time.monotonic() < deadline:
-                remaining = max(0.0, deadline - time.monotonic())
-                messages.extend(listener.wait_for_messages(min(1.0, remaining)).messages)
-                problem = metadata_problem(messages, metadata_port_base, len(urls), video)
 
         assert process.returncode == 0, (
             f"main.py exited with {process.returncode}\n"
