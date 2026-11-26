@@ -20,7 +20,9 @@ Use them for live views, and keep every-frame paths where every frame must be pr
   exception that reference names.
 - Send video to Insight with `VideoSenderOptions::Passthrough(codec)` from the encoded stream,
   which skips decoding and re-encoding for the display path. The builder's application output
-  reference owns the sender's link.
+  reference owns the sender's link. Together with NV12 preprocessing, it cut a Python
+  application's CPU time on a DevKit from 146 s to 44 s per 1080 frames of a 720x720, 30 fps
+  H.264 stream, against host color conversion, a drawn overlay, and re-encoding.
 - Connect an encoded source to its decoder with a plain `connect`, so Neat runs the source and
   decoder as one pipeline. A `graphs::Branch`, a decoder fed through `nodes::Input`, or a
   realtime link between source and decoder splits them into separate pipelines with a hand-off

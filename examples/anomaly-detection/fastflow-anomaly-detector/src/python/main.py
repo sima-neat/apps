@@ -1,417 +1,240 @@
-"""Single-stream RTSP FastFlow anomaly detection Insight example using pyneat."""
+"""Flag surface defects in one RTSP stream with FastFlow and outline them in Insight.
+
+The decoded frames feed the model, and the host turns its anomaly map into defect regions.
+Insight receives the video as received and every frame's regions as polygons.
+"""
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
-import time
-from collections import deque
-from dataclasses import dataclass
+import threading
 from pathlib import Path
 
-import yaml
+import numpy as np
+import pyneat
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-PULL_TIMEOUT_MS = 20000
-DEFAULT_MEAN = [0.3893437, 0.35421189, 0.36142577]
-DEFAULT_STDDEV = [1.0, 1.0, 1.0]
 
-# Board-only modules, imported in main() so the config checks run anywhere.
-cv2 = None
-np = None
-pyneat = None
+# The helpers the examples share live in <apps root>/support/python.
+for apps_root in Path(__file__).resolve().parents:
+    if (apps_root / "support" / "python" / "sima_examples").is_dir():
+        sys.path.insert(0, str(apps_root / "support" / "python"))
+        break
+else:
+    raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
+from sima_examples.config import Config
+from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
+from sima_examples.stop_signals import stop_on_signals
+from utils import anomaly_regions
 
-@dataclass(frozen=True)
-class Config:
-    model_path: str
-    mean: list[float]        # input normalisation the package expects, RGB, on 0..1 pixels
-    stddev: list[float]
-    rtsp_url: str
-    tcp: bool
-    latency_ms: int
-    frames: int              # 0 runs until stopped
-    threshold: float         # map probability that counts as anomalous
-    min_region_px: int       # smallest connected region, in map pixels, that counts as a defect
-    profile: bool
-    profile_interval: int
-    insight_host: str
-    video_port: int
-    heat_max: float          # map probability drawn at full heatmap intensity
-    alpha: float             # heatmap opacity over the frame
-    save_dir: str
-    save_every: int
-
-
-def rgb_stats(value, key: str) -> list[float]:
-    """One normalisation value per channel, in R, G, B order."""
-    if isinstance(value, (list, tuple)) and len(value) == 3 and not any(
-        isinstance(v, bool) or not isinstance(v, (int, float)) for v in value
-    ):
-        return [float(v) for v in value]
-    raise ValueError(f"{key} must be three numbers, one per RGB channel")
+RTSP_CODECS = {
+    "h264": pyneat.RtspCodec.H264,
+    "h265": pyneat.RtspCodec.H265,
+    "mjpeg": pyneat.RtspCodec.MJPEG,
+}
+DECODE_TYPES = {
+    "h264": pyneat.SimaDecodeType.H264,
+    "h265": pyneat.SimaDecodeType.H265,
+    "mjpeg": pyneat.SimaDecodeType.MJPEG,
+}
+# The mean each package expects, in RGB order on 0..1 pixels. fastflow_demo takes its training
+# set's mean; an anomalib package normalizes inside its graph.
+NORMALIZE_MEANS = {
+    "fastflow_demo": [0.3893437, 0.35421189, 0.36142577],
+    "anomalib": [0.0, 0.0, 0.0],
+}
+PULL_TIMEOUT_MS = 100
 
 
-def int_or(raw: dict, key: str, default: int) -> int:
-    value = raw.get(key, default)
-    if value is None:
-        return default
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{key} must be an integer")
-    return value
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    return parser.parse_args(argv)
 
 
-def float_or(raw: dict, key: str, default: float) -> float:
-    value = raw.get(key, default)
-    if value is None:
-        return default
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"{key} must be numeric")
-    return float(value)
+def model_options(config: Config, stream: RtspStreamInfo) -> pyneat.ModelOptions:
+    """EV74 converts each NV12 frame, stretches it to the model input, and normalizes it.
 
-
-def bool_or(raw: dict, key: str, default: bool) -> bool:
-    value = raw.get(key, default)
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise TypeError(f"{key} must be true or false")
-    return value
-
-
-def load_config(path: Path) -> Config:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ValueError("config root must be a mapping")
-    model = raw.get("model") or {}
-    source = raw.get("source") or {}
-    inference = raw.get("inference") or {}
-    runtime = raw.get("runtime") or {}
-    output = raw.get("output") or {}
-    insight = output.get("insight") or {}
-    normalize = model.get("normalize") or {}
-    cfg = Config(
-        model_path=str(model.get("path") or ""),
-        mean=rgb_stats(normalize.get("mean", DEFAULT_MEAN), "model.normalize.mean"),
-        stddev=rgb_stats(normalize.get("stddev", DEFAULT_STDDEV), "model.normalize.stddev"),
-        rtsp_url=str(source.get("rtsp_url") or ""),
-        tcp=bool_or(source, "tcp", True),
-        latency_ms=int_or(source, "latency_ms", 100),
-        frames=int_or(inference, "frames", 0),
-        threshold=float_or(inference, "threshold", 0.5),
-        min_region_px=int_or(inference, "min_region_px", 300),
-        profile=bool_or(runtime, "profile", False),
-        profile_interval=int_or(runtime, "profile_interval", 100),
-        insight_host=str(insight.get("host") or ""),
-        video_port=int_or(insight, "video_port", 9000),
-        heat_max=float_or(output, "heat_max", 0.7),
-        alpha=float_or(output, "alpha", 0.55),
-        save_dir=str(output.get("save_dir") or ""),
-        save_every=int_or(output, "save_every", 0),
-    )
-    required = (
-        ("model.path", cfg.model_path),
-        ("source.rtsp_url", cfg.rtsp_url),
-        ("output.insight.host", cfg.insight_host),
-    )
-    for key, value in required:
-        if not value:
-            raise ValueError(f"{key} must be set")
-    if not all(s > 0 for s in cfg.stddev):
-        raise ValueError("model.normalize.stddev must be > 0")
-    if cfg.latency_ms < 0:
-        raise ValueError("source.latency_ms must be >= 0")
-    if cfg.frames < 0:
-        raise ValueError("inference.frames must be >= 0")
-    if not 0.0 <= cfg.threshold <= 1.0:
-        raise ValueError("inference.threshold must be between 0 and 1")
-    if cfg.min_region_px <= 0:
-        raise ValueError("inference.min_region_px must be > 0")
-    if cfg.profile_interval <= 0:
-        raise ValueError("runtime.profile_interval must be > 0")
-    if not 0 < cfg.video_port <= 65535:
-        raise ValueError("output.insight.video_port must be in [1, 65535]")
-    if cfg.save_every < 0:
-        raise ValueError("output.save_every must be >= 0")
-    if not 0.0 <= cfg.alpha <= 1.0:
-        raise ValueError("output.alpha must be between 0 and 1")
-    if cfg.heat_max <= cfg.threshold:
-        raise ValueError("output.heat_max must be greater than inference.threshold")
-    return cfg
-
-
-def probe_stream(url: str, tcp: bool) -> tuple[int, int, int]:
-    """Frame size and rate, which the graph needs before it starts."""
-    capture_options_key = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
-    previous_capture_options = os.environ.get(capture_options_key)
-    os.environ[capture_options_key] = f"rtsp_transport;{'tcp' if tcp else 'udp'}"
-    try:
-        capture = cv2.VideoCapture(url)
-    finally:
-        if previous_capture_options is None:
-            os.environ.pop(capture_options_key, None)
-        else:
-            os.environ[capture_options_key] = previous_capture_options
-    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(round(capture.get(cv2.CAP_PROP_FPS)))
-    capture.release()
-    if width <= 0 or height <= 0 or fps <= 0:
-        raise RuntimeError(f"could not read the frame size and rate of {url}")
-    return width, height, fps
-
-
-def build_source(cfg: Config, width: int, height: int, fps: int):
-    """Graph: RTSP decode only, one "frame" output.
-
-    The model is not attached to the decoder: the CVU resize would pull the decoder's row
-    padding into the frame border and flag it as a defect.
+    Stretching makes the map cover the whole frame, so a region scales back to the frame by
+    its width and height. A square frame, as FastFlow is trained on, is not distorted.
     """
-    source = pyneat.RtspDecodedInputOptions()
-    source.url = cfg.rtsp_url
-    source.tcp = cfg.tcp
-    source.latency_ms = cfg.latency_ms
-    source.payload_type = 96
-    source.insert_queue = True
-    source.decoder_name = "decoder"
-    source.decoder_raw_output = True
-    source.auto_caps_from_stream = True
-    source.fallback_h264_width = width
-    source.fallback_h264_height = height
-    source.fallback_h264_fps = fps
-    source.output_caps.enable = True
-    source.output_caps.format = pyneat.Format.NV12
-    source.output_caps.width = width
-    source.output_caps.height = height
-    source.output_caps.fps = fps
-    source.output_caps.memory = pyneat.CapsMemory.Any
-
-    graph = pyneat.Graph()
-    graph.connect(pyneat.groups.rtsp_decoded_input(source),
-                  pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
-    run_options = pyneat.RunOptions()
-    run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = 3
-    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    return graph, graph.build(run_options)
-
-
-def build_model(cfg: Config, width: int, height: int):
-    """A BGR frame in, the anomaly map out. Also returns the side of the square map."""
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
-    options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
-    options.preprocess.normalize.mean = cfg.mean
-    options.preprocess.normalize.stddev = cfg.stddev
+    options.preprocess.enable = pyneat.AutoFlag.On
+    options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    options.preprocess.input_max_width = stream.width
+    options.preprocess.input_max_height = stream.height
+    options.preprocess.resize.enable = pyneat.AutoFlag.On
+    options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
+    options.preprocess.normalize.mean = config.choice("model.id", NORMALIZE_MEANS)
     options.preprocess.normalize.has_explicit_stats = True
-    options.preprocess.input_max_width = width
-    options.preprocess.input_max_height = height
-    options.preprocess.input_max_depth = 3
-    model = pyneat.Model(cfg.model_path, options)
-    return model, int(model.output_specs()[0].shape[1])
+    return options
 
 
-class InsightVideo:
-    """A push graph: annotated frames in, H.264 RTP/UDP out to the Insight viewer."""
-
-    def __init__(self, cfg: Config, width: int, height: int, fps: int) -> None:
-        source = pyneat.InputOptions()
-        source.payload_type = pyneat.PayloadType.Image
-        source.format = pyneat.Format.RGB
-        source.width = width
-        source.height = height
-        source.depth = 3
-        source.fps_n = fps
-        source.fps_d = 1
-        encode = pyneat.SimaEncodeOptions()
-        encode.fps = fps
-        options = pyneat.VideoSenderOptions.from_raw(encode)
-        options.host = cfg.insight_host
-        options.channel = 0
-        options.video_port_base = cfg.video_port
-        options.encoder.bitrate_kbps = 4000
-        self.port = options.video_port
-        self._graph = pyneat.Graph("insight")
-        self._graph.add(pyneat.nodes.input(source))
-        self._graph.add(pyneat.groups.video_sender(options))
-        # The graph negotiates its caps from a first sample.
-        self._run = self._graph.build([self._tensor(np.zeros((height, width, 3), np.uint8))])
-
-    @staticmethod
-    def _tensor(rgb):
-        return pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB,
-                                        memory=pyneat.TensorMemory.EV74)
-
-    def send(self, frame) -> None:
-        if not self._run.push([self._tensor(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))]):
-            raise RuntimeError("Insight video push failed")
-
-    def close(self) -> None:
-        self._run.close()
+def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedInputOptions:
+    options = pyneat.RtspEncodedInputOptions()
+    options.url = config.string("input.source")
+    options.codec = config.choice("input.codec", RTSP_CODECS)
+    options.tcp = config.boolean("input.rtsp.tcp")
+    options.latency_ms = config.integer("input.rtsp.latency_ms")
+    options.source_fps = stream.fps
+    if options.codec == pyneat.RtspCodec.H264:
+        options.fallback_h264_width = stream.width
+        options.fallback_h264_height = stream.height
+    return options
 
 
-def regions_from_map(anomaly_map, threshold: float, min_region_px: int):
-    """Regions above the threshold that cover at least min_region_px, and their mask."""
-    above = (anomaly_map >= threshold).astype(np.uint8)
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(above, 8)
-    keep = [i for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= min_region_px]
-    regions = [{"bbox": tuple(int(v) for v in stats[i, :4]),
-                "score": float(anomaly_map[labels == i].max())}
-               for i in keep]
-    return regions, np.isin(labels, keep).astype(np.uint8)
+def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
+    """Hardware decode to NV12 frames at the stream's size."""
+    decode = pyneat.SimaDecodeOptions()
+    decode.type = config.choice("input.codec", DECODE_TYPES)
+    decode.dec_width = stream.width
+    decode.dec_height = stream.height
+    decode.dec_fps = stream.fps
+    graph = pyneat.Graph("decoder")
+    graph.add(pyneat.nodes.sima_decode(decode))
+    return graph
 
 
-def render(frame, anomaly_map, regions, mask, cfg: Config, fps: float) -> None:
-    """Blend the heatmap over the defect regions, box them and add the verdict banner."""
-    height, width = frame.shape[:2]
-    if regions:
-        # Fixed display span, so the overlay brightness does not flicker between frames.
-        span = cfg.heat_max - cfg.threshold
-        intensity = np.clip((anomaly_map - cfg.threshold) / span, 0.0, 1.0)
-        scaled = cv2.resize((intensity * 255).astype(np.uint8), (width, height))
-        heat = cv2.applyColorMap(scaled, cv2.COLORMAP_JET)
-        blended = cv2.addWeighted(frame, 1.0 - cfg.alpha, heat, cfg.alpha, 0.0)
-        full_mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
-        cv2.copyTo(blended, full_mask, frame)
-        sx = width / anomaly_map.shape[1]
-        sy = height / anomaly_map.shape[0]
-        for region in regions:
-            x, y, w, h = region["bbox"]
-            cv2.rectangle(frame, (int(x * sx), int(y * sy)),
-                          (int((x + w) * sx), int((y + h) * sy)), (0, 0, 255), 2)
-    verdict, color = ("ANOMALY", (0, 0, 255)) if regions else ("OK", (0, 200, 0))
-    cv2.rectangle(frame, (0, 0), (width, 34), (0, 0, 0), -1)
-    cv2.putText(frame, f"{verdict}  score={float(anomaly_map.max()):.3f}  regions={len(regions)}",
-                (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
-    cv2.putText(frame, f"{fps:5.1f} fps", (width - 130, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                (255, 255, 255), 2, cv2.LINE_AA)
+def detector_graph(model: pyneat.Model) -> pyneat.Graph:
+    """Decoded frames -> FastFlow -> "anomaly_map" output."""
+    graph = pyneat.Graph("detector")
+    graph.add(model.graph())
+    graph.add(pyneat.nodes.output("anomaly_map"))
+    return graph
 
 
-def frame_bgr(tensor):
-    """A decoded NV12 frame as a BGR image, without the decoder's row padding."""
-    width = tensor.width()
-    height = tensor.height()
-    raw = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
-    packed = np.empty((height * 3 // 2, width), dtype=np.uint8)
-    planes = sorted(tensor.planes, key=lambda plane: int(plane.byte_offset))
-    for plane, rows, row0 in zip(planes, (height, height // 2), (0, height)):
-        offset = int(plane.byte_offset)
-        stride = int(plane.strides_bytes[0]) if plane.strides_bytes else width
-        plane_rows = raw[offset:offset + stride * rows].reshape(rows, stride)
-        packed[row0:row0 + rows] = plane_rows[:, :width]
-    return cv2.cvtColor(packed, cv2.COLOR_YUV2BGR_NV12)
+def video_options(config: Config) -> pyneat.VideoSenderOptions:
+    """Send the stream to Insight as received."""
+    options = pyneat.VideoSenderOptions.passthrough(config.choice("input.codec", RTSP_CODECS))
+    options.host = config.string("output.insight.host")
+    options.video_port_base = config.integer("output.insight.video_port_base")
+    return options
 
 
-def frame_tensor(sample):
-    """The frame tensor of a pulled sample, bare or in a labelled field."""
-    if not sample.fields:
-        return sample.tensor if sample.kind == pyneat.SampleKind.Tensor else sample.tensors[0]
-    field = next(part for part in sample.fields if part.stream_label == "frame")
-    return field.tensor if field.kind == pyneat.SampleKind.Tensor else field.tensors[0]
+def metadata_options(config: Config) -> pyneat.MetadataSenderOptions:
+    options = pyneat.MetadataSenderOptions()
+    options.host = config.string("output.insight.host")
+    options.metadata_port_base = config.integer("output.insight.metadata_port_base")
+    return options
 
 
-def pull_result_has_sample(run, sample, output_name: str) -> bool:
-    if sample is not None:
-        return True
-    last_error_fn = getattr(run, "last_error", None)
-    last_error = last_error_fn() if callable(last_error_fn) else ""
-    running_fn = getattr(run, "running", None)
-    running = running_fn() if callable(running_fn) else True
-    if not running:
-        message = f"{output_name} output closed unexpectedly"
-        if last_error:
-            message += f": {last_error}"
-        raise RuntimeError(message)
-    if last_error:
-        raise RuntimeError(f"runtime error: {last_error}")
-    return False
+def run_options() -> pyneat.RunOptions:
+    options = pyneat.RunOptions()
+    options.preset = pyneat.RunPreset.Realtime
+    options.output_memory = pyneat.OutputMemory.ZeroCopy
+    return options
 
 
-def run(cfg: Config) -> None:
-    width, height, fps = probe_stream(cfg.rtsp_url, cfg.tcp)
-    if width != height:
-        print(f"[warn] stream is {width}x{height}; the model letterboxes non-square frames, "
-              "which flattens the map", file=sys.stderr)
-    model, map_side = build_model(cfg, width, height)
-    video = InsightVideo(cfg, width, height, fps)
-    source_graph, graph_run = build_source(cfg, width, height, fps)
-    print(f"rtsp={cfg.rtsp_url} stream={width}x{height}@{fps} map={map_side}x{map_side} "
-          f"threshold={cfg.threshold} min_region_px={cfg.min_region_px} "
-          f"insight={cfg.insight_host} video={video.port} channel=0", flush=True)
+def region_options(config: Config, stream: RtspStreamInfo) -> anomaly_regions.RegionOptions:
+    return anomaly_regions.RegionOptions(
+        width=stream.width,
+        height=stream.height,
+        threshold=config.number("app.anomaly_threshold"),
+        min_region_px=config.integer("app.min_region_px"),
+        max_regions=config.integer("inference.max_detections"),
+    )
 
+
+def anomaly_map(sample: pyneat.Sample, map_side: int) -> np.ndarray:
+    """The map of an "anomaly_map" sample: per pixel, the probability it shows no good part."""
+    tensor = sample.tensor if sample.kind == pyneat.SampleKind.Tensor else sample.tensors[0]
+    values = tensor.to_numpy(copy=False).astype(np.float32, copy=False)
+    return values.reshape(map_side, map_side)
+
+
+def send_regions(
+    run: pyneat.Run,
+    metadata_sender: pyneat.MetadataSender,
+    map_side: int,
+    options: anomaly_regions.RegionOptions,
+    frames: int,
+    stop: threading.Event,
+) -> tuple[int, int]:
+    """Send every frame's defect regions to Insight until `frames` (0: no limit) or a stop
+    signal; return the frames processed and the frames with a defect."""
     processed = 0
     flagged = 0
-    window_regions = 0
-    window_start = time.perf_counter()
-    stamps: deque[float] = deque(maxlen=30)  # on-screen frame rate window
-    try:
-        while cfg.frames <= 0 or processed < cfg.frames:
-            sample = graph_run.pull("frame", PULL_TIMEOUT_MS)
-            if not pull_result_has_sample(graph_run, sample, "frame"):
-                print("[warn] timed out waiting for a frame", file=sys.stderr)
-                continue
-            # Release the sample right away: the decoder's small buffer pool stalls otherwise.
-            frame = frame_bgr(frame_tensor(sample))
-            sample = None
-            tensor = pyneat.Tensor.from_numpy(np.ascontiguousarray(frame), copy=True,
-                                              image_format=pyneat.PixelFormat.BGR)
-            raw_map = model.run([tensor])[0].to_numpy(copy=True)
-            anomaly_map = np.asarray(raw_map, dtype=np.float32).reshape(map_side, map_side)
-            regions, mask = regions_from_map(anomaly_map, cfg.threshold, cfg.min_region_px)
-
-            stamps.append(time.perf_counter())
-            live_fps = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 else 0.0
-            render(frame, anomaly_map, regions, mask, cfg, live_fps)
-            video.send(frame)
-
-            processed += 1
-            flagged += bool(regions)
-            window_regions += len(regions)
-            if cfg.save_dir and cfg.save_every and processed % cfg.save_every == 0:
-                out_path = Path(cfg.save_dir) / f"frame_{processed}.jpg"
-                if not cv2.imwrite(str(out_path), frame):
-                    print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
-            if cfg.profile and processed % cfg.profile_interval == 0:
-                elapsed = time.perf_counter() - window_start
-                print(f"[profile] frames={cfg.profile_interval} "
-                      f"output_fps={cfg.profile_interval / elapsed:.1f} "
-                      f"avg_regions={window_regions / cfg.profile_interval:.2f}", flush=True)
-                window_start = time.perf_counter()
-                window_regions = 0
-    finally:
-        graph_run.close()
-        video.close()
-        print(f"processed={processed} flagged={flagged} "
-              f"video_sender={cfg.insight_host}:{video.port}", flush=True)
+    while not stop.is_set() and (frames == 0 or processed < frames):
+        sample = run.pull("anomaly_map", PULL_TIMEOUT_MS)
+        if sample is None:
+            if run.last_error() or not run.running():
+                raise RuntimeError(f"anomaly_map output closed: {run.last_error()}")
+            continue
+        regions = anomaly_regions.defect_regions(anomaly_map(sample, map_side), options)
+        # A frame without a defect sends no segments, which clears the last outline. A
+        # nonblocking send drops the message while the socket buffer is full; the drops are
+        # counted in the sender's stats and reported when the run ends. Any other failure raises.
+        metadata_sender.send_metadata(
+            "segmentation",
+            anomaly_regions.segments_json(regions),
+            sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1,
+            str(sample.frame_id) if sample.frame_id >= 0 else "",
+        )
+        processed += 1
+        flagged += bool(regions)
+    return processed, flagged
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="FastFlow anomaly detection on one RTSP stream, heatmap video to Insight")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--validate-config-only", action="store_true")
-    args = parser.parse_args(argv)
+    args = parse_args(argv)
+    config = Config.load(args.config)
+    stream = probe_rtsp_stream_info(
+        config.string("input.source"),
+        config.boolean("input.rtsp.tcp"),
+        RtspStreamInfo(
+            config.integer("input.width"),
+            config.integer("input.height"),
+            config.integer("input.fps"),
+        ),
+    )
+    model_path = args.config.absolute().parent / config.string("model.path")
+    model = pyneat.Model(str(model_path), model_options(config, stream))
+    map_side = int(model.output_specs()[0].shape[1])
+
+    rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(config, stream))
+    decoder = decoder_graph(config, stream)
+    video = pyneat.groups.video_sender(video_options(config))
+    graph = pyneat.Graph()
+    graph.connect(rtsp, decoder)
+    # A plain link lets Core tee the encoded stream to the decoder and the video sender.
+    graph.connect(rtsp, video)
+    graph.connect(decoder, detector_graph(model))
+
+    metadata_sender = pyneat.MetadataSender(metadata_options(config))
+    stop = stop_on_signals()
+    run = graph.build(run_options())
+    host = config.string("output.insight.host")
+    video_port = config.integer("output.insight.video_port_base")
+    print(
+        f"source={config.string('input.source')} codec={config.string('input.codec')} "
+        f"stream={stream.width}x{stream.height}@{stream.fps} map={map_side}x{map_side} "
+        f"insight={host} video={video_port} "
+        f"metadata={config.integer('output.insight.metadata_port_base')}"
+    )
     try:
-        cfg = load_config(args.config)
-        if args.validate_config_only:
-            print(f"Config validated: {args.config}")
-            return 0
-        global cv2, np, pyneat
-        import cv2
-        import numpy as np
-        import pyneat
-        if cfg.save_dir:
-            Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
-        run(cfg)
-        return 0
-    except KeyboardInterrupt:
-        return 130
-    except Exception as exc:
-        print(f"[ERR] {exc}", file=sys.stderr)
-        return 1
+        processed, flagged = send_regions(
+            run,
+            metadata_sender,
+            map_side,
+            region_options(config, stream),
+            config.integer("inference.frames"),
+            stop,
+        )
+    finally:
+        run.close()
+
+    print(f"processed={processed} flagged={flagged} video_sender={host}:{video_port}")
+    if metadata_sender.stats().send_failures:
+        print(f"{metadata_sender.stats().send_failures} metadata messages dropped")
+    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        sys.exit(main())
+    except Exception as error:  # noqa: BLE001 - report the cause in one line, not a traceback
+        print(f"[ERR] {error}", file=sys.stderr)
+        sys.exit(1)

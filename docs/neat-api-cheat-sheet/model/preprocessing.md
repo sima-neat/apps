@@ -337,7 +337,7 @@ use `input_specs()` to know what to send.
 - [Single-Stream Object Detector](../../../examples/object-detection/single-stream-object-detector/): NV12 or NV16 video frames, input capacity set to the frame size
 - [Depth Estimator](../../../examples/depth-estimation/depth-estimator/): `Stretch` with an explicit size and `"BICUBIC"`
 - [PatchCore Anomaly Detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `ImageNet` preset, letterbox for a camera
-- [FastFlow Anomaly Detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/): explicit mean and stddev
+- [FastFlow Anomaly Detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/): explicit mean on NV12 frames, `Stretch` resize
 - [Image Classification Explorer](../../../examples/classification/image-classification-explorer/): `ImageNet` preset with input capacity per model
 - [MIPI Multi-Model](../../../examples/benchmarking/mipi-multi-model/) (Python): NV12 camera input; `Letterbox` for YOLO26, `Stretch` with mean and stddev 0.5 for SSD
 - [SuperPoint Feature Extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `GRAY8` input from the decoder's Y plane, `Stretch`, and the default statistics marked explicit

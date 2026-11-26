@@ -31,7 +31,6 @@ PENDING_EXAMPLES = {
     "efficientsam3-promptable-segmenter",
     "face-detector",
     "face-recognizer",
-    "fastflow-anomaly-detector",
     "image-classification-explorer",
     "mipi-multi-model",
     "multi-stream-blazepose3d",

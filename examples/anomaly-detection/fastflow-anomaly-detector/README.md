@@ -14,21 +14,48 @@
 
 ## Concept
 
-Flags surface defects on parts in one RTSP stream with an anomaly model trained on good parts only, and sends Insight the video with a defect heatmap drawn on it.
+Flags surface defects on parts in one H.264, H.265, or MJPEG RTSP stream with an anomaly model trained on good parts only, and outlines each defect in Insight.
 
-The decoded frame leaves the graph together with its anomaly map, so the application can paint the heatmap onto the pixels it came from and send the finished picture to Insight as H.264 video. Setting `output.save_dir` writes the same annotated frames as JPEGs.
+```text
+How does a frame move through fastflow-anomaly-detector?
 
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                             ┆
+┆  ┌──────────────────────┐  encoded, as received ┌─────────────┐ ┆
+┆  │ RtspEncodedInput     │──────────────────────►│ VideoSender │─────┐
+┆  └──────────────────────┘                       └─────────────┘ ┆   │
+┆             │ encoded frames                                    ┆   │ video
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ SimaDecode           │                                       ┆   │
+┆  └──────────────────────┘                                       ┆   │
+┆             │ NV12 frames                                       ┆   │
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ FastFlow Model       │                                       ┆   │
+┆  └──────────────────────┘                                       ┆   │
+┆             │ anomaly map                                       ┆   │
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ Output "anomaly_map" │                                       ┆   │
+┆  └──────────────────────┘                                       ┆   │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   │
+              ▼ pull                                                  │
+   ┌────────────────────────────┐                                     │
+   │ defect regions (utils/)    │                                     │
+   └────────────────────────────┘                                     │
+              │ polygons, scores                                      │
+              ▼                                                       ▼
+   ┌────────────────────────────┐  JSON                        ┌──────────────┐
+   │ MetadataSender             │─────────────────────────────►│ Insight      │
+   └────────────────────────────┘                              └──────────────┘
 ```
-RTSP decode (NV12) --> branch --> frame ------------+
-                            \--> model (CVU preprocess + MLA FastFlow) --> anomaly map
-                                                    |
-    frame + map --> heatmap, boxes and verdict drawn on the frame --> video_sender
-                                                        (H264 RTP/UDP -> Insight)
-```
 
-FastFlow returns a 256x256 map with the probability that each pixel does not belong to a good part. Connected regions at or above `inference.threshold` that cover at least `inference.min_region_px` map pixels are the defects; smaller ones are the speckle a good part produces. The heatmap covers only those regions, each gets a box, and a banner carries the verdict, the highest probability in the frame and the live frame rate. A good part therefore shows the plain picture with a green `OK`.
+- `RtspEncodedInput` feeds both `VideoSender`, which passes the video to Insight as received, and `SimaDecode`, whose NV12 frames EV74 converts, stretches to the model input, and normalizes for FastFlow.
+- FastFlow returns a square map with, for each pixel, the probability that it does not show a good part. On the host, connected regions at or above `app.anomaly_threshold` that cover at least `app.min_region_px` map pixels are the defects; smaller ones are the speckle a good part produces.
+- Each frame's defects go to Insight as `segmentation` metadata, one polygon per region labelled `anomaly` with the region's highest probability, at most `inference.max_detections` per frame. A good part sends no polygon.
 
-A FastFlow package knows one product. The packaged model knows the blue discs of the sample clip; for your own product, train with anomalib and plug the compiled package in, see [Use Your Own Model](#use-your-own-model).
+A FastFlow package knows one product. The packaged model knows blue discs; for your own product, train with anomalib and plug the compiled package in, see [Use Your Own Model](#use-your-own-model).
 
 ## Preview
 
@@ -37,7 +64,7 @@ A FastFlow package knows one product. The packaged model knows the blue discs of
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
-- An RTSP H.264 source with a square picture and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target. Insight can host the sample clip `assets/datasets/blue-discs/discs_demo.mp4`.
+- An RTSP source with square frames and an [Insight endpoint](https://developer.sima.ai/software/tools/insight/) reachable from the target.
 
 ## Install Apps
 
@@ -55,10 +82,10 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model package | Role | Source |
+| `model.id` | Package | Source |
 | --- | --- | --- |
-| `fastflow_demo_mpk.tar.gz` | Default | Direct artifact (Model Zoo `fastflow_demo`) |
-| `<your-model>_mpk.tar.gz` | Supported | Compiled from an anomalib FastFlow export, see [Use Your Own Model](#use-your-own-model) |
+| `fastflow_demo` | `fastflow_demo_mpk.tar.gz` | Model Zoo `fastflow_demo`, the default |
+| `anomalib` | `<your-model>_mpk.tar.gz` | Compiled from an anomalib FastFlow export, see [Use Your Own Model](#use-your-own-model) |
 
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
 
@@ -70,62 +97,60 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-Set `model.path` in the config to the downloaded package.
+The packaged config already points `model.path` at `models/fastflow_demo_mpk.tar.gz`.
 
-## Prepare Insight
+## Prepare an RTSP source
 
-[Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and show the annotated video. Upload `assets/datasets/blue-discs/discs_demo.mp4` under *RTSP Source* in the Insight Web UI, or use a clip of your own parts.
-
-In the Insight Web UI, start the stream and copy its source URL. From a board, replace the container port shown in the URL with the published host port that `neat --json` reports.
+1. In Insight, open **Media Sources** and import a clip of blue discs, such as `TODO(clip): ask Onat which catalog clip`, or a clip of your own parts.
+2. Assign the video under **Streaming Sources** and start the source.
+3. Copy its RTSP URL into `input.source` and set `input.codec` to match the video. Use a host and published port reachable from the target, not `localhost`.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.rtsp_url` and `output.insight.host`. If Insight uses a nondefault video port, set `output.insight.video_port` to the port reported by `neat --json`.
+Edit `$APP_DIR/src/common/config.yaml`:
 
-`output.heat_max` and `output.alpha` control the overlay: the first is the probability drawn at full colour, the second the opacity over the frame.
+- Set `input.source`, and `input.codec` to `h264`, `h265`, or `mjpeg`.
+- Leave `input.width`, `input.height`, and `input.fps` at 0 to read the frame size and rate from the stream.
+- Set `output.insight.host`, `video_port_base`, and `metadata_port_base` to the values reported by Insight.
+- Keep `inference.frames: 0` to run until Ctrl-C, or set a frame count.
 
-The stream must carry a square picture: the model input is square and its preprocess letterboxes anything else, which flattens the map. Keep `inference.frames` at `0` to run until you stop the application.
+The frames must be square: the model is trained on square images, and a stretched frame scores worse.
 
 ## Run
 
 ### C++
 
 ```bash
-./${APP_DIR}/src/cpp/pre-built/fastflow-anomaly-detector \
-  --config ${APP_DIR}/src/common/config.yaml
+"$APP_DIR/src/cpp/pre-built/fastflow-anomaly-detector" --config "$APP_DIR/src/common/config.yaml"
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r ${APP_DIR}/src/python/requirements.txt
-python3 ${APP_DIR}/src/python/main.py \
-  --config ${APP_DIR}/src/common/config.yaml
+pip install -r "$APP_DIR/src/python/requirements.txt"
+python3 "$APP_DIR/src/python/main.py" --config "$APP_DIR/src/common/config.yaml"
 ```
 
 ## Expected Result
 
-Both applications print one line when the pipeline is up, then run silently:
+This application writes nothing to disk; its output is the Insight stream plus a startup line and a closing line, the same from C++ and Python. With `inference.frames: 1080` on the blue-disc clip from its first frame:
 
-```
-rtsp=rtsp://<insight-host-ip>:8554/src1 stream=720x720@30 map=256x256 threshold=0.5 min_region_px=300 insight=<insight-host-ip> video=9000 channel=0
-```
-
-Open the Insight Video Viewer for channel 0. The sample clip holds each disc for one second and alternates defective and good discs, so the heatmap and the red `ANOMALY` banner appear and disappear every few discs. Stop with Ctrl-C; the application prints a summary:
-
-```
-processed=1080 flagged=590 video_sender=<insight-host-ip>:9000
+```text
+source=rtsp://<host>:<port>/<stream> codec=h264 stream=720x720@30 map=256x256 insight=<insight-host-ip> video=9000 metadata=9100
+processed=1080 flagged=474 video_sender=<insight-host-ip>:9000
 ```
 
-Set `runtime.profile` to `true` for a rolling frame-rate line. Both applications keep up with a 720x720 stream at 30 fps on a Modalix.
+In the Insight viewer, defective discs show a red outline labelled `anomaly` and good discs show none. The closing line counts the frames processed and the frames with a defect, and prints after Ctrl-C too. When the nonblocking metadata sender dropped messages because the socket buffer was full, a further line counts them.
 
 ## Troubleshooting
 
-- Verify stream reachability if the first frame times out. From a board, use the published host port instead of the container port.
-- Verify the Insight host and video port if no video arrives.
-- Verify `model.normalize` and the stream aspect ratio if defective parts show no heatmap: a wrong normalisation or a letterboxed frame flattens the map.
-- Raise `inference.min_region_px` if good parts are flagged.
+- `model.id: unknown value '<id>' (expected anomalib, fastflow_demo)` means `model.id` names no supported package. Use `fastflow_demo` for the Model Zoo package and `anomalib` for your own.
+- `input.codec: unknown value '<codec>' (expected h264, h265, mjpeg)` means `input.codec` names a codec this example does not decode.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config.
+- `failed to probe RTSP frame size: <url>` appears when the source is unreachable from the board or does not report its size. Verify the URL from the board itself, or set `input.width`, `input.height`, and `input.fps`.
+- No outline on defective parts: check `model.id` against the package, and that the frames are square.
+- Good parts flagged: raise `app.min_region_px`.
 
 ## Use Your Own Model
 
@@ -160,21 +185,20 @@ The script converts the network to bfloat16 and writes `build/model/model_mpk.ta
 
 ```yaml
 model:
-  path: models/model_mpk.tar.gz
-  normalize:                 # anomalib packages normalise inside the graph, so zeros and ones;
-    mean: [0.0, 0.0, 0.0]    # the demo package needs its blue-disc mean instead
-    stddev: [1.0, 1.0, 1.0]
-inference:
+  id: anomalib               # anomalib packages normalize inside their graph
+  path: ../../../../../models/model_mpk.tar.gz
+app:
   min_region_px: 1000        # smallest region that counts as a defect; per product
 ```
 
-For `min_region_px`, run the application on good parts and raise the value until the summary reports `flagged=0`, then check that defective parts are still flagged. Measured on MVTec AD bottle on a Modalix, the 4-step model keeps image AUROC 0.99 and pixel AUROC 0.97, and a package runs at about 7 ms per inference.
+For `app.min_region_px`, run the application on good parts and raise the value until the summary reports `flagged=0`, then check that defective parts are still flagged. Measured on MVTec AD bottle on a Modalix, the 4-step model keeps image AUROC 0.99 and pixel AUROC 0.97, and a package runs at about 7 ms per inference.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`
-- Python source: `src/python/main.py`
-- Shared config: `src/common/config.yaml`
+- C++ reference source: `src/cpp/main.cpp`, with the region extraction in `src/cpp/utils/anomaly_regions.cpp`
+- Python implementation: `src/python/main.py`, with the region extraction in `src/python/utils/anomaly_regions.py`
+- Shared configuration: `src/common/config.yaml`
+- Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 

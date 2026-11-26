@@ -9,12 +9,18 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
-sima_neat_apps_module("fastflow-anomaly-detector" UNIT_TEST E2E_TEST)
 
-# The unit test exercises the shared pull-outcome helper, which needs the Neat headers.
+sima_neat_apps_module(
+  "fastflow-anomaly-detector"
+  OUTPUT_TARGET_VAR FASTFLOW_TARGET
+  UNIT_TEST
+  E2E_TEST
+)
+
+set(FASTFLOW_UTILS "${CMAKE_CURRENT_LIST_DIR}/utils/anomaly_regions.cpp")
+target_sources(${FASTFLOW_TARGET} PRIVATE ${FASTFLOW_UTILS})
+
+# The unit test checks the region extraction in process, so it compiles the utils too.
 if (TARGET fastflow-anomaly-detector_unit_test)
-  target_link_libraries(fastflow-anomaly-detector_unit_test
-    PRIVATE
-      SimaNeatApps::support_runtime
-  )
+  target_sources(fastflow-anomaly-detector_unit_test PRIVATE ${FASTFLOW_UTILS})
 endif()
