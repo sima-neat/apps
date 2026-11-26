@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +56,35 @@ def test_luma_rejects_a_frame_without_a_tensor():
 
     with pytest.raises(RuntimeError, match="decoded frame has no tensor"):
         main_module.luma(sample, main_module.RtspStreamInfo(*SOURCE_SIZE, 30))
+
+
+class _ClosedRun:
+    """A run whose only output closed cleanly: pull returns None, nothing reports an error."""
+
+    def pull(self, _name, _timeout_ms):
+        return None
+
+    def last_error(self):
+        return ""
+
+    def running(self):
+        return True
+
+    def can_pull(self):
+        return False
+
+
+def test_send_feature_points_stops_when_the_frames_output_closes():
+    with pytest.raises(RuntimeError, match="frames output closed"):
+        main_module.send_feature_points(
+            _ClosedRun(),
+            None,
+            None,
+            MODEL_SIZE,
+            main_module.RtspStreamInfo(*SOURCE_SIZE, 30),
+            0,
+            threading.Event(),
+        )
 
 
 def test_luma_rejects_a_frame_that_is_not_nv12():
