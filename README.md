@@ -183,18 +183,21 @@ cd apps
 ./build.sh --clean
 ```
 
-Each new build directory, including every `./build.sh --clean`, downloads the
-yaml-cpp 0.8.0 source from github.com. Without network access, copy
-`https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz` to the
-machine first. Only this file passes the SHA-256 check:
+In each new build directory, including every `./build.sh --clean`, the
+configure step downloads the yaml-cpp 0.8.0 source from github.com. Without
+network access, download
+`https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz` and copy it
+to the build machine. Only this file passes the SHA-256 check. Pass its
+absolute path:
 
 ```bash
-YAML_CPP_SOURCE_URL=/absolute/path/0.8.0.tar.gz ./build.sh --clean
+YAML_CPP_SOURCE_URL=<path>/0.8.0.tar.gz ./build.sh --clean
 ```
 
-`FETCHCONTENT_SOURCE_DIR_YAML_CPP` takes the unpacked folder (absolute path)
-instead. Set either one as an environment variable, because `build.sh` rejects
-`-D` options.
+`FETCHCONTENT_SOURCE_DIR_YAML_CPP` instead takes the unpacked `yaml-cpp-0.8.0`
+folder (absolute path). Set either one as an environment variable, because
+`build.sh` rejects `-D` options. The build directory keeps the last value of
+each variable, so run `./build.sh --clean` after you unset one.
 
 `build.sh` does not run tests. To fetch one example without cloning the
 repository:
