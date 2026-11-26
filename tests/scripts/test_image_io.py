@@ -8,9 +8,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
 import pytest
+
+# The contract job installs only pytest and PyYAML, so these tests skip there and run wherever
+# numpy and OpenCV are installed.
+cv2 = pytest.importorskip("cv2", reason="OpenCV is not installed")
+np = pytest.importorskip("numpy", reason="numpy is not installed")
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(APPS_ROOT / "support" / "python"))
