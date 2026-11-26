@@ -26,10 +26,13 @@ setup belongs to the Insight documentation or the installed Insight skill.
   decoder and the `VideoSender`. With `VideoSenderOptions::async` left `false`, Core runs the
   sender behind a `tee` in the source's pipeline. Choose the link to the sender:
   - A `GraphLinkOptions` with `policy = GraphLinkPolicy::RealtimeLatestByStream` keeps at most
-    one pending encoded frame for the sender and replaces it when the network is slow, so the
-    preview never holds back the decoder. The high-density example uses it.
+    one pending encoded frame for the sender and replaces it with each newer one, so the
+    preview never holds back the decoder. A burst of encoded frames drops some even on a fast
+    network, and their metadata arrives with no frame to draw on. The high-density example uses it.
   - A plain `connect` sends every encoded frame, and a slow sender can hold back the decoder.
-    The RF-DETR example uses it for H.264, H.265, and MJPEG.
+    Choose it when every metadata message must pair with its frame, such as a tracker's tracks.
+    The RF-DETR example uses it for H.264, H.265, and MJPEG, and the tiny-drone tracker for
+    its tracks.
 - **Decoded frames re-encoded:** connect the decoder to a `FromRaw` sender with a
   `RealtimeLatestByStream` link and small `max_inflight_per_stream` and `max_inflight_total`,
   so the encoder cannot hold the frames the decoder needs. Use it only when the source codec is
