@@ -49,6 +49,9 @@ Place each piece of code by the first question it answers yes to:
   example does. `scripts/ci/package-apps.sh` and `scripts/get-example.sh` ship that folder,
   `support/README.md`, `support/labels/`, and `support/cpp/sima_examples/` without `testing/`
   as reference source.
+- When a pull request adds a `support/` folder that configs or code read, it adds that folder
+  to `scripts/ci/package-apps.sh` and `scripts/get-example.sh`, because the installed bundle
+  and a fetched example hold only the folders those scripts copy.
 - A label file moves from an example's `src/common/` to `support/labels/` when a second
   example's model uses the same classes in the same class-ID order. An example that keeps a
   copy deletes it and names the shared file in its own conversion pull request. A config
