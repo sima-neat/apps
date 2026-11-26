@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The detection metadata message sent to Insight. Mirrors sima_examples.detection_egress in
-// support/python.
+// The object-detection and tracking metadata messages sent to Insight. Mirrors
+// sima_examples.detection_egress in support/python.
 
 #pragma once
 
@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace sima_examples::detection_egress {
@@ -60,13 +61,39 @@ template <typename SampleT> FrameMetadata frame_metadata(const SampleT& sample, 
   return metadata;
 }
 
-// Serialize the Insight object-detection envelope in one JSON DOM pass. BoxRange is intentionally
-// structural so host applications can use it without linking the NEAT target runtime.
-template <typename BoxRange>
-std::string serialize(const BoxRange& boxes, const std::vector<std::string>& labels, int frame_w,
-                      int frame_h, const FrameMetadata& frame) {
+namespace detail {
+
+// 0 to `limit`, as Core clamps: max(0, min(value, limit)), so NaN gives 0.
+inline double clip(double value, int limit) {
+  return std::max(0.0, std::min(value, static_cast<double>(limit)));
+}
+
+// One box as Insight reads it: [x, y, width, height] in frame pixels. Clipping both corners first
+// gives a box past an edge its visible size.
+template <typename BoxT>
+nlohmann::json entry(std::string entry_id, const BoxT& box, const std::vector<std::string>& labels,
+                     int frame_w, int frame_h) {
+  const int x1 = static_cast<int>(clip(box.x1, frame_w));
+  const int y1 = static_cast<int>(clip(box.y1, frame_h));
+  const int width = std::max(0, static_cast<int>(clip(box.x2, frame_w)) - x1);
+  const int height = std::max(0, static_cast<int>(clip(box.y2, frame_h)) - y1);
+  const std::string& label = box.class_id >= 0 && box.class_id < static_cast<int>(labels.size())
+                                 ? labels[static_cast<std::size_t>(box.class_id)]
+                                 : kUnknownLabel;
+  return {
+      {"id", std::move(entry_id)},
+      {"label", label},
+      {"confidence", box.score},
+      {"bbox",
+       {static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(width),
+        static_cast<float>(height)}},
+  };
+}
+
+inline std::string message(const char* metadata_type, nlohmann::json data,
+                           const FrameMetadata& frame) {
   nlohmann::json payload;
-  payload["type"] = "object-detection";
+  payload["type"] = metadata_type;
   payload["timestamp"] = frame.pts_ns >= 0 ? frame.pts_ns / 1'000'000 : -1;
   payload["frame_id"] = frame.frame_id >= 0 ? std::to_string(frame.frame_id) : "";
   payload["stream_id"] = std::string(frame.stream_id);
@@ -79,36 +106,46 @@ std::string serialize(const BoxRange& boxes, const std::vector<std::string>& lab
   if (frame.rtp_timestamp.has_value()) {
     payload["rtp_timestamp"] = *frame.rtp_timestamp;
   }
+  payload["data"] = std::move(data);
+  return payload.dump();
+}
 
-  auto& objects = payload["data"]["objects"];
-  objects = nlohmann::json::array();
+} // namespace detail
+
+// The object-detection message: each box with its label, numbered obj_1, obj_2, and so on.
+// BoxRange is structural, so host applications can use it without linking the Neat runtime.
+template <typename BoxRange>
+std::string serialize(const BoxRange& boxes, const std::vector<std::string>& labels, int frame_w,
+                      int frame_h, const FrameMetadata& frame) {
+  nlohmann::json objects = nlohmann::json::array();
   int object_index = 1;
   for (const auto& box : boxes) {
-    const int x1 = std::max(0, static_cast<int>(box.x1));
-    const int y1 = std::max(0, static_cast<int>(box.y1));
-    int width = std::max(0, static_cast<int>(box.x2 - box.x1));
-    int height = std::max(0, static_cast<int>(box.y2 - box.y1));
-    if (x1 + width > frame_w) {
-      width = frame_w - x1;
-    }
-    if (y1 + height > frame_h) {
-      height = frame_h - y1;
-    }
-
-    const std::string& label = box.class_id >= 0 && box.class_id < static_cast<int>(labels.size())
-                                   ? labels[static_cast<std::size_t>(box.class_id)]
-                                   : kUnknownLabel;
-    objects.push_back({
-        {"id", "obj_" + std::to_string(object_index++)},
-        {"label", label},
-        {"confidence", box.score},
-        {"bbox",
-         {static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(std::max(0, width)),
-          static_cast<float>(std::max(0, height))}},
-    });
+    objects.push_back(
+        detail::entry("obj_" + std::to_string(object_index++), box, labels, frame_w, frame_h));
   }
+  return detail::message("object-detection", {{"objects", std::move(objects)}}, frame);
+}
 
-  return payload.dump();
+// The `data.tracks` entries of a tracking message, for an application that builds its own
+// message: each box with its label and its track ID (`track_id`) as `id`.
+template <typename TrackRange>
+nlohmann::json track_entries(const TrackRange& tracks, const std::vector<std::string>& labels,
+                             int frame_w, int frame_h) {
+  nlohmann::json entries = nlohmann::json::array();
+  for (const auto& track : tracks) {
+    entries.push_back(
+        detail::entry(std::to_string(track.track_id), track, labels, frame_w, frame_h));
+  }
+  return entries;
+}
+
+// The tracking message: each box with its label and its track ID (`track_id`), which Insight
+// colors and draws with a trail.
+template <typename TrackRange>
+std::string serialize_tracks(const TrackRange& tracks, const std::vector<std::string>& labels,
+                             int frame_w, int frame_h, const FrameMetadata& frame) {
+  return detail::message("tracking", {{"tracks", track_entries(tracks, labels, frame_w, frame_h)}},
+                         frame);
 }
 
 } // namespace sima_examples::detection_egress
