@@ -32,7 +32,7 @@ How does an image move through yolo26-object-detector?
 ╰┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
         ▼ BBOX tensor, decode_bbox_tensor
    ┌──────────────────────────────────────────────┐
-   │ annotate.draw_detections (utils/)            │
+   │ draw_detections (support/image_folder)       │
    └──────────────────────────────────────────────┘
         │ boxes drawn
         ▼
@@ -135,15 +135,15 @@ this format. A run that writes every file with `0 detections` usually means
 
 ## Troubleshooting
 
-- `input.source has no .jpg, .jpeg, .png, or .bmp files`: point `input.source` at a folder that holds images directly, not in subfolders.
+- `no .jpg, .jpeg, .png, or .bmp files in <folder>`: point `input.source` at a folder that holds images directly, not in subfolders.
 - If the model fails to load with `model archive must use .tar.gz`, `model.path` points to the downloaded ZIP file. Set it to the `_mpk.tar.gz` file unpacked from it; a relative path starts at the config file.
 - An image larger than 1920x1080 fails with Neat's input-size error. Resize it first.
 - Lower `inference.min_score` if expected objects are missing. Lower `inference.nms_iou` if one object gets two boxes.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`, with `src/cpp/utils/images.h` for the image folder and `src/cpp/utils/annotate.h` for the annotated images
-- Python source: `src/python/main.py`, with `src/python/utils/images.py` and `src/python/utils/annotate.py`
+- C++ reference source: `src/cpp/main.cpp`
+- Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
 - Class labels: `support/labels/coco80.txt` in `prebuilt-apps/`, shared with the other examples that score the same classes
 - Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself, and their C++ reference source in `support/cpp/sima_examples/`

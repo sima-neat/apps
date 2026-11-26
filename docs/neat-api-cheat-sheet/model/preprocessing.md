@@ -37,7 +37,7 @@ image is on [decoding.md](decoding.md).
 
 C++, from
 [`yolo26-object-detector/src/cpp/main.cpp`](../../../examples/object-detection/yolo26-object-detector/src/cpp/main.cpp)
-(lines 56–60 of `model_options` and line 104 of `run_app`, de-indented; `neat`
+(lines 55–59 of `model_options` and line 103 of `run_app`, de-indented; `neat`
 is `simaai::neat`):
 
 ```cpp
