@@ -1,6 +1,5 @@
 // End-to-end tests: four RTSP streams, each with its own model, reach Insight as video and as that
-// model's metadata, each on its own channel. tests/python/test_e2e.py runs the same checks in
-// Python.
+// model's metadata, each on its own channel. tests/python/test_e2e.py runs the same checks.
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/source_cases.h"
 #include "sima_examples/testing/test_config.h"
@@ -42,17 +41,11 @@ constexpr const char* kExampleName = "multi-stream-multi-model";
 constexpr int kFrames = 150;
 // Above the shipped 0.30, so the results show that the example applies inference.min_score.
 constexpr double kMinScore = 0.35;
-// Each stream's results per second, about 80% of the lowest this test gave in Vulcan CI run
-// 45615743474 on 02572b9 (Modalix devkit-1, firmware 3.0.1_master_B2798, Core
-// develop/0420557512d1): 24.6 to 26.4 on 25 fps sources, 32.3 to 33.2 on a 30 fps source. On
-// e83d42f the same DevKit gave 19.9 to 20.0, and that log does not show the sources' rate. Whether
-// the app keeps up with its sources is measured on a board, not here.
+// About 80% of the lowest results per second a CI DevKit gave. Whether the app keeps up with its
+// sources is measured on a board, not here.
 constexpr double kMinResultsPerS = 19.5;
-// Each video socket's receive buffer. A keyframe arrives as a burst of packets, and a full buffer
-// drops the rest of the burst. In Vulcan CI run 45615743474 on 02572b9, 47 of 150 messages of the
-// Python H.264 stream 0 had no video frame, in runs of adjacent frames. Linux caps the size at
-// net.core.rmem_max (212992 bytes by default), and getsockopt reports twice what it set, so the
-// report prints what the socket got. The same as yolo26-tiny-drone-tracker's test.
+// A keyframe arrives as a burst of packets, and a full socket buffer drops the rest of it. Linux
+// caps the size at net.core.rmem_max, so the report prints what the socket got.
 constexpr int kVideoReceiveBuffer = 8 << 20;
 
 using Clock = std::chrono::steady_clock;
@@ -94,8 +87,7 @@ std::set<std::string> coco_labels() {
 
 using RtpHeader = std::array<unsigned char, 12>;
 
-// Receives one stream's video and keeps each packet's RTP header until `stop` is set. A copy of
-// single-stream's helper: #823 moves it into support/cpp/sima_examples/testing/rtp_video.
+// Receives one stream's video and keeps each packet's RTP header until `stop` is set.
 class VideoDrain {
 public:
   VideoDrain(int port, const std::atomic<bool>& stop) {
@@ -474,9 +466,8 @@ int run_case(const std::string& binary, const std::string& models_dir,
       problems.push_back(stream + ": " + std::to_string(messages) + " of " +
                          std::to_string(kFrames) + " messages arrived");
     }
-    // The detection and segmentation models find objects in every test stream. The pose model
-    // needs a person in view: when stream 0 found a person on the same URL, the pose stream must
-    // send poses. The pose counts seen on a DevKit are not verified yet.
+    // Every test stream has objects, but only some have a person, so the pose stream must send
+    // poses only when stream 0 found a person on the same URL.
     if (stream_case.metadata_type != "pose-estimation" && entries == 0) {
       problems.push_back(stream + " sent no " + stream_case.key);
     }

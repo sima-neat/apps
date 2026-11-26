@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Runs a different YOLO model on each of up to four RTSP streams, shown in Insight. Each stream's
-// model detects objects, segments them, or estimates poses. Insight draws the results over that
-// stream's video, one channel per stream.
+// Runs a different YOLO model (detection, segmentation, or pose) on each of up to four RTSP
+// streams. Insight draws each stream's results over its video, one channel per stream.
 
 #include "neat.h"
 #include "sima_examples/config.h"
@@ -54,12 +53,10 @@ const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
     {"h264", neat::SimaDecodeType::H264},
     {"h265", neat::SimaDecodeType::H265},
 };
-// Insight metadata types: Insight draws boxes, mask outlines, or skeletons for each.
 constexpr const char* kDetection = "object-detection";
 constexpr const char* kSegmentation = "segmentation";
 constexpr const char* kPose = "pose-estimation";
-// Each model id: the BoxDecode type of the package's heads, and the Insight metadata type of its
-// results. YOLO11 packages carry the YOLOv8 heads.
+// YOLO11 packages carry the YOLOv8 heads.
 const std::map<std::string, std::pair<neat::BoxDecodeType, std::string>> kModelIds = {
     {"yolov8", {neat::BoxDecodeType::YoloV8, kDetection}},
     {"yolov8-seg", {neat::BoxDecodeType::YoloV8Seg, kSegmentation}},
@@ -68,28 +65,21 @@ const std::map<std::string, std::pair<neat::BoxDecodeType, std::string>> kModelI
     {"yolo26-seg", {neat::BoxDecodeType::YoloV26Seg, kSegmentation}},
     {"yolo26-pose", {neat::BoxDecodeType::YoloV26Pose, kPose}},
 };
-// The key that holds a message's entries, for each metadata type.
 const std::map<std::string, std::string> kDataKeys = {
     {kDetection, "objects"},
     {kSegmentation, "segments"},
     {kPose, "poses"},
 };
-// How long a stream's decoded frames may arrive with no result before the app stops with an
-// error. On a DevKit, four 1280x720@30 streams with the default models: largest gap 0.37 s (C++)
-// and 0.25 s (Python) over 12 minutes.
+// How long a stream's frames may arrive with no result before the app stops with an error (#691).
 constexpr double kResultDeadlineS = 10.0;
-// The same for the first result, which also waits for Core to build the rest of the pipeline on
-// the first frame (EdgeRouter.cpp). Measured on the same DevKit: 0.6 to 2 s after the first frame.
+// The first result also waits for Core to build the rest of the pipeline on the first frame.
 constexpr double kFirstResultDeadlineS = 30.0;
-// Decoded frames each stream's decoder keeps. Before the conversion, 12 covered the host queue's 4,
-// the model's 4, and 4 to decode into. Here they bound the frames the model and frames_<i> hold,
-// because Core does not hold the model to 4 (frames_graph). Not re-measured with this graph.
+// Core gap: the realtime link does not hold the model to 4 frames per stream, so these buffers
+// bound the frames the model and frames_<i> hold.
 constexpr int kDecoderBuffers = 12;
-// The pull loop polls every output without waiting, and sleeps this long after a round that
-// pulled no result.
+// The pull loop does not wait on an output, so it sleeps after a round that pulled no result.
 constexpr std::chrono::milliseconds kIdleSleep{2};
 
-// One stream's model entry, as the config sets it.
 struct StreamModel {
   std::string id;
   std::string path;
@@ -98,7 +88,6 @@ struct StreamModel {
   std::vector<std::string> labels;
 };
 
-// What the pull loop keeps for one stream.
 struct Stream {
   sima_examples::RtspStreamInfo info;
   std::string metadata_type;
@@ -125,7 +114,6 @@ fs::path parse_args(int argc, char** argv) {
   return config_path;
 }
 
-// A YOLO model on the decoded NV12 frames of one stream, decoded by `decode_type`.
 neat::Model::Options model_options(const sima_examples::Config& config,
                                    const sima_examples::RtspStreamInfo& stream,
                                    neat::BoxDecodeType decode_type, int max_detections) {
@@ -133,7 +121,7 @@ neat::Model::Options model_options(const sima_examples::Config& config,
   options.preprocess.kind = neat::InputKind::Image;
   options.preprocess.enable = neat::AutoFlag::On;
   options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
-  // Lets streams above Core's 1920x1080 default in (PreprocessPlan.h).
+  // Lets streams above Core's 1920x1080 default in.
   options.preprocess.input_max_width = stream.width;
   options.preprocess.input_max_height = stream.height;
   options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
@@ -157,7 +145,6 @@ std::string frames_output(std::size_t index) {
   return "frames_" + std::to_string(index);
 }
 
-// One stream's model: "model_frame" input -> model -> "results_<index>" output.
 neat::Graph model_graph(const neat::Model& model, std::size_t index) {
   neat::Graph frames;
   frames.add(neat::nodes::Input("model_frame", model.input_appsrc_options(false)));
@@ -191,19 +178,17 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
       // H.264 caps from input.fps and the stream's size, instead of the caps the stream sends.
       options.auto_caps_from_stream = false;
     } else {
-      // The rate the stream's caps fall back to.
       options.fallback_h264_fps = stream.fps;
     }
   }
   return options;
 }
 
-// Hardware decode to NV12 frames at the stream's size, ending at "model_frame".
 neat::Graph decoder_graph(const sima_examples::Config& config,
                           const sima_examples::RtspStreamInfo& stream) {
   neat::SimaDecodeOptions decode;
   decode.type = config.choice("input.codec", kDecodeTypes);
-  // Names the output buffer "decoder", the default Model::Options::upstream_name.
+  // The default Model::Options::upstream_name, which the model reads from.
   decode.decoder_name = "decoder";
   decode.dec_width = stream.width;
   decode.dec_height = stream.height;
@@ -216,17 +201,9 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
   return graph;
 }
 
-// The newest decoded frame of one stream, which tells the pull loop the decoder is sending.
+// Core gap: a Run reports no count of the frames a model holds, so the pull loop watches each
+// decoder's newest frame to tell a stalled model from a paused camera.
 neat::Graph frames_graph(std::size_t index) {
-  // Core gap: a Run reports no count of the frames a model holds, so the pull loop watches each
-  // decoder's frames to tell a stalled model from a paused camera.
-  // Core gap: the model is not held to the 4 frames per stream a realtime link admits. Core admits
-  // a decoded frame once and keeps its credit on the frame's shared storage (EdgeRouter.cpp:752,
-  // SampleUtil.cpp:3162). The decoder's fan-out retains only credits a frame already carries
-  // (EdgeRouter.cpp:1211), and the first pull of a frame, here or from results_<i>, releases its
-  // credit (RunCore.cpp:1610, RunPull.cpp:168). On a DevKit (SIMA_GRAPH_REALTIME_CREDIT_DEBUG=1) a
-  // stream held at most 2 of 4, and without this output Core registered no credit at all. So the
-  // decoder's buffers, not the credit, bound the frames the model holds.
   neat::Graph graph;
   graph.add(neat::nodes::Output(frames_output(index), neat::OutputOptions::Latest()));
   return graph;
@@ -239,7 +216,6 @@ neat::GraphLinkOptions realtime_link() {
   return link;
 }
 
-// Send the encoded stream to Insight unchanged, on video port base + index.
 groups::VideoSenderOptions video_options(const sima_examples::Config& config, std::size_t index) {
   auto options = groups::VideoSenderOptions::Passthrough(config.choice("input.codec", kRtspCodecs));
   options.host = config.string("output.insight.host");
@@ -261,12 +237,12 @@ neat::RunOptions run_options() {
   neat::RunOptions options;
   options.preset = neat::RunPreset::Realtime;
   // Auto copies a result that waits at an output while another one is queued there, unless it is
-  // DMA-BUF or framework memory (RunCoreGraphStart.cpp, GraphRuntimeUtil.cpp).
+  // DMA-BUF or framework memory.
   options.output_memory = neat::OutputMemory::ZeroCopy;
   return options;
 }
 
-// Each stream's frame size and rate: the configured values, and a probe's for each 0.
+// The configured frame size and rate, with a probe's value for each 0.
 std::vector<sima_examples::RtspStreamInfo> stream_info(const sima_examples::Config& config,
                                                        const std::vector<std::string>& sources) {
   const sima_examples::RtspStreamInfo configured{
@@ -285,7 +261,7 @@ std::vector<sima_examples::RtspStreamInfo> stream_info(const sima_examples::Conf
   return streams;
 }
 
-// The class labels of a detection or segmentation model. Pose results carry none.
+// Pose results carry no labels.
 std::vector<std::string> model_labels(const sima_examples::Config& model,
                                       const std::string& metadata_type) {
   if (metadata_type == kPose) {
@@ -294,7 +270,6 @@ std::vector<std::string> model_labels(const sima_examples::Config& model,
   return sima_examples::load_labels(model.string("labels"));
 }
 
-// The model entry of each input.source stream, read entry by entry before any model loads.
 std::vector<StreamModel> stream_models(const sima_examples::Config& config, std::size_t streams) {
   const auto entries = config.mapping_list("model");
   if (entries.size() != streams) {
@@ -313,7 +288,7 @@ std::vector<StreamModel> stream_models(const sima_examples::Config& config, std:
   return models;
 }
 
-// The tensor's values, copied once. A frame with nothing found has zero rows.
+// A frame with nothing found has zero rows.
 template <typename T> std::vector<T> tensor_values(const neat::Tensor& tensor) {
   std::vector<T> values(tensor.dense_bytes_tight() / sizeof(T));
   if (!values.empty() &&
@@ -335,7 +310,6 @@ std::vector<insight_metadata::Entry> metadata_entries(const neat::Sample& sample
         neat::decode_bbox_tensor(tensors.front(), width, height, max_detections, /*strict=*/true);
     return insight_metadata::objects(result.boxes, stream.labels, width, height);
   }
-  // A frame with nothing found decodes to tensors with zero rows.
   std::vector<insight_metadata::Entry> entries;
   if (stream.metadata_type == kSegmentation) {
     for (const auto& item : neat::decode_segmentation(tensors, width, height, max_detections,
@@ -357,9 +331,8 @@ std::vector<insight_metadata::Entry> metadata_entries(const neat::Sample& sample
   return entries;
 }
 
-// Send every stream's results to its Insight channel until each stream sent `frames` (0 or less: no
-// limit) or a stop signal. A stream whose decoded frames arrive with no result for its deadline
-// throws with its model.
+// Runs until each stream sent `frames` results (0 or less: no limit) or a stop signal. A stream
+// whose frames arrive with no result for its deadline throws with its model.
 void send_results(neat::Run& run, std::vector<Stream>& streams, int max_detections, int frames,
                   const std::atomic<bool>& stop) {
   const auto all_sent = [&] {
@@ -391,8 +364,8 @@ void send_results(neat::Run& run, std::vector<Stream>& streams, int max_detectio
       pulled = true;
       const auto [data, left_out] = insight_metadata::data_json(
           kDataKeys.at(stream.metadata_type), metadata_entries(sample, stream, max_detections));
-      // A nonblocking send drops the message while the socket buffer is full; the drops are
-      // counted in the sender's stats and reported when the run ends. Any other failure throws.
+      // A nonblocking send drops the message while the socket buffer is full; the run's end
+      // reports the drops. Any other failure throws.
       std::string send_error;
       if (!stream.metadata_sender.send_metadata(
               stream.metadata_type, data, sample.pts_ns >= 0 ? sample.pts_ns / 1000000 : -1,
@@ -417,7 +390,6 @@ int run_app(const fs::path& config_path) {
   const auto infos = stream_info(config, sources);
   // Used by both the models and the box decode.
   const int max_detections = config.integer("inference.max_detections");
-  // Results each stream sends before the app stops. 0 or less runs until stopped.
   const int frames = config.integer("inference.frames");
 
   neat::Graph graph;
@@ -432,14 +404,13 @@ int run_app(const fs::path& config_path) {
                         model_options(config, info, entry.decode_type, max_detections));
     const neat::Graph rtsp = groups::RtspEncodedInput(rtsp_options(config, url, info));
     const neat::Graph decoder = decoder_graph(config, info);
-    // A plain link keeps every encoded frame. A dropped one corrupts the decoded frames after it
-    // until the next keyframe. Core runs an RTSP input with exactly two consumers, a decoder on a
-    // plain link and a synchronous VideoSender of the same codec, as one pipeline
-    // (ExecutionGraphCompiler.cpp), so the frames output taps the decoder instead.
+    // A plain link: a dropped encoded frame corrupts the decoded ones until the next keyframe.
     graph.connect(rtsp, decoder);
     graph.connect(decoder, model_graph(models.back(), index), realtime_link());
     // A plain link sends Insight every encoded frame, so each result has its frame.
     graph.connect(rtsp, groups::VideoSender(video_options(config, index)));
+    // Core runs an RTSP input as one pipeline only when its consumers are a decoder and a
+    // VideoSender, so frames_<i> taps the decoder.
     graph.connect(decoder, frames_graph(index), realtime_link());
     std::string error;
     neat::MetadataSender metadata_sender(metadata_options(config, index), &error);

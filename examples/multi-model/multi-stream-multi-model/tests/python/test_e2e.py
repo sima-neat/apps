@@ -1,6 +1,5 @@
 """End-to-end tests: four RTSP streams, each with its own model, reach Insight as video and as
-that model's metadata, each on its own channel. tests/cpp/test_e2e.cpp runs the same checks in
-C++."""
+that model's metadata, each on its own channel. tests/cpp/test_e2e.cpp runs the same checks."""
 
 from __future__ import annotations
 
@@ -26,19 +25,13 @@ LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitli
 FRAMES = 150
 # Above the shipped 0.30, so the results show that the example applies inference.min_score.
 MIN_SCORE = 0.35
-# Each stream's results per second, about 80% of the lowest tests/cpp/test_e2e.cpp gave in Vulcan
-# CI run 45615743474 on 02572b9 (Modalix devkit-1, firmware 3.0.1_master_B2798, Core
-# develop/0420557512d1): 24.6 to 26.4 on 25 fps sources, 32.3 to 33.2 on a 30 fps source. On
-# e83d42f the same DevKit gave 19.9 to 20.0, and that log does not show the sources' rate. Whether
-# the app keeps up with its sources is measured on a board, not here.
+# About 80% of the lowest results per second a CI DevKit gave. Whether the app keeps up with its
+# sources is measured on a board, not here.
 MIN_RESULTS_PER_S = 19.5
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
-# Each video socket's receive buffer. A keyframe arrives as a burst of packets, and a full buffer
-# drops the rest of the burst. In Vulcan CI run 45615743474 on 02572b9, 47 of 150 messages of
-# H.264 stream 0 had no video frame, in runs of adjacent frames. Linux caps the size at
-# net.core.rmem_max (212992 bytes by default), and getsockopt reports twice what it set, so the
-# report prints what the socket got. The same as yolo26-tiny-drone-tracker's test.
+# A keyframe arrives as a burst of packets, and a full socket buffer drops the rest of it. Linux
+# caps the size at net.core.rmem_max, so the report prints what the socket got.
 VIDEO_RECEIVE_BUFFER = 8 << 20
 # The shipped config's streams, in order: the package test-scope.yaml downloads for each, the
 # Insight metadata type its model sends, and the key of the entries in that type's data.
@@ -57,7 +50,6 @@ def _env_int(name: str, default: int) -> int:
 
 def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
     """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
-    # A copy of single-stream's helper. #823 moves it into tests/utils/rtp_video.py.
     # The loop only reads, into one buffer, so it empties the socket as fast as it can.
     sock.settimeout(0.2)
     packet = bytearray(65536)
@@ -71,9 +63,8 @@ def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes
 
 
 def _udp_rcvbuf_errors() -> int | None:
-    """RcvbufErrors of the Udp: line of /proc/net/snmp: datagrams the kernel dropped because a
-    UDP socket's receive buffer was full, for every UDP socket of the host. None without the
-    file."""
+    """RcvbufErrors of /proc/net/snmp: datagrams the kernel dropped on a full UDP receive buffer,
+    for every UDP socket of the host. None without the file."""
     try:
         rows = [
             line.split()
@@ -312,9 +303,8 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         entries_by_stream[index] = entries
         problems = [(problem, e) for e in entries if (problem := _entry_problem(metadata_type, e))]
         assert not problems, f"stream {index}: {problems[:3]}"
-        # The detection and segmentation models find objects in every test stream. The pose
-        # model needs a person in view: when stream 0 found a person on the same URL, the pose
-        # stream must send poses. The pose counts seen on a DevKit are not verified yet.
+        # Every test stream has objects, but only some have a person, so the pose stream must
+        # send poses only when stream 0 found a person on the same URL.
         if metadata_type != "pose-estimation":
             assert entries, f"stream {index} sent no {key}"
         elif sources[index] == sources[0] and any(

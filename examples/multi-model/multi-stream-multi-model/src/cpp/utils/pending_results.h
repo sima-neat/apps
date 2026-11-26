@@ -11,12 +11,8 @@
 
 namespace pending_results {
 
-// The pending-result deadline of one stream. A decoded frame that arrives after the stream's last
-// result has a result pending. When no result comes within the deadline of the first such frame,
-// observe() throws with the stream and its model. The first result gets `first_result_s`, because
-// Core builds the rest of the pipeline when the first frame reaches it. Every later result gets
-// `deadline_s`. A camera that pauses sends no frames, so nothing is pending and the stream waits
-// without a limit.
+// A frame that arrives after the last result starts a deadline: `first_result_s` for the first
+// result, while Core builds the pipeline, then `deadline_s`. A paused camera starts none.
 class PendingResults {
 public:
   PendingResults(int stream_index, std::string model_path, double deadline_s,

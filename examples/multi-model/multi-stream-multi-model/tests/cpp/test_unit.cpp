@@ -1,11 +1,5 @@
-// Unit tests for the multi-stream multi-model example: the checks the application leaves to its
-// config, the Insight metadata of each task, and the pending-result deadline.
-// tests/python/test_unit.py runs the same tests in Python. Python also runs its pull loop against a
-// fake Run and checks the MODEL_IDS table and the deadline values. A C++ Run cannot be faked, and
-// kModelIds and the deadlines are private to main.cpp, so here the deadline is tested on
-// PendingResults.observe(), the step the loop takes for each stream in each round.
-// It also tests Config::mapping_list of support/, which tests/scripts/test_config.py tests in
-// Python.
+// tests/python/test_unit.py's tests, less those that need a Run or main.cpp's private tables: the
+// deadline is tested on PendingResults.observe(). Also tests support's Config::mapping_list.
 
 #include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/insight_metadata.h"
 #include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/pending_results.h"
@@ -65,9 +59,8 @@ std::vector<ConfigScalars> shipped_models() {
   return models;
 }
 
-// The last line the example prints to stderr for the shipped config with `models` as its model
-// entries, with the test's directory shown as <dir>, and the whole stderr in `all` when given.
-// The frame size and rate are set, so no stream is probed and no source is needed.
+// The last stderr line for the shipped config with `models` as its entries, the test's directory
+// as <dir>. The set frame size and rate skip the probe, so no source is needed.
 std::string run_error(const std::string& binary, const std::string& test_name,
                       const std::vector<ConfigScalars>& models, std::string* all = nullptr) {
   const std::string dir = create_test_scratch_dir(kExampleName, test_name);
@@ -398,7 +391,7 @@ bool test_mapping_list_reads_each_entry_by_field() {
                       "each entry reads by field");
     ok &= expect_true(entries[0].choice("id", std::map<std::string, int>{{"yolov8", 8}}) == 8,
                       "choice reads an entry's field");
-    // Python raises "model[1].id must be a string, got 5". C++ reads any scalar as a string.
+    // C++ reads any scalar as a string, while Python rejects a number here.
     ok &= expect_true(entries[1].string("id") == "5", "C++ reads id: 5 as \"5\"");
     std::string error;
     try {
@@ -485,8 +478,7 @@ bool test_pose_model_needs_no_labels(const std::string& binary) {
   models[0]["path"] = "missing_mpk.tar.gz";
   std::string all;
   const std::string error = run_error(binary, "test_pose_model_needs_no_labels", models, &all);
-  // Core's error for a package that is not there: a line that names model[0].path, then a hint
-  // (ModelArchiveLoader.cpp, ModelPack.cpp). A DevKit printed the hint line (e83d42f).
+  // Core's error for a missing package: a line that names model[0].path, then a hint.
   const std::string first = all.substr(0, all.find('\n'));
   const std::string named = "invalid_archive: archive path does not exist or is not a regular "
                             "file: <dir>/missing_mpk.tar.gz";

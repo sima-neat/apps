@@ -96,11 +96,8 @@ def mask_rect(
 def mask_polygon(
     mask: np.ndarray, rect: tuple[int, int, int, int], frame_w: int, frame_h: int
 ) -> list[list[int]]:
-    """The outline, in frame pixels, of the largest region of `mask` inside `rect`.
-
-    Empty when the region has fewer than three corners. The mask cells are resized to the
-    rectangle before the threshold, so the outline follows the object at frame resolution.
-    """
+    """The outline, in frame pixels, of the largest region of `mask` inside `rect`, or empty
+    when it has fewer than three corners."""
     x0, y0, x1, y1 = rect
     mx0, my0, mx1, my1 = mask_rect(rect, frame_w, frame_h, mask.shape[1], mask.shape[0])
     cells = np.ascontiguousarray(mask[my0:my1, mx0:mx1])

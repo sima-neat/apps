@@ -1,6 +1,5 @@
-"""Unit tests for the multi-stream multi-model example: the checks the application leaves to its
-config, the Insight metadata of each task, and the pending-result deadline.
-tests/cpp/test_unit.cpp runs the same tests in C++."""
+"""Unit tests: the config checks, the Insight metadata of each task, and the pending-result
+deadline. tests/cpp/test_unit.cpp runs those that need no Run or main.py's tables."""
 
 from __future__ import annotations
 
@@ -333,11 +332,8 @@ def test_send_results_labels_each_stream_with_its_own_labels(monkeypatch):
 
 
 def run_main(tmp_path: Path, change, last_line: bool = True) -> str:
-    """The last line main.py prints to stderr for the shipped config with `change` applied, or
-    the whole stderr when `last_line` is false.
-
-    The frame size and rate are set, so no stream is probed and no source is needed.
-    """
+    """The last stderr line, or all of it, for the shipped config with `change` applied. The set
+    frame size and rate skip the probe, so no source is needed."""
     config = yaml.safe_load((COMMON_DIR / "config.yaml").read_text())
     config["input"].update(width=1280, height=720, fps=30)
     change(config)
@@ -396,8 +392,7 @@ def test_pose_model_needs_no_labels(tmp_path):
     def missing_model(config):
         config["model"][0]["path"] = "missing_mpk.tar.gz"
 
-    # Core's error for a package that is not there: a line that names model[0].path, then a hint
-    # (ModelArchiveLoader.cpp, ModelPack.cpp). A DevKit printed the hint line (e83d42f).
+    # Core's error for a missing package: a line that names model[0].path, then a hint.
     first, *_, last = run_main(tmp_path, missing_model, last_line=False).splitlines()
     assert first.startswith("[ERR] ") and first.endswith(
         "invalid_archive: archive path does not exist or is not a regular file: "

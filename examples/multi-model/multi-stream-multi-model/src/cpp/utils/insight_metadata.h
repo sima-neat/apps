@@ -50,9 +50,8 @@ cv::Rect frame_rect(const float* box, int frame_w, int frame_h);
 // The mask cells under the frame rectangle `rect`, through the model's letterbox.
 cv::Rect mask_rect(const cv::Rect& rect, int frame_w, int frame_h, int mask_w, int mask_h);
 
-// The outline, in frame pixels, of the largest region of `mask` inside `rect`. Empty when the
-// region has fewer than three corners. The mask cells are resized to the rectangle before the
-// threshold, so the outline follows the object at frame resolution.
+// The outline, in frame pixels, of the largest region of `mask` inside `rect`, or empty when it
+// has fewer than three corners.
 std::vector<cv::Point> mask_polygon(const cv::Mat& mask, const cv::Rect& rect, int frame_w,
                                     int frame_h);
 
