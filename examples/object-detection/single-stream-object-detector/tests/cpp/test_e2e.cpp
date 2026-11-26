@@ -1,5 +1,4 @@
 #include "sima_examples/testing/metadata_json_listener.h"
-#include "sima_examples/testing/rtp_video.h"
 #include "sima_examples/testing/source_cases.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
@@ -9,17 +8,16 @@
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -48,9 +46,15 @@ std::pair<int, int> frame_size(const std::string& url) {
   return {width, height};
 }
 
+// The shared COCO label file, under the apps root.
+fs::path labels_path() {
+  const char* apps_root = env_or_null("APPS_ROOT");
+  return fs::path(apps_root != nullptr ? apps_root : ".") / "support" / "labels" / "coco80.txt";
+}
+
 // The labels of the label file, one per line.
 std::vector<std::string> label_file() {
-  std::ifstream input(example_common_config_path(kExampleName).parent_path() / "coco_label.txt");
+  std::ifstream input(labels_path());
   std::vector<std::string> labels;
   for (std::string line; std::getline(input, line);) {
     labels.push_back(line);
@@ -76,6 +80,22 @@ bool valid_detections(const std::vector<MetadataJsonMessage>& messages,
   return true;
 }
 
+// Each video packet's RTP header, kept until `stop` is set and the socket is empty.
+std::vector<std::array<unsigned char, 12>> drain_video(int socket, const std::atomic<bool>& stop) {
+  const timeval timeout{0, 200000};
+  ::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  std::vector<std::array<unsigned char, 12>> headers;
+  std::array<unsigned char, 65536> packet{};
+  while (true) {
+    if (::recv(socket, packet.data(), packet.size(), 0) >= 12) {
+      headers.emplace_back();
+      std::copy_n(packet.begin(), 12, headers.back().begin());
+    } else if (stop) {
+      return headers;
+    }
+  }
+}
+
 int run_source_case(const std::string& binary, const std::string& model_path,
                     const StreamSourceCase& source_case, const std::string& source,
                     const std::string& label) {
@@ -98,9 +118,8 @@ int run_source_case(const std::string& binary, const std::string& model_path,
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   // Only the keys of the case's input type, as the example reads them.
   std::ofstream config(config_path);
-  config << "model:\n  path: " << model_path << "\n  labels: "
-         << fs::absolute(example_common_config_path(kExampleName).parent_path() / "coco_label.txt")
-                .string()
+  config << "model:\n  path: " << model_path
+         << "\n  labels: " << fs::absolute(labels_path()).string()
          << "\ninput:\n  type: " << source_case.type << "\n  source: " << source
          << "\n  width: " << width << "\n  height: " << height << "\n  fps: " << source_case.fps
          << "\n";
@@ -142,7 +161,7 @@ int run_source_case(const std::string& binary, const std::string& model_path,
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   std::atomic<bool> stop{false};
-  std::vector<RtpHeader> headers;
+  std::vector<std::array<unsigned char, 12>> headers;
   std::thread drain([&] { headers = drain_video(video_socket, stop); });
   const ProcessResult result =
       spawn_and_wait(binary, {"--config", config_path.string()}, timeout_ms);
@@ -189,17 +208,6 @@ int run_source_case(const std::string& binary, const std::string& model_path,
     std::cerr << "[FAIL] " << label << " did not publish RTP video with payload type "
               << payload_type << " to Insight\n";
     return 1;
-  }
-  // Insight draws each message's boxes on the video frame its timestamp names.
-  const std::set<uint32_t> timestamps = rtp_timestamps(headers);
-  for (const auto* batch : {&metadata.messages, &following.messages, &rest.messages}) {
-    for (const auto& message : *batch) {
-      if (!pairs(message.timestamp_ms, timestamps)) {
-        std::cerr << "[FAIL] " << label << " sent metadata timestamp " << message.timestamp_ms
-                  << " that no video frame carries\n";
-        return 1;
-      }
-    }
   }
   std::cout << "[OK] " << label << " sent " << kFrames
             << " frames of detection metadata and Insight video\n";

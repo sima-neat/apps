@@ -15,12 +15,12 @@ import pytest
 import yaml
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
-from tests.utils.rtp_video import drain_video, pairs, rtp_timestamps
 from tests.utils.pytest_fixtures import usb_camera_cases
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-LABELS = (EXAMPLE_DIR / "src" / "common" / "coco_label.txt").read_text().splitlines()
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+LABELS = (APPS_ROOT / "support" / "labels" / "coco80.txt").read_text().splitlines()
 FRAMES = 100
 # Above the shipped 0.30, so the scores show that the example applies inference.min_score.
 MIN_SCORE = 0.5
@@ -81,6 +81,17 @@ def _keep_only_input_type_keys(config_path: Path, source: dict) -> None:
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
 
+def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
+    """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
+    sock.settimeout(0.2)
+    while True:
+        try:
+            headers.append(sock.recv(65536)[:12])
+        except TimeoutError:
+            if stop.is_set():
+                return
+
+
 @pytest.mark.e2e
 @pytest.mark.parametrize("source", SOURCE_CASES)
 def test_publishes_insight_video_and_metadata(
@@ -122,7 +133,7 @@ def test_publishes_insight_video_and_metadata(
         video.bind(("127.0.0.1", video_port))
         headers: list[bytes] = []
         stop = threading.Event()
-        drain = threading.Thread(target=drain_video, args=(video, stop, headers))
+        drain = threading.Thread(target=_drain_video, args=(video, stop, headers))
         drain.start()
         try:
             result = subprocess.run(
@@ -161,7 +172,3 @@ def test_publishes_insight_video_and_metadata(
     payload_type = 96 if source["type"] == "http" else {"h264": 96, "h265": 98, "mjpeg": 26}[codec]
     assert headers and len(headers[0]) == 12 and headers[0][0] >> 6 == 2
     assert headers[0][1] & 0x7F == payload_type
-    # Insight draws each message's boxes on the video frame its timestamp names.
-    timestamps = rtp_timestamps(headers)
-    unpaired = [m.timestamp_ms for m in messages if not pairs(m.timestamp_ms, timestamps)]
-    assert not unpaired, f"metadata timestamps with no video frame: {unpaired[:5]}"

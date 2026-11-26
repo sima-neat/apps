@@ -130,10 +130,13 @@ route; see [routes.md](routes.md).
 The constructor:
 
 1. Checks the archive and unpacks it. Unpacked models live in a
-   `proc_run_<random>` folder for the process, in the first writable place
-   among: an NVMe drive, `/data/simaai/coprocessing/models/`,
-   `/tmp/simaai/coprocessing/models` and `./tmp/model_extract`. Loading the
-   same archive again in one process reuses the unpacked copy.
+   `proc_run_<random>` folder for the process. When `SIMA_MPK_EXTRACT_ROOT`
+   is set, that folder is used, and loading fails if it is not writable.
+   Otherwise it is the first writable place among: a mounted NVMe drive,
+   `/data/simaai/coprocessing/models/`,
+   `$TMPDIR/simaai/coprocessing/models` (`/tmp` when `TMPDIR` is unset) and
+   `./tmp/model_extract`. Loading the same archive again in one process
+   reuses the unpacked copy.
 2. Reads the contract and plans the route from it and your `Options`.
 3. Prints `Model loaded: <name> (package storage: <kind>, runtime package path:
    <folder>)` unless `verbose` is `quiet()`.
@@ -336,4 +339,4 @@ These calls ask a loaded model about itself. All of them except
   `VerboseOptions`, `ProcessCvuOptions`, `ProcessMlaOptions`,
   `AdvancedExecutionOptions`, `Model`, `ModelRunner`, `TensorConstraint`,
   `ModelInfo` and `PreprocessRequirements`
-- Core commit: `6ed16525`
+- Core commit: `961c9375`
