@@ -69,14 +69,19 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
   ```yaml
   input:
-    type: rtsp        # rtsp, http, or usb. For http, replace codec, tcp, and latency_ms with
-                      # ssl_strict. For usb, set source to a camera ID, and width, height, and
-                      # fps to one of its modes.
+    # rtsp, http, or usb. For http, delete codec and rtsp, set source to the MJPEG URL and
+    # width, height, and fps to the stream's, and add "app:" with "ssl_strict: true". For usb,
+    # delete codec and rtsp, set source to a camera ID, and set width, height, and fps to one
+    # of its modes.
+    type: rtsp
     source: rtsp://<host>:<port>/<stream>
     codec: h264       # h264, h265, or mjpeg.
-    width: 0          # 0 reads the stream's frame size and rate with a probe. Set them only
-    height: 0         # for a stream that does not report them.
+    width: 0          # 0 reads the stream's frame size and rate with a probe.
+    height: 0         # Set them only for a stream that does not report them.
     fps: 0
+    rtsp:
+      tcp: true       # Receive RTSP over TCP.
+      latency_ms: 100 # RTSP jitter buffer.
   ```
 
   The code reads only the keys of the configured type.
