@@ -18,11 +18,8 @@
 
 #include "neat.h"
 #include "sima_examples/config.h"
-#include "sima_examples/detection_overlay.h"
 #include "sima_examples/image_folder.h"
-#include "sima_examples/image_io.h"
 #include "sima_examples/labels.h"
-#include "utils/annotate.h"
 #include "utils/images.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -96,7 +93,7 @@ void annotate_images(neat::Model::Runner& runner, const std::vector<fs::path>& p
     const fs::path& path = paths[index];
     const cv::Mat image = sima_examples::read_image(path);
     const std::vector<neat::Box> boxes = detect(runner, image, max_detections);
-    const fs::path output_path = output_dir / annotate::output_name(path);
+    const fs::path output_path = output_dir / sima_examples::output_name(path, "_detr");
     if (!cv::imwrite(output_path.string(), sima_examples::draw_detections(image, boxes, labels))) {
       throw std::runtime_error("cannot write " + output_path.string());
     }

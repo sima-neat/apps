@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "sima_examples/image_io.h"
+#include "sima_examples/image_folder.h"
 
 #include <opencv2/core.hpp>
 

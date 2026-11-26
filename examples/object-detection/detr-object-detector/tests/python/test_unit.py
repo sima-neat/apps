@@ -1,6 +1,6 @@
 """Unit tests for the DETR object detector: the checks the application leaves to its config, and
 the image size and annotated names it handles. tests/cpp/test_unit.cpp runs the same checks in
-C++, and also the cases for the shared C++ image_folder, image_io, and detection_overlay.
+C++, and also the cases for the shared C++ image_folder.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 APPS_ROOT = EXAMPLE_DIR.parents[2]
 
 main_module = load_example_main(EXAMPLE_DIR, "detr_object_detector_main")
-annotate = main_module.annotate
+output_name = main_module.output_name
 image_paths = main_module.image_paths
 images = main_module.images
 
@@ -57,4 +57,4 @@ def test_largest_image_size_takes_the_widest_and_the_tallest_image(tmp_path):
 
 
 def test_output_name_marks_the_detr_result():
-    assert annotate.output_name(Path("in/street.jpg")) == "street_detr.png"
+    assert output_name(Path("in/street.jpg"), "_detr") == "street_detr.png"

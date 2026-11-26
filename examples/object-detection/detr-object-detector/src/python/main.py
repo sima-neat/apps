@@ -23,11 +23,9 @@ else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
 from sima_examples.config import Config
-from sima_examples.detection_overlay import draw_detections
-from sima_examples.image_folder import image_paths
-from sima_examples.image_io import read_image
+from sima_examples.image_folder import draw_detections, image_paths, output_name, read_image
 from sima_examples.labels import load_labels
-from utils import annotate, images
+from utils import images
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
@@ -89,7 +87,7 @@ def annotate_images(
     for index, path in enumerate(paths, start=1):
         image = read_image(path)
         boxes = detect(runner, image, max_detections)
-        output_path = output_dir / annotate.output_name(path)
+        output_path = output_dir / output_name(path, "_detr")
         if not cv2.imwrite(str(output_path), draw_detections(image, boxes, labels)):
             raise OSError(f"cannot write {output_path}")
         print(f"[{index}/{len(paths)}] {path.name}: {len(boxes)} detections -> {output_path.name}")
