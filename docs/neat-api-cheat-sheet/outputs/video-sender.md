@@ -179,4 +179,3 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 
 - C++ headers: `include/nodes/groups/VideoSender.h`, `include/nodes/sima/SimaEncode.h`, `include/nodes/io/UdpOutput.h`, `include/nodes/groups/RtspCodec.h`
 - Python binding: `python/src/module.cpp`, `VideoSenderOptions`, `VideoSenderRtpOptions`, `VideoSenderEncoderOptions`, `SimaEncodeOptions`, `SimaEncodeType`, `RtspCodec`, `UdpOutputOptions`, `groups.video_sender`, `nodes.sima_encode`, `nodes.udp_output`
-- Core commit: `3f8b8d04`

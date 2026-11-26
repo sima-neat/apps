@@ -186,4 +186,3 @@ The `CapsRaw` header lists `SysMem` and `MlaShm` as memory examples, but
 
 - C++ header: `include/nodes/sima/SimaDecode.h` (`SimaDecodeType`, `SimaDecodeOptions`, `SimaDecode`), `include/nodes/common/Caps.h` (`CapsRaw`, `CapsNV12SysMem`, `CapsI420`), `include/contracts/ContractTypes.h` (`CapsMemory`), `include/nodes/common/VideoConvert.h`, `include/nodes/common/VideoScale.h`, `include/nodes/common/VideoRate.h`, `include/builder/NextCpuPolicy.h` (APU)
 - Python binding: `python/src/module.cpp`, `SimaDecodeType`, `SimaDecodeOptions`, `CapsMemory`, `nodes.sima_decode`, `nodes.caps_raw`, `nodes.format_filter`, `nodes.caps_nv12_sys_mem`, `nodes.video_convert`, `nodes.video_scale`, `nodes.video_rate`
-- Core commit: `7e5317be`
