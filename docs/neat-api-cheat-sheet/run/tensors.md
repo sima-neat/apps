@@ -240,4 +240,3 @@ not. Cast before pushing.
   `nb::enum_<TensorMemory>`, `nb::enum_<OutputMemory>`;
   `python/pyneat/_wrappers.py` for `from_numpy`, `to_numpy`, `from_torch`,
   `to_torch`, `from_dlpack`, `from_list`
-- Core commit: `7e5317be`

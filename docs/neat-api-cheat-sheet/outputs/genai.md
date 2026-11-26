@@ -352,4 +352,3 @@ No shipped example uses C++, `VisionLanguageModel`, `GenAIModel`,
 
 - C++ header: `include/genai/GenAIServer.h`, `include/genai/ASRModel.h`, `include/genai/VisionLanguageModel.h`, `include/genai/GenAIModel.h`, `include/genai/GenAIOptions.h`, `include/genai/GenAITypes.h`, `include/genai/GenAIValueTypes.h`, `include/genai/GraphFragments.h`, `include/neat/genai.h`
 - Python binding: `python/src/module.cpp`, `GenAIServer`, `GenAIServerOptions`, `GenAIModel`, `VisionLanguageModel`, `ASRModel`, `GenerationRequest`, `GenerationResult`, `GenerationStream`, `TokenSample`, `GenerationMetrics`, `ChatMessage`, `ImageList`, `GenAITask`, `ASRTask`, `genai.VisionLanguageOptions`, `genai.SpeechTranscriberOptions`, `genai.graphs.vision_language`, `genai.graphs.speech_transcriber`
-- Core commit: `3f8b8d04`

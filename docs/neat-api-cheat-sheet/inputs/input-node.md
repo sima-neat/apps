@@ -195,4 +195,3 @@ does.
 
 - C++ header: `include/nodes/io/Input.h` (`Input`, `InputOptions`, `InputMemoryPolicy`, `PreprocessMetaTemplate`), `include/pipeline/PayloadType.h` (`PayloadType`)
 - Python binding: `python/src/module.cpp`, `InputOptions`, `InputMemoryPolicy`, `PayloadType`, `PreprocessMetaTemplate`, `nodes.input`
-- Core commit: `b1f9556c`

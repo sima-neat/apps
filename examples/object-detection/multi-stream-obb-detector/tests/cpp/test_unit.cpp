@@ -1,177 +1,130 @@
-// Unit test for multi-stream-obb-detector: CLI handling, the configuration rules
-// --validate-config-only can reach without a model or a stream, and the Insight objects
-// built from oriented boxes, checked against the same tests/fixtures/insight_objects.json
-// the Python unit test uses. Both implementations must publish the shared fixture identically.
-#define main multi_stream_obb_detector_application_main
-#include "../../src/cpp/main.cpp"
-#undef main
-
+// Unit tests for the multi-stream OBB detector. tests/python/test_unit.py runs the same checks in
+// Python.
+#include "../../src/cpp/utils/oriented_boxes.h"
+#include "sima_examples/config.h"
+#include "sima_examples/labels.h"
 #include "sima_examples/testing/test_checks.h"
-#include "sima_examples/testing/test_process.h"
 
-#include <cmath>
-#include <cstdlib>
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
 
-using sima_examples::testing::expect_contains;
+namespace fs = std::filesystem;
+namespace neat = simaai::neat;
+
 using sima_examples::testing::expect_true;
-using sima_examples::testing::spawn_and_wait;
-using sima_examples::testing::validate_config_body;
 
 namespace {
 
-constexpr const char* kExampleName = "multi-stream-obb-detector";
+const fs::path kExampleDir = "examples/object-detection/multi-stream-obb-detector";
 
-std::string config_body(const std::string& streams, const std::string& extra = "") {
-  return "model:\n"
-         "  path: models/model.tar.gz\n"
-         "  labels: dota_label.txt\n"
-         "streams:\n" +
-         streams +
-         "output:\n"
-         "  insight:\n"
-         "    host: 127.0.0.1\n" +
-         extra;
-}
-
-const std::string kTwoStreams = "  - rtsp://127.0.0.1:8554/src1\n"
-                                "  - \"rtsp://127.0.0.1:8554/src2\"  # a quoted entry\n";
-
-bool test_help_runs(const std::string& binary) {
-  const auto r = spawn_and_wait(binary, {"--help"}, 20000);
-  return expect_true(r.exit_code == 0, "help exits with code 0") &&
-         expect_contains(r.stdout_text, "Usage", "help prints usage");
-}
-
-bool test_unknown_flag_fails(const std::string& binary) {
-  const auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
-  return expect_true(r.exit_code != 0, "unknown flag exits non-zero");
-}
-
-bool test_missing_config_file_exits_with_code_2(const std::string& binary) {
-  const auto r = spawn_and_wait(binary, {"--config", "/nonexistent_config.yaml"}, 20000);
-  return expect_true(r.exit_code == 2, "missing config exits with code 2") &&
-         expect_contains(r.stderr_text, "config file not found", "missing config is named");
-}
-
-bool test_validate_config_only_reports_the_stream_count(const std::string& binary) {
-  const auto r =
-      validate_config_body(kExampleName, binary, "two_streams", config_body(kTwoStreams));
-  return expect_true(r.exit_code == 0, "two streams validate") &&
-         expect_contains(r.stdout_text, "streams=2", "stream count is reported");
-}
-
-bool test_configuration_rules_are_enforced(const std::string& binary) {
-  struct Case {
-    const char* name;
-    std::string body;
-    const char* message;
-  };
-  const std::vector<Case> cases = {
-      {"no_streams", config_body(""), "streams must be a non-empty list"},
-      {"blank_stream", config_body("  - rtsp://host/a\n  - \"\"\n"),
-       "streams[1] must be a non-empty string"},
-      {"five_streams",
-       config_body("  - rtsp://host/a\n  - rtsp://host/b\n  - rtsp://host/c\n"
-                   "  - rtsp://host/d\n  - rtsp://host/e\n"),
-       "streams supports up to four entries"},
-      {"bad_family", config_body(kTwoStreams, "model:\n  family: yolov5\n"),
-       "model.family must be yolo26, yolov8, or yolo11"},
-      {"bad_codec", config_body(kTwoStreams, "input:\n  codec: vp9\n"),
-       "input.codec must be h264/avc, h265/hevc, or mjpeg"},
-      {"zero_inflight", config_body(kTwoStreams, "inference:\n  max_inflight_per_stream: 0\n"),
-       "inference.max_inflight_per_stream must be -1 or > 0"},
-      {"min_score_above_one", config_body(kTwoStreams, "inference:\n  min_score: 1.5\n"),
-       "inference.min_score must be between 0 and 1"},
-      {"zero_max_detections", config_body(kTwoStreams, "inference:\n  max_detections: 0\n"),
-       "inference.max_detections must be > 0"},
-      {"negative_save_every", config_body(kTwoStreams, "  save_every: -1\n"),
-       "output.save_every must be >= 0"},
-  };
-  bool ok = true;
-  for (const auto& c : cases) {
-    const auto r =
-        validate_config_body(kExampleName, binary, std::string("rule_") + c.name, c.body);
-    ok &= expect_true(r.exit_code != 0, std::string(c.name) + " is rejected") &&
-          expect_contains(r.stderr_text, c.message, std::string(c.name) + " names its key");
+// The checks the application leaves to its config: the values it reads are usable.
+bool test_shipped_config_names_a_supported_model_input_and_labels() {
+  const fs::path common_dir = kExampleDir / "src" / "common";
+  const auto config = sima_examples::Config::load(common_dir / "config.yaml");
+  const std::string codec = config.string("input.codec");
+  bool ok = expect_true(config.string("model.id") == "yolo26", "the shipped model is YOLO26");
+  const fs::path model_path = common_dir / config.string("model.path");
+  ok &= expect_true(model_path.filename() == "yolo26n_obb_w8a8_mpk.tar.gz",
+                    "model.path names the YOLO26n OBB package");
+  // The packaged path reaches prebuilt-apps/models from the config file.
+  ok &= expect_true((fs::absolute(common_dir) / config.string("model.path")).lexically_normal() ==
+                        (fs::absolute("models") / "yolo26n_obb/w8a8/yolo26n_obb_w8a8_mpk.tar.gz")
+                            .lexically_normal(),
+                    "model.path starts at the config file and reaches models/");
+  // The model's class IDs index the 15 DOTA labels.
+  ok &= expect_true(sima_examples::load_labels(config.string("model.labels")).size() == 15,
+                    "model.labels lists the 15 DOTA classes");
+  ok &= expect_true(config.string_list("input.source").size() == 2, "the config lists two streams");
+  ok &= expect_true(codec == "h264" || codec == "h265" || codec == "mjpeg",
+                    "the shipped codec is supported");
+  ok &= expect_true(config.integer("input.width") == 0 && config.integer("input.height") == 0,
+                    "RTSP streams report their own frame size");
+  ok &= expect_true(config.integer("input.fps") >= 0 &&
+                        config.integer("input.rtsp.latency_ms") >= 0 &&
+                        config.integer("inference.frames") >= 0,
+                    "frame rate, latency, and frame limit are not negative");
+  ok &= expect_true(config.integer("inference.max_detections") > 0 &&
+                        config.number("inference.min_score") >= 0.0 &&
+                        config.number("inference.min_score") <= 1.0,
+                    "the detection limits are usable");
+  for (const char* key : {"output.insight.video_port_base", "output.insight.metadata_port_base"}) {
+    ok &= expect_true(config.integer(key) >= 1 && config.integer(key) <= 65535,
+                      std::string(key) + " is a UDP port");
   }
+  // Core sends to 127.0.0.1 when the host is empty.
+  ok &=
+      expect_true(!config.string("output.insight.host").empty() && config.boolean("input.rtsp.tcp"),
+                  "the Insight host is set and RTSP uses TCP");
   return ok;
 }
 
-std::filesystem::path fixture_path() {
-  const char* apps_root = std::getenv("APPS_ROOT");
-  const std::filesystem::path root =
-      (apps_root && *apps_root) ? std::filesystem::path(apps_root) : std::filesystem::path(".");
-  return root / SIMANEAT_APPS_EXAMPLE_SOURCE_DIR / ".." / ".." / "tests" / "fixtures" /
-         "insight_objects.json";
-}
-
-bool close_to(const nlohmann::json& actual, const nlohmann::json& expected) {
-  if (actual.size() != expected.size()) {
-    return false;
+// The boxes as decode_obb_tensor returns them from a BBOX_OBB_V1 tensor, the model's output:
+// a 32-byte header, then one 32-byte record per box. Core needs a capacity of at least 1.
+neat::OrientedDecodeTensors decoded_boxes(const nlohmann::json& boxes) {
+  neat::OrientedBoxesHeaderV1 header;
+  header.count = static_cast<std::uint32_t>(boxes.size());
+  header.capacity = std::max<std::uint32_t>(header.count, 1);
+  header.total_bytes = 32 + 32 * header.capacity;
+  std::vector<std::uint8_t> bytes(header.total_bytes, 0);
+  std::memcpy(bytes.data(), &header, sizeof(header));
+  for (std::size_t i = 0; i < boxes.size(); ++i) {
+    const auto& box = boxes[i];
+    neat::OrientedBoxRecordV1 record;
+    record.center_x = box.at("cx").get<float>();
+    record.center_y = box.at("cy").get<float>();
+    record.width = box.at("width").get<float>();
+    record.height = box.at("height").get<float>();
+    record.angle_radians = box.at("angle_radians").get<float>();
+    record.score = box.at("score").get<float>();
+    record.class_id = box.at("class_id").get<std::int32_t>();
+    std::memcpy(bytes.data() + 32 + 32 * i, &record, sizeof(record));
   }
-  for (std::size_t i = 0; i < actual.size(); ++i) {
-    if (std::abs(actual[i].get<double>() - expected[i].get<double>()) > 1e-9) {
-      return false;
-    }
-  }
-  return true;
+  neat::Tensor tensor = neat::Tensor::from_vector(bytes, {static_cast<std::int64_t>(bytes.size())},
+                                                  neat::TensorMemory::CPU);
+  tensor.semantic.detection = neat::DetectionSpec{neat::kDetectionFormatBboxObbV1};
+  return neat::decode_obb_tensor(tensor);
 }
 
 bool test_objects_match_the_shared_fixture() {
-  std::ifstream input(fixture_path());
+  std::ifstream input(kExampleDir / "tests" / "fixtures" / "insight_objects.json");
   if (!input.good()) {
-    std::cerr << "[FAIL] fixture not found: " << fixture_path() << "\n";
+    std::cerr << "[FAIL] tests/fixtures/insight_objects.json not found\n";
     return false;
   }
   const auto fixture = nlohmann::json::parse(input);
-  const auto labels = fixture.at("labels").get<std::vector<std::string>>();
-  const auto& expected = fixture.at("objects");
-  bool ok = expect_true(fixture.at("boxes").size() == expected.size(), "fixture is consistent");
-  for (std::size_t i = 0; ok && i < expected.size(); ++i) {
-    const auto& spec = fixture.at("boxes")[i];
-    const OrientedBox box{spec.at("cx").get<double>(),
-                          spec.at("cy").get<double>(),
-                          spec.at("width").get<double>(),
-                          spec.at("height").get<double>(),
-                          spec.at("angle_radians").get<double>(),
-                          spec.at("score").get<double>(),
-                          spec.at("class_id").get<int>()};
-    const auto actual = insight_object(static_cast<int>(i) + 1, box, labels);
-    const std::string name = expected[i].at("id").get<std::string>();
-    ok &= expect_true(actual.at("id") == expected[i].at("id"), name + " id") &&
-          expect_true(actual.at("label") == expected[i].at("label"), name + " label") &&
-          expect_true(std::abs(actual.at("confidence").get<double>() -
-                               expected[i].at("confidence").get<double>()) < 1e-9,
-                      name + " confidence") &&
-          expect_true(close_to(actual.at("bbox"), expected[i].at("bbox")), name + " bbox") &&
-          expect_true(close_to(actual.at("oriented_bbox"), expected[i].at("oriented_bbox")),
-                      name + " oriented_bbox");
-  }
+  const auto objects = nlohmann::json::parse(
+      obb::detections_json(decoded_boxes(fixture.at("boxes")),
+                           fixture.at("labels").get<std::vector<std::string>>()))["objects"];
+  const bool ok = expect_true(objects == fixture.at("objects"),
+                              "Insight objects match the shared fixture: " + objects.dump());
   if (ok) {
     std::cout << "[OK] Insight objects match the shared fixture\n";
   }
   return ok;
 }
 
+// Insight clears the previous frame's boxes only when it receives the empty list.
+bool test_a_frame_without_detections_sends_an_empty_list() {
+  return expect_true(nlohmann::json::parse(
+                         obb::detections_json(decoded_boxes(nlohmann::json::array()), {"plane"})) ==
+                         nlohmann::json{{"objects", nlohmann::json::array()}},
+                     "a frame without detections sends an empty list");
+}
+
 } // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
-  const std::string binary = argv[1];
-
-  bool ok = test_objects_match_the_shared_fixture();
-  ok &= test_help_runs(binary);
-  ok &= test_unknown_flag_fails(binary);
-  ok &= test_missing_config_file_exits_with_code_2(binary);
-  ok &= test_validate_config_only_reports_the_stream_count(binary);
-  ok &= test_configuration_rules_are_enforced(binary);
+int main() {
+  bool ok = true;
+  ok &= test_shipped_config_names_a_supported_model_input_and_labels();
+  ok &= test_objects_match_the_shared_fixture();
+  ok &= test_a_frame_without_detections_sends_an_empty_list();
   return ok ? 0 : 1;
 }

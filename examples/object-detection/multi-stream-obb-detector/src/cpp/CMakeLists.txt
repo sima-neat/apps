@@ -12,19 +12,15 @@ include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
 sima_neat_apps_module(
   "multi-stream-obb-detector"
+  OUTPUT_TARGET_VAR OBB_TARGET
   UNIT_TEST
   E2E_TEST
-  OUTPUT_TARGET_VAR MULTISTREAM_OBB_DETECTOR_TARGET
 )
 
-# The unit test compiles the application's helpers, so it needs the application's build setup.
+set(OBB_UTILS "${CMAKE_CURRENT_LIST_DIR}/utils/oriented_boxes.cpp")
+target_sources(${OBB_TARGET} PRIVATE ${OBB_UTILS})
+
+# The unit test checks the Insight objects in process, so it compiles the utils too.
 if (TARGET multi-stream-obb-detector_unit_test)
-  target_compile_definitions(multi-stream-obb-detector_unit_test
-    PRIVATE
-      $<TARGET_PROPERTY:${MULTISTREAM_OBB_DETECTOR_TARGET},COMPILE_DEFINITIONS>
-  )
-  target_link_libraries(multi-stream-obb-detector_unit_test
-    PRIVATE
-      SimaNeatApps::support_runtime
-  )
+  target_sources(multi-stream-obb-detector_unit_test PRIVATE ${OBB_UTILS})
 endif()
