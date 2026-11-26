@@ -1,9 +1,0 @@
-id: neat-application-optimizer
-name: Neat Application Optimizer
-version: 0.1.0
-agents: [codex, claude]
-description: Make a working Neat application faster by measuring it and changing one copy, queue, buffer, or topology choice at a time.
-compatibility:
-  env_types: [sdk, board]
-  env_subtypes: [palette, modalix]
-  min_cli_version: 2.1.1
