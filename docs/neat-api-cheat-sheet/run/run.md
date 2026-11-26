@@ -163,4 +163,3 @@ tears the pipeline down.
 - The preset depths and the sync defaults are runtime behavior, not header
   values. They were read from Core at the commit below and are not part of the
   published API.
-- Core commit: `c68a5241`

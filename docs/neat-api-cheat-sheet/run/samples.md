@@ -198,4 +198,3 @@ arithmetic.
   `nb::enum_<SampleKind>`, `nb::bind_map<SampleAttributes>`,
   `make_tensor_sample`, `make_text_sample`, `make_encoded_sample`;
   `python/pyneat/_wrappers.py`, `Sample.from_encoded`
-- Core commit: `c68a5241`

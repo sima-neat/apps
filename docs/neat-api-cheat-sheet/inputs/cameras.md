@@ -261,4 +261,3 @@ elements run in sync mode, but Core only removes the queues that
 
 - C++ header: `include/nodes/io/CameraInput.h` (`CameraInputOptions`, `CameraInput`, `CameraInputWithCaptureBuffers`), `include/nodes/io/UsbCameraInput.h` (`UsbCameraInputOptions`, `UsbCameraInfo`, `usb_camera_ids`, `usb_camera_info`, `UsbCameraInput`), `include/nodes/groups/HttpMjpegDecodedInput.h` (`HttpMjpegDecodedInputOptions`, `HttpMjpegDecodedInput`), `include/nodes/common/MultipartJpegDemux.h` (`MultipartHeaderCaptureOptions`), `include/builder/NextCpuPolicy.h` (APU)
 - Python binding: `python/src/module.cpp`, `CameraInputOptions`, `UsbCameraInputOptions`, `UsbCameraInfo`, `usb_camera_ids`, `usb_camera_info`, `MultipartHeaderCaptureOptions`, `HttpMjpegDecodedInputOptions`, `HttpMjpegDecodedInputOutputCaps`, `nodes.camera_input`, `nodes.usb_camera_input`, `groups.http_mjpeg_decoded_input`
-- Core commit: `b1f9556c`
