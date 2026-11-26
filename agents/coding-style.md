@@ -107,5 +107,10 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 - Print only what the customer needs to see the run start, progress, and stop. The result
   the reader came for comes first, and every number names what it measures and its unit:
   `inference 3.0 ms`.
-- A comment explains a choice the code cannot show, with its evidence. It describes the code
-  as it is, not its history.
+- Comment only what the code cannot say: why it does something, a constraint the reader would
+  otherwise break, or a Core gap. Never restate what the code does or what a name says.
+- A comment is one line, and two at most. A function or file gets a comment only when its
+  name and signature leave something unclear.
+- Measurements, Core file and line numbers, and how the code got this way go in the pull
+  request description, the cheat sheet, or the skills. A comment may name the issue instead.
+  It describes the code as it is.
