@@ -126,10 +126,7 @@ def detector_link(index: int, streams: int) -> pyneat.GraphLinkOptions:
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     link.stream_id = stream_id(index)
-    # Each stream keeps Core's 4 frames in flight. Core caps all streams at min(4 * streams, 8)
-    # by default, so with one or two streams 4 * streams is that default. With four it is 16,
-    # the old config's max_inflight_total. skills/neat-application-optimizer/references/tuning.md
-    # says to set the cap explicitly.
+    # Core's default total cap is 8, so above two streams each would get fewer than its 4 frames.
     link.max_inflight_total = 4 * streams
     return link
 
