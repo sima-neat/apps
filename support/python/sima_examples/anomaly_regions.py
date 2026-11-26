@@ -1,6 +1,6 @@
-"""FastFlow postprocessing: the defect regions of an anomaly map, as the segments Insight draws.
+"""The defect regions of an anomaly map, as the segments Insight draws.
 
-Mirrors utils/anomaly_regions.h in the C++ implementation, so both send the same metadata.
+Mirrors support/cpp/sima_examples/anomaly_regions.h, so both languages send the same metadata.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ LABEL = "anomaly"
 class RegionOptions:
     width: int  # Frame size the regions are scaled to, in pixels.
     height: int
-    threshold: float  # Map probability at which a pixel counts as anomalous.
+    threshold: float  # Map value at which a pixel counts as anomalous.
     min_region_px: int  # Smallest region, in map pixels, that counts as a defect.
     max_regions: int  # Regions kept, highest score first.
 
@@ -26,7 +26,7 @@ class RegionOptions:
 @dataclass(frozen=True)
 class Region:
     bbox: tuple[int, int, int, int]  # x, y, width, height, in frame pixels.
-    score: float  # Highest probability inside the region.
+    score: float  # Highest map value inside the region.
     polygon: list[list[int]]  # Outline as [x, y] points, in frame pixels.
 
 

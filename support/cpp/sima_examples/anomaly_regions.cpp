@@ -1,7 +1,7 @@
 // Copyright 2026 SiMa Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "anomaly_regions.h"
+#include "sima_examples/anomaly_regions.h"
 
 #include <nlohmann/json.hpp>
 #include <opencv2/imgproc.hpp>
@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <utility>
 
-namespace fastflow {
+namespace sima_examples {
 namespace {
 
 constexpr const char* kLabel = "anomaly";
@@ -92,4 +92,4 @@ std::string segments_json(const std::vector<Region>& regions) {
   return nlohmann::json{{"segments", std::move(segments)}}.dump();
 }
 
-} // namespace fastflow
+} // namespace sima_examples

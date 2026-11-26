@@ -74,8 +74,6 @@ run = graph.build([seed])
 run.push([tensor])
 ```
 
-Complete flow: [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/)
-
 To feed a model, take the options from the model instead of writing them by
 hand: `model.input_appsrc_options(true)` returns the format, size, memory
 policy and preprocessing metadata that the model expects. See
@@ -183,7 +181,6 @@ does.
 
 ## Used in
 
-- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (BGR or NV12 frames to Insight, named endpoints)
 - [face-detector](../../../examples/face-detection/face-detector/) (`model.input_appsrc_options(true)`)
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`model.input_appsrc_options(true)`)
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`model.input_appsrc_options(false)`, one input per model)

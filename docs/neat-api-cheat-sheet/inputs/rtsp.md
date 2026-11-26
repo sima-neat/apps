@@ -211,7 +211,7 @@ parser. The tables above describe what Core does.
 - [yolo26-tiny-drone-tracker](../../../examples/tracking/yolo26-tiny-drone-tracker/) (`RtspEncodedInput` with `SimaDecode`, one to four streams, encoded stream to Insight)
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`RtspEncodedInput`)
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`RtspEncodedInput`)
-- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (`RtspDecodedInput`)
+- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (`RtspEncodedInput` with `SimaDecode`, encoded stream to Insight)
 - [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/) (`RtspDecodedInput`, `output_caps`)
 
 ## Source

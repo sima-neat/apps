@@ -1,220 +1,129 @@
-// PatchCore CLI validation and direct NV12 overlay checks.
-#include "../../src/cpp/patchcore_overlay.h"
-#include "sima_examples/testing/test_config.h"
-#include "sima_examples/testing/test_process.h"
+// Unit tests for the PatchCore anomaly detector: the checks the application leaves to its config,
+// and the host-side memory bank on hand-made patch features. tests/python/test_unit.py runs the
+// same checks in Python.
 
+#include "../../src/cpp/utils/memory_bank.h"
+#include "sima_examples/config.h"
+#include "sima_examples/testing/test_checks.h"
+
+#include <opencv2/core.hpp>
+
+#include <cmath>
 #include <filesystem>
-#include <iostream>
 #include <string>
+#include <vector>
 
-using sima_examples::testing::ProcessResult;
-using sima_examples::testing::spawn_and_wait;
+namespace fs = std::filesystem;
+
+using sima_examples::testing::expect_true;
 
 namespace {
-int check_nv12_overlays() {
-  cv::Mat frame(336, 224, CV_8U, cv::Scalar(128));
-  frame.rowRange(0, 224).setTo(100);
-  patchcore::AnomalyResult result;
-  result.score_map.assign(224 * 224, 10);
-  const cv::Mat original = frame.clone();
-  patchcore::draw_nv12_overlay(frame, result, 224, 224, 4, 0.45, 10, 20);
-  if (cv::norm(frame, original, cv::NORM_INF) != 0) {
-    std::cerr << "[FAIL] normal NV12 frame was changed\n";
-    return 1;
+
+const fs::path kCommonDir = "examples/anomaly-detection/patchcore-anomaly-detector/src/common";
+
+// The checks the application leaves to its config: the values it reads are usable.
+bool test_shipped_config_names_a_supported_model_and_input() {
+  const auto config = sima_examples::Config::load(kCommonDir / "config.yaml");
+  const std::string type = config.string("input.type");
+  const std::string codec = config.string("input.codec");
+  bool ok =
+      expect_true(type == "rtsp" || type == "image_dir", "the shipped input.type is supported");
+  ok &= expect_true(codec == "h264" || codec == "h265" || codec == "mjpeg",
+                    "the shipped codec is supported");
+  ok &= expect_true(fs::path(config.string("model.path")).filename() ==
+                        "patchcore_wide_resnet50_2_bf16_mla.tar.gz",
+                    "model.path names the PatchCore package");
+  ok &= expect_true(
+      config.integer("input.width") >= 0 && config.integer("input.height") >= 0 &&
+          config.integer("input.fps") >= 0 && config.integer("input.rtsp.latency_ms") >= 0 &&
+          config.integer("inference.frames") >= 0 && config.integer("inference.max_detections") > 0,
+      "the shipped sizes, latency, and counts are in range");
+  for (const std::string key :
+       {"output.insight.video_port_base", "output.insight.metadata_port_base"}) {
+    ok &= expect_true(config.integer(key) >= 1 && config.integer(key) <= 65535, key + " is a port");
   }
-  result.score_map[0] = result.score_map[1] = result.score_map[224] = result.score_map[225] = 40;
-  patchcore::draw_nv12_overlay(frame, result, 224, 224, 0, 0.45, 10, 20);
-  cv::Mat color_bgr(2, 2, CV_8UC3, cv::Scalar(0, 0, 128)), color_yuv;
-  cv::cvtColor(color_bgr, color_yuv, cv::COLOR_BGR2YUV_I420);
-  const auto* color = color_yuv.ptr<uint8_t>();
-  cv::Mat expected = original.clone();
-  expected(cv::Rect(0, 0, 2, 2)).setTo(cv::saturate_cast<uint8_t>(0.55 * 100 + 0.45 * color[0]));
-  expected.at<uint8_t>(224, 0) = cv::saturate_cast<uint8_t>(0.55 * 128 + 0.45 * color[4]);
-  expected.at<uint8_t>(224, 1) = cv::saturate_cast<uint8_t>(0.55 * 128 + 0.45 * color[5]);
-  if (cv::norm(frame, expected, cv::NORM_INF) != 0) {
-    std::cerr << "[FAIL] NV12 highlight changed the wrong pixels or colors\n";
-    return 1;
-  }
-  std::cout << "[OK] NV12 heatmap preserves normal pixels and blends luma/chroma\n";
-  return 0;
+  // Core sends to 127.0.0.1 when the host is empty.
+  ok &=
+      expect_true(!config.string("output.insight.host").empty() && config.boolean("input.rtsp.tcp"),
+                  "the shipped Insight host is set and RTSP runs over TCP");
+  return ok;
 }
+
+bool test_shipped_calibration_settings_are_in_range() {
+  const auto config = sima_examples::Config::load(kCommonDir / "config.yaml");
+  const fs::path nominal = config.string("app.nominal_images_dir");
+  std::size_t images = 0;
+  for (const auto& entry : fs::directory_iterator(nominal)) {
+    images += entry.path().extension() == ".png" ? 1 : 0;
+  }
+  bool ok = expect_true(config.number("app.coreset_ratio") > 0.0 &&
+                            config.number("app.coreset_ratio") <= 1.0 &&
+                            config.number("app.threshold_percentile") >= 0.0 &&
+                            config.number("app.threshold_percentile") <= 100.0 &&
+                            config.number("app.threshold_margin") >= 1.0,
+                        "the shipped calibration settings are in range");
+  ok &= expect_true(images >= 5, "the nominal set holds enough images to hold every 5th one out");
+  // Outlined images written among the nominal images would be calibrated on next time.
+  ok &= expect_true(!fs::equivalent(nominal, ".") &&
+                        fs::weakly_canonical(nominal) !=
+                            fs::weakly_canonical(config.string("output.dir")) &&
+                        fs::weakly_canonical(nominal) !=
+                            fs::weakly_canonical(config.string("app.memory_bank_dir")),
+                    "output.dir and app.memory_bank_dir are not the nominal set");
+  return ok;
+}
+
+bool test_anomaly_map_covers_the_frame_and_keeps_the_peak_in_place() {
+  patchcore::AnomalyResult result;
+  result.score_map.assign(28 * 28, 0.0F);
+  result.score_map[27] = 10.0F; // Row 0, the last column.
+  const cv::Mat map = patchcore::anomaly_map(result, 28, 28, 224, 4.0);
+  cv::Point peak;
+  cv::minMaxLoc(map, nullptr, nullptr, nullptr, &peak);
+  return expect_true(map.rows == 224 && map.cols == 224 && map.type() == CV_32FC1 && peak.y < 16 &&
+                         peak.x > 208,
+                     "the anomaly map is 224x224 with the peak in its corner");
+}
+
+bool test_identical_patches_score_zero_and_a_far_one_scores_high() {
+  patchcore::PatchEmbeddings normal{2, 2, 4, std::vector<float>(16, 0.0F)};
+  for (int patch = 0; patch < 4; ++patch) {
+    normal.values[patch * 4 + patch] = 1.0F;
+  }
+  const auto bank = patchcore::MemoryBank::build({normal}, 1.0, 0);
+  bool ok = expect_true(bank.size() == 4U, "a ratio of 1 keeps every patch");
+  const auto same = bank.score(normal, 1);
+  ok &= expect_true(same.image_score < 1e-5F, "the bank's own patches score 0");
+  auto defect = normal;
+  defect.values[0] = 5.0F;
+  const auto far = bank.score(defect, 1);
+  ok &= expect_true(std::abs(far.image_score - 4.0F) < 1e-4F && far.score_map[0] == far.image_score,
+                    "a patch 4 away from the bank scores 4 at its place");
+  return ok;
+}
+
+bool test_bank_meta_round_trips() {
+  patchcore::BankMeta meta;
+  meta.model_sha256 = std::string(64, 'a');
+  meta.threshold_value = 12.5;
+  meta.has_patch_threshold = true;
+  meta.patch_threshold_value = 8.25;
+  const fs::path path = fs::temp_directory_path() / "patchcore_unit_bank_meta.json";
+  patchcore::save_bank_meta(path, meta);
+  const auto loaded = patchcore::load_bank_meta(path);
+  fs::remove(path);
+  return expect_true(loaded.model_sha256 == meta.model_sha256 && loaded.threshold_value == 12.5 &&
+                         loaded.has_patch_threshold && loaded.patch_threshold_value == 8.25,
+                     "bank_meta.json keeps both thresholds");
+}
+
 } // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
-  const std::string binary = argv[1];
-  int failures = check_nv12_overlays();
-
-  // Test 1: help exits successfully and prints usage.
-  {
-    auto r = spawn_and_wait(binary, {"--help"}, 20000);
-    if (r.exit_code != 0) {
-      std::cerr << "[FAIL] help: expected exit 0, got " << r.exit_code << "\n";
-      ++failures;
-    } else if (r.stdout_text.find("Usage") == std::string::npos) {
-      std::cerr << "[FAIL] help: stdout does not contain Usage\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] help prints usage\n";
-    }
-  }
-
-  // Test 2: unknown flag is rejected before model/runtime startup.
-  {
-    auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
-    if (r.exit_code != 1) {
-      std::cerr << "[FAIL] unknown flag: expected exit 1, got " << r.exit_code << "\n";
-      ++failures;
-    } else if (r.stderr_text.find("unknown argument") == std::string::npos) {
-      std::cerr << "[FAIL] unknown flag: stderr does not explain the failure\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] unknown flag correctly rejected\n";
-    }
-  }
-
-  // Test 3: missing config path is rejected.
-  {
-    auto r = spawn_and_wait(binary, {"--config"}, 20000);
-    if (r.exit_code != 1) {
-      std::cerr << "[FAIL] missing config path: expected exit 1, got " << r.exit_code << "\n";
-      ++failures;
-    } else if (r.stderr_text.find("--config requires a path") == std::string::npos) {
-      std::cerr << "[FAIL] missing config path: stderr does not explain the failure\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] missing config path correctly rejected\n";
-    }
-  }
-
-  // Test 4: nonexistent config path is rejected.
-  {
-    auto r = spawn_and_wait(binary, {"--config", "/nonexistent/patchcore-config.yaml"}, 20000);
-    if (r.exit_code != 1) {
-      std::cerr << "[FAIL] bad config: expected exit 1, got " << r.exit_code << "\n";
-      ++failures;
-    } else if (r.stderr_text.find("failed to open config") == std::string::npos) {
-      std::cerr << "[FAIL] bad config: stderr does not explain the failure\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] bad config path correctly rejected\n";
-    }
-  }
-
-  // Test 5: --validate-config-only accepts the shipped default config.
-  {
-    auto r = spawn_and_wait(binary, {"--validate-config-only"}, 20000);
-    if (r.exit_code != 0) {
-      std::cerr << "[FAIL] validate-config-only: expected exit 0, got " << r.exit_code << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] --validate-config-only accepts the shipped default config\n";
-    }
-  }
-
-  // Test 6: memory bank missing (a valid config, but --calibrate was never run)
-  // is rejected with a clear, actionable message rather than a crash.
-  {
-    const std::string out_dir =
-        sima_examples::testing::create_test_output_dir("patchcore-anomaly-detector", "test_missing_bank_rejected");
-    if (out_dir.empty()) {
-      ++failures;
-    } else {
-      const std::filesystem::path run_dir = std::filesystem::path(out_dir).parent_path();
-      const std::filesystem::path config_path = run_dir / "config.yaml";
-      sima_examples::testing::write_e2e_config(
-          "patchcore-anomaly-detector", config_path,
-          {
-              {"model.path", "dummy-model.tar.gz"},
-              {"memory_bank.path", (run_dir / "memory_bank.npy").string()},
-              {"memory_bank.meta_path", (run_dir / "bank_meta.json").string()},
-          });
-
-      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-      if (r.exit_code != 2) {
-        std::cerr << "[FAIL] missing bank: expected exit 2, got " << r.exit_code << "\n";
-        ++failures;
-      } else if (r.stderr_text.find("memory bank not found") == std::string::npos) {
-        std::cerr << "[FAIL] missing bank: stderr does not explain the failure\n";
-        ++failures;
-      } else {
-        std::cout << "[OK] missing memory bank correctly rejected\n";
-      }
-      sima_examples::testing::remove_dir(out_dir);
-    }
-  }
-
-  // Test 7: a bank file pointing at the model package is rejected, so --calibrate can
-  // never overwrite the model.
-  {
-    const std::string out_dir = sima_examples::testing::create_test_output_dir(
-        "patchcore-anomaly-detector", "test_bank_aliasing_model_rejected");
-    if (out_dir.empty()) {
-      ++failures;
-    } else {
-      const std::filesystem::path run_dir = std::filesystem::path(out_dir).parent_path();
-      const std::filesystem::path config_path = run_dir / "config.yaml";
-      const std::string model_path = (run_dir / "model.tar.gz").string();
-      sima_examples::testing::write_e2e_config(
-          "patchcore-anomaly-detector", config_path,
-          {
-              {"model.path", model_path},
-              {"memory_bank.path", model_path},
-              {"memory_bank.meta_path", (run_dir / "bank_meta.json").string()},
-          });
-
-      auto r = spawn_and_wait(binary, {"--validate-config-only", "--config", config_path.string()},
-                              20000);
-      if (r.exit_code == 0) {
-        std::cerr << "[FAIL] bank aliasing model: expected a nonzero exit\n";
-        ++failures;
-      } else if (r.stderr_text.find("must not point at model.path") == std::string::npos) {
-        std::cerr << "[FAIL] bank aliasing model: stderr does not explain the failure\n";
-        ++failures;
-      } else {
-        std::cout << "[OK] bank file aliasing the model correctly rejected\n";
-      }
-      sima_examples::testing::remove_dir(out_dir);
-    }
-  }
-
-  // Test 8: output.dir inside the calibration images is rejected, so overlays never
-  // end up among the known-good references.
-  {
-    const std::string out_dir = sima_examples::testing::create_test_output_dir(
-        "patchcore-anomaly-detector", "test_output_in_calibration_dir_rejected");
-    if (out_dir.empty()) {
-      ++failures;
-    } else {
-      const std::filesystem::path run_dir = std::filesystem::path(out_dir).parent_path();
-      const std::filesystem::path config_path = run_dir / "config.yaml";
-      const std::string refs = (run_dir / "refs").string();
-      sima_examples::testing::write_e2e_config(
-          "patchcore-anomaly-detector", config_path,
-          {
-              {"model.path", (run_dir / "model.tar.gz").string()},
-              {"calibration.nominal_images_dir", refs},
-              {"output.dir", refs},
-          });
-
-      auto r = spawn_and_wait(binary, {"--validate-config-only", "--config", config_path.string()},
-                              20000);
-      if (r.exit_code == 0) {
-        std::cerr << "[FAIL] output in calibration dir: expected a nonzero exit\n";
-        ++failures;
-      } else if (r.stderr_text.find("must not be calibration.nominal_images_dir") ==
-                 std::string::npos) {
-        std::cerr << "[FAIL] output in calibration dir: stderr does not explain the failure\n";
-        ++failures;
-      } else {
-        std::cout << "[OK] output.dir inside the calibration images correctly rejected\n";
-      }
-      sima_examples::testing::remove_dir(out_dir);
-    }
-  }
-
-  return failures > 0 ? 1 : 0;
+int main() {
+  bool ok = test_shipped_config_names_a_supported_model_and_input();
+  ok &= test_shipped_calibration_settings_are_in_range();
+  ok &= test_anomaly_map_covers_the_frame_and_keeps_the_peak_in_place();
+  ok &= test_identical_patches_score_zero_and_a_far_one_scores_high();
+  ok &= test_bank_meta_round_trips();
+  return ok ? 0 : 1;
 }

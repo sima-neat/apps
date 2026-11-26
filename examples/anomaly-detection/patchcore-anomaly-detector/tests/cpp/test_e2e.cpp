@@ -1,37 +1,29 @@
-// E2E test for patchcore (C++). Test 1 runs --calibrate against the bundled
-// nominal set, then scores the images in SIMANEAT_APPS_TEST_INPUT_DIR and
-// verifies the overlay output; the held-out test checks verdicts and overlays
-// on the bundled held-out normal and defect images.
+// End-to-end tests: --calibrate builds the bank, the shipped images get the right verdicts, and
+// each RTSP codec reaches Insight as video and defect-region metadata.
+// tests/python/test_e2e.py runs the same cases against main.py.
+
 #include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/source_cases.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
+
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+
 #include <algorithm>
-#include <atomic>
-#include <cerrno>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <map>
-#include <optional>
 #include <regex>
 #include <set>
-#include <sstream>
 #include <string>
-#include <thread>
-#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -39,929 +31,216 @@ using namespace sima_examples::testing;
 
 namespace {
 
-// spawn_and_wait uses execv, not execvp, so a plain "python3" isn't resolved
-// against PATH the way a shell would -- this does that resolution up front.
-std::string resolve_python_bin() {
-  if (const char* env = env_or_null("SIMANEAT_APPS_TEST_PYTHON_BIN")) {
-    return env;
-  }
-  if (const char* path_env = std::getenv("PATH")) {
-    std::stringstream ss(path_env);
-    std::string dir;
-    while (std::getline(ss, dir, ':')) {
-      const fs::path candidate = fs::path(dir) / "python3";
-      if (fs::exists(candidate)) {
-        return candidate.string();
-      }
-    }
-  }
-  return "";
+constexpr const char* kExampleName = "patchcore-anomaly-detector";
+constexpr int kFrames = 60;
+// Relative to the Apps root, which the tests run from.
+const fs::path kDatasetDir = "assets/datasets/patchcore";
+
+// A config whose bank is calibrated into `output_dir` from the shipped nominal set; `input`
+// holds the input section's keys.
+fs::path write_config(const std::string& output_dir, const std::string& model_path,
+                      const std::string& input, int video_port, int metadata_port) {
+  const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
+  std::ofstream(config_path) << "model:\n  path: " << model_path << "\ninput:\n"
+                             << input << "inference:\n  frames: " << kFrames
+                             << "\n  max_detections: 10\noutput:\n  dir: " << output_dir
+                             << "/outlined\n  insight:\n    host: 127.0.0.1\n"
+                             << "    video_port_base: " << video_port
+                             << "\n    metadata_port_base: " << metadata_port
+                             << "\napp:\n  memory_bank_dir: " << output_dir << "/bank"
+                             << "\n  nominal_images_dir: "
+                             << fs::absolute(kDatasetDir / "nominal").string()
+                             << "\n  coreset_ratio: 0.0004\n  threshold_percentile: 99.0"
+                             << "\n  threshold_margin: 1.2\n";
+  return config_path;
 }
 
-int run_calibrate_then_score(const std::string& binary, const std::string& model_path) {
-  const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
-  const std::string input_dir = images_raw ? images_raw : "assets/datasets-test/coco";
-  if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
-    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-                "directory with test images (assets/datasets-test/coco is empty or missing)");
+bool run_ok(const std::string& binary, const std::vector<std::string>& args,
+            const std::string& label, ProcessResult& result) {
+  const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+  result = spawn_and_wait(binary, args, timeout_ms);
+  if (result.exit_code != 0) {
+    std::cerr << "[FAIL] " << label << " exited with " << result.exit_code << "\nstdout:\n"
+              << result.stdout_text << "\nstderr:\n"
+              << result.stderr_text << "\n";
+    return false;
   }
-
-  auto out_dir = create_test_output_dir("patchcore-anomaly-detector", "test_calibrate_then_score");
-  if (out_dir.empty())
-    return 1;
-
-  const fs::path run_dir = fs::path(out_dir).parent_path();
-  const fs::path config_path = run_dir / "config.yaml";
-  const fs::path bank_path = run_dir / "memory_bank.npy";
-  const fs::path meta_path = run_dir / "bank_meta.json";
-
-  write_e2e_config(
-      "patchcore-anomaly-detector", config_path,
-      {
-          {"model.path", model_path},
-          {"source.type", "image_dir"},
-          {"source.image_dir", input_dir},
-          {"calibration.nominal_images_dir", input_dir},
-          {"calibration.threshold_images_dir", input_dir},
-          {"memory_bank.path", bank_path.string()},
-          {"memory_bank.meta_path", meta_path.string()},
-          {"output.dir", out_dir},
-      });
-
-  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-
-  auto calibrate = spawn_and_wait(binary, {"--calibrate", "--config", config_path.string()}, timeout);
-  if (calibrate.exit_code != 0) {
-    std::cerr << "[FAIL] --calibrate exited with code " << calibrate.exit_code << "\n";
-    std::cerr << "stderr:\n" << calibrate.stderr_text << "\n";
-    remove_dir(out_dir);
-    return 1;
-  }
-  if (!fs::exists(bank_path) || fs::file_size(bank_path) == 0 || !fs::exists(meta_path) ||
-      fs::file_size(meta_path) == 0) {
-    std::cerr << "[FAIL] --calibrate did not produce " << bank_path << " and " << meta_path << "\n";
-    remove_dir(out_dir);
-    return 1;
-  }
-
-  auto score = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
-
-  // One decodable overlay per input image.
-  const int expected_images = supported_image_count(input_dir);
-  const int output_files = count_output_files(out_dir);
-  const std::string output_problem = saved_frames_problem(out_dir, expected_images);
-
-  int rc = 0;
-  if (score.exit_code != 0) {
-    std::cerr << "[FAIL] exit code " << score.exit_code << "\n";
-    std::cerr << "stderr:\n" << score.stderr_text << "\n";
-    rc = 1;
-  } else if (!output_problem.empty()) {
-    std::cerr << "[FAIL] overlay output: " << output_problem << "\n";
-    rc = 1;
-  } else {
-    std::cout << "[OK] calibrate+score produced " << output_files << " decodable overlays for "
-              << expected_images << " input images\n";
-  }
-
-  remove_dir(out_dir);
-  return rc;
+  return true;
 }
 
-// A run that writes some overlays and fails to write others must exit
-// nonzero -- succeeding as long as at least one write went through would
-// silently under-report incomplete output.
-int run_partial_write_failure_fails_the_run(const std::string& binary, const std::string& model_path) {
-  const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
-  const std::string input_dir = images_raw ? images_raw : "assets/datasets-test/coco";
-  if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
-    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-                "directory with test images (assets/datasets-test/coco is empty or missing)");
-  }
-  std::vector<fs::path> images;
-  for (const auto& entry : fs::directory_iterator(input_dir)) {
-    if (entry.is_regular_file()) {
-      images.push_back(entry.path());
-    }
-  }
-  if (images.size() < 2) {
-    return skip_or_fail("test input directory needs at least 2 images");
-  }
-  std::sort(images.begin(), images.end());
-
-  auto out_dir =
-      create_test_output_dir("patchcore-anomaly-detector", "test_partial_write_failure_fails_the_run");
-  if (out_dir.empty())
-    return 1;
-
-  const fs::path run_dir = fs::path(out_dir).parent_path();
-  const fs::path config_path = run_dir / "config.yaml";
-  const fs::path bank_path = run_dir / "memory_bank.npy";
-  const fs::path meta_path = run_dir / "bank_meta.json";
-
-  write_e2e_config(
-      "patchcore-anomaly-detector", config_path,
-      {
-          {"model.path", model_path},
-          {"source.type", "image_dir"},
-          {"source.image_dir", input_dir},
-          {"calibration.nominal_images_dir", input_dir},
-          {"calibration.threshold_images_dir", input_dir},
-          {"memory_bank.path", bank_path.string()},
-          {"memory_bank.meta_path", meta_path.string()},
-          {"output.dir", out_dir},
-      });
-
-  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-
-  auto calibrate = spawn_and_wait(binary, {"--calibrate", "--config", config_path.string()}, timeout);
-  if (calibrate.exit_code != 0) {
-    std::cerr << "[FAIL] --calibrate exited with code " << calibrate.exit_code << "\n";
-    remove_dir(out_dir);
+// Calibrates, scores one folder of shipped images, and checks each verdict and outline.
+int run_image_case(const std::string& binary, const std::string& model_path,
+                   const std::string& folder, const std::set<std::string>& anomalous) {
+  const std::string label = "image_dir " + folder;
+  const std::string output_dir = create_test_output_dir(kExampleName, "test_image_" + folder);
+  if (output_dir.empty()) {
     return 1;
   }
-
-  // Pre-create one output path as read-only so its overlay write fails while
-  // every other image's write should still succeed.
-  const std::string blocked_name = images.front().filename().string();
-  const fs::path blocked_path = fs::path(out_dir) / blocked_name;
-  {
-    std::ofstream placeholder(blocked_path, std::ios::binary | std::ios::trunc);
-  }
-  fs::permissions(blocked_path, fs::perms::owner_read | fs::perms::group_read |
-                                    fs::perms::others_read);
-
-  auto score = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
-  fs::permissions(blocked_path, fs::perms::owner_all);
-
-  int rc = 0;
-  if (score.exit_code == 0) {
-    std::cerr << "[FAIL] expected a nonzero exit code for a partial write failure, got 0\n";
-    rc = 1;
-  } else if (score.stderr_text.find(blocked_name) == std::string::npos) {
-    std::cerr << "[FAIL] expected the failed path (" << blocked_name << ") named in stderr\n"
-              << "stderr:\n" << score.stderr_text << "\n";
-    rc = 1;
-  } else {
-    int other_outputs = 0;
-    for (const auto& entry : fs::directory_iterator(out_dir)) {
-      if (entry.is_regular_file() && entry.path().filename() != "config.yaml" &&
-          entry.path().filename().string() != blocked_name) {
-        ++other_outputs;
-      }
-    }
-    if (other_outputs == 0) {
-      std::cerr << "[FAIL] the one blocked write should not have stopped the rest from running\n";
-      rc = 1;
-    } else {
-      std::cout << "[OK] partial write failure correctly fails the run\n";
-    }
-  }
-
-  remove_dir(out_dir);
-  return rc;
-}
-
-// A bank_meta.json pinned to a different model hash must fail at load, not
-// silently score against a mismatched bank.
-int run_bank_model_mismatch_fails_at_load(const std::string& binary) {
-  auto out_dir = create_test_output_dir("patchcore-anomaly-detector", "test_bank_model_mismatch_fails_at_load");
-  if (out_dir.empty())
-    return 1;
-
-  const fs::path run_dir = fs::path(out_dir).parent_path();
-  const fs::path config_path = run_dir / "config.yaml";
-  const fs::path bank_path = run_dir / "memory_bank.npy";
-  const fs::path meta_path = run_dir / "bank_meta.json";
-
-  write_e2e_config(
-      "patchcore-anomaly-detector", config_path,
-      {
-          {"memory_bank.path", bank_path.string()},
-          {"memory_bank.meta_path", meta_path.string()},
-          {"output.dir", out_dir},
-      });
-
-  // A minimal but structurally valid .npy file: patchcore::MemoryBank::load
-  // must get far enough to be rejected by the hash check, not fail earlier
-  // trying to parse the array.
-  {
-    std::ofstream bank(bank_path, std::ios::binary);
-    static const unsigned char header[] = {
-        0x93, 'N', 'U', 'M', 'P', 'Y', 0x01, 0x00, 0x76, 0x00, '{', '\'', 'd', 'e', 's',
-        'c', 'r', '\'', ':', ' ', '\'', '<', 'f', '4', '\'', ',', ' ', '\'', 'f', 'o',
-        'r', 't', 'r', 'a', 'n', '_', 'o', 'r', 'd', 'e', 'r', '\'', ':', ' ', 'F', 'a',
-        'l', 's', 'e', ',', ' ', '\'', 's', 'h', 'a', 'p', 'e', '\'', ':', ' ', '(', '4',
-        ',', ' ', '1', '5', '3', '6', ')', ',', ' ', '}'};
-    bank.write(reinterpret_cast<const char*>(header), sizeof(header));
-    for (int i = 0; i < 61; ++i) {
-      bank.put('\n');
-    }
-    std::vector<float> zeros(4 * 1536, 0.0f);
-    bank.write(reinterpret_cast<const char*>(zeros.data()),
-               static_cast<std::streamsize>(zeros.size() * sizeof(float)));
-  }
-  {
-    std::ofstream meta(meta_path);
-    meta << "{\"model_sha256\": \"" << std::string(64, '0') << "\", \"threshold\": {\"value\": 1.0}}";
-  }
-
-  auto result = spawn_and_wait(binary, {"--config", config_path.string()}, 30000);
-  remove_dir(out_dir);
-
-  if (result.exit_code == 0) {
-    std::cerr << "[FAIL] bank/model mismatch: expected a nonzero exit code\n";
-    return 1;
-  }
-  if (result.stderr_text.find("different model package") == std::string::npos) {
-    std::cerr << "[FAIL] bank/model mismatch: stderr does not explain the failure\n";
-    std::cerr << "stderr:\n" << result.stderr_text << "\n";
-    return 1;
-  }
-  std::cout << "[OK] bank/model mismatch correctly rejected\n";
-  return 0;
-}
-
-// Share of pixels a defect overlay may highlight: above zero (the defect is
-// shown) and well below the whole image (it is localized).
-constexpr double kMinDefectHighlight = 0.005;
-constexpr double kMaxDefectHighlight = 0.60;
-
-// Fraction of pixels the overlay changed relative to the input image; -1 if
-// either image can't be read or their sizes differ.
-double highlighted_fraction(const fs::path& input_path, const fs::path& overlay_path) {
-  const cv::Mat src = cv::imread(input_path.string(), cv::IMREAD_COLOR);
-  const cv::Mat out = cv::imread(overlay_path.string(), cv::IMREAD_COLOR);
-  if (src.empty() || out.empty() || src.size() != out.size()) {
-    return -1.0;
-  }
-  cv::Mat diff;
-  cv::absdiff(src, out, diff);
-  cv::Mat gray;
-  cv::transform(diff, gray, cv::Matx13f(1.f, 1.f, 1.f));
-  return static_cast<double>(cv::countNonZero(gray)) / static_cast<double>(gray.total());
-}
-
-// Scores every held-out normal image and every defect image, and asserts
-// the actual pass/fail verdict on each -- not just relative ordering, and
-// not just one cherry-picked passing image. Also checks the overlays:
-// held-out normal overlays must be pixel-identical to their inputs, and
-// defect overlays must highlight a localized region.
-int run_held_out_normal_passes_and_defect_fails(const std::string& binary,
-                                                const std::string& model_path) {
-  const fs::path nominal_dir = "assets/datasets/patchcore/nominal";
-  const fs::path held_out_dir = "assets/datasets/patchcore/held_out_normal";
-  const fs::path images_dir = "assets/datasets/patchcore/images";
-  if (!fs::exists(nominal_dir) || fs::is_empty(nominal_dir)) {
-    return skip_or_fail("nominal calibration set missing under " + nominal_dir.string());
-  }
-
-  std::vector<std::string> held_out_names;
-  if (fs::exists(held_out_dir)) {
-    for (const auto& entry : fs::directory_iterator(held_out_dir)) {
-      if (entry.is_regular_file() && entry.path().extension() == ".png") {
-        held_out_names.push_back(entry.path().filename().string());
-      }
-    }
-  }
-  std::vector<std::string> defect_names;
-  if (fs::exists(images_dir)) {
-    for (const auto& entry : fs::directory_iterator(images_dir)) {
-      if (entry.is_regular_file() && entry.path().filename().string().rfind("scratch_", 0) == 0) {
-        defect_names.push_back(entry.path().filename().string());
-      }
-    }
-  }
-  std::sort(held_out_names.begin(), held_out_names.end());
-  std::sort(defect_names.begin(), defect_names.end());
-  if (held_out_names.empty() || defect_names.empty()) {
-    return skip_or_fail("held-out normal or defect images missing (" + held_out_dir.string() + ", " +
-                        images_dir.string() + ")");
-  }
-
-  auto out_dir = create_test_output_dir("patchcore-anomaly-detector", "test_held_out_normal_passes_and_defect_fails");
-  if (out_dir.empty())
-    return 1;
-
-  const fs::path run_dir = fs::path(out_dir).parent_path();
-  const fs::path config_path = run_dir / "config.yaml";
-  const fs::path bank_path = run_dir / "memory_bank.npy";
-  const fs::path meta_path = run_dir / "bank_meta.json";
-
-  const fs::path score_dir = run_dir / "score_inputs";
-  fs::create_directories(score_dir);
-  for (const auto& name : held_out_names) {
-    fs::copy_file(held_out_dir / name, score_dir / name, fs::copy_options::overwrite_existing);
-  }
-  for (const auto& name : defect_names) {
-    fs::copy_file(images_dir / name, score_dir / name, fs::copy_options::overwrite_existing);
-  }
-
-  write_e2e_config(
-      "patchcore-anomaly-detector", config_path,
-      {
-          {"model.path", model_path},
-          {"source.type", "image_dir"},
-          {"source.image_dir", score_dir.string()},
-          {"calibration.nominal_images_dir", nominal_dir.string()},
-          {"calibration.threshold_images_dir", nominal_dir.string()},
-          {"memory_bank.path", bank_path.string()},
-          {"memory_bank.meta_path", meta_path.string()},
-          {"output.dir", out_dir},
-      });
-
-  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-
-  auto calibrate = spawn_and_wait(binary, {"--calibrate", "--config", config_path.string()}, timeout);
-  if (calibrate.exit_code != 0) {
-    std::cerr << "[FAIL] --calibrate exited with code " << calibrate.exit_code << "\n";
-    std::cerr << "stderr:\n" << calibrate.stderr_text << "\n";
-    remove_dir(out_dir);
-    return 1;
-  }
-
-  auto score = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
-  if (score.exit_code != 0) {
-    std::cerr << "[FAIL] exit code " << score.exit_code << "\n";
-    std::cerr << "stderr:\n" << score.stderr_text << "\n";
-    remove_dir(out_dir);
-    return 1;
-  }
-
-  static const std::regex kVerdictRe(
-      R"(([^\s:]+):\s*score=([-\d.]+)\s+threshold=[-\d.]+\s+verdict=(\w+))");
-  std::map<std::string, std::pair<std::string, std::string>> verdicts; // name -> (verdict, score)
-  for (std::sregex_iterator it(score.stdout_text.begin(), score.stdout_text.end(), kVerdictRe), end;
-       it != end; ++it) {
-    const fs::path path((*it)[1].str());
-    verdicts[path.filename().string()] = {(*it)[3].str(), (*it)[2].str()};
-  }
-
-  std::map<std::string, double> highlighted;
-  for (const auto& name : held_out_names) {
-    highlighted[name] = highlighted_fraction(score_dir / name, fs::path(out_dir) / name);
-  }
-  for (const auto& name : defect_names) {
-    highlighted[name] = highlighted_fraction(score_dir / name, fs::path(out_dir) / name);
-  }
-  remove_dir(out_dir);
-
-  int rc = 0;
-  for (const auto& name : held_out_names) {
-    if (highlighted[name] != 0.0) {
-      std::cerr << "[FAIL] held-out normal overlay " << name << " highlighted fraction "
-                << highlighted[name] << " (expected 0)\n";
-      rc = 1;
-    }
-  }
-  for (const auto& name : defect_names) {
-    const double f = highlighted[name];
-    if (!(f > kMinDefectHighlight && f < kMaxDefectHighlight)) {
-      std::cerr << "[FAIL] defect overlay " << name << " highlighted fraction " << f
-                << " (expected " << kMinDefectHighlight << "-" << kMaxDefectHighlight << ")\n";
-      rc = 1;
-    }
-  }
-  std::vector<std::string> held_out_failures;
-  for (const auto& name : held_out_names) {
-    auto it = verdicts.find(name);
-    if (it == verdicts.end()) {
-      std::cerr << "[FAIL] no verdict for " << name << " in stdout:\n" << score.stdout_text << "\n";
-      rc = 1;
+  const fs::path input_dir = fs::absolute(kDatasetDir / folder);
+  const fs::path config_path =
+      write_config(output_dir, model_path,
+                   "  type: image_dir\n  source: " + input_dir.string() + "\n", 9000, 9100);
+  ProcessResult result;
+  bool ok = run_ok(binary, {"--config", config_path.string(), "--calibrate"}, label, result) &&
+            run_ok(binary, {"--config", config_path.string()}, label, result);
+  for (const auto& entry : ok ? fs::directory_iterator(input_dir) : fs::directory_iterator()) {
+    const std::string name = entry.path().filename().string();
+    const bool expected = anomalous.count(name) > 0;
+    const std::regex verdict(name + ": " + (expected ? "ANOMALOUS" : "normal") + " score=");
+    const cv::Mat source = cv::imread(entry.path().string());
+    const cv::Mat outlined = cv::imread(output_dir + "/outlined/" + name);
+    if (!std::regex_search(result.stdout_text, verdict) || outlined.empty() ||
+        outlined.size() != source.size()) {
+      std::cerr << "[FAIL] " << label << ": " << name << " is not "
+                << (expected ? "ANOMALOUS" : "normal") << " with its image written\nstdout:\n"
+                << result.stdout_text << "\n";
+      ok = false;
       continue;
     }
-    if (it->second.first != "normal") {
-      held_out_failures.push_back(name + " scored " + it->second.second + " (ANOMALOUS)");
+    // Only an anomalous image is drawn on, and its outline covers a part of it.
+    cv::Mat diff;
+    cv::absdiff(source, outlined, diff);
+    cv::Mat changed_mask;
+    cv::transform(diff, changed_mask, cv::Matx13f(1, 1, 1));
+    const double changed = cv::countNonZero(changed_mask) / static_cast<double>(source.total());
+    if (expected ? !(changed > 0.0 && changed < 0.5) : changed != 0.0) {
+      std::cerr << "[FAIL] " << label << ": " << name << " changed " << changed
+                << " of its pixels\n";
+      ok = false;
     }
   }
-  std::vector<std::string> defect_failures;
-  for (const auto& name : defect_names) {
-    auto it = verdicts.find(name);
-    if (it == verdicts.end()) {
-      std::cerr << "[FAIL] no verdict for " << name << " in stdout:\n" << score.stdout_text << "\n";
-      rc = 1;
-      continue;
-    }
-    if (it->second.first != "ANOMALOUS") {
-      defect_failures.push_back(name + " scored " + it->second.second + " (normal)");
-    }
+  remove_dir(output_dir);
+  if (ok) {
+    std::cout << "[OK] " << label << " verdicts and outlines\n";
   }
-  if (!held_out_failures.empty()) {
-    std::cerr << "[FAIL] " << held_out_failures.size() << "/" << held_out_names.size()
-              << " held-out normal images were flagged anomalous:\n";
-    for (const auto& f : held_out_failures) std::cerr << "  " << f << "\n";
-    rc = 1;
-  }
-  if (!defect_failures.empty()) {
-    std::cerr << "[FAIL] " << defect_failures.size() << "/" << defect_names.size()
-              << " defect images were not flagged anomalous:\n";
-    for (const auto& f : defect_failures) std::cerr << "  " << f << "\n";
-    rc = 1;
-  }
-  if (rc == 0) {
-    std::cout << "[OK] all " << held_out_names.size() << " held-out normal images pass with "
-              << "unhighlighted overlays, all " << defect_names.size()
-              << " defect images fail with localized highlights\n";
-  }
-  return rc;
+  return ok ? 0 : 1;
 }
 
-// Cross-language regression: a memory bank calibrated by Python must load
-// and separate defect from nominal correctly when scored by C++ (both use
-// OpenCV's batchDistance for the nearest-neighbor search and must agree on the
-// same bank).
-int run_python_built_bank_scores_correctly_in_cpp(const std::string& binary,
-                                                  const std::string& model_path) {
-  const fs::path real_images_dir = "assets/datasets/patchcore/images";
-  const fs::path nominal_src = real_images_dir / "plain_0.png";
-  const fs::path defect_src = real_images_dir / "scratch_0.png";
-  if (!fs::exists(nominal_src) || !fs::exists(defect_src)) {
-    return skip_or_fail("real nominal/defect images missing under " + real_images_dir.string());
-  }
-  const fs::path python_main =
-      "examples/anomaly-detection/patchcore-anomaly-detector/src/python/main.py";
-  if (!fs::exists(python_main)) {
-    return skip_or_fail("Python main.py not found at " + python_main.string());
-  }
-  const std::string python_bin = resolve_python_bin();
-  if (python_bin.empty()) {
-    return skip_or_fail("python3 not found (set SIMANEAT_APPS_TEST_PYTHON_BIN)");
-  }
-
-  auto out_dir = create_test_output_dir("patchcore-anomaly-detector", "test_python_built_bank_scores_correctly_in_cpp");
-  if (out_dir.empty())
-    return 1;
-
-  const fs::path run_dir = fs::path(out_dir).parent_path();
-  const fs::path config_path = run_dir / "config.yaml";
-  const fs::path bank_path = run_dir / "memory_bank.npy";
-  const fs::path meta_path = run_dir / "bank_meta.json";
-
-  const fs::path nominal_dir = run_dir / "nominal";
-  fs::create_directories(nominal_dir);
-  fs::copy_file(nominal_src, nominal_dir / "plain_0.png", fs::copy_options::overwrite_existing);
-
-  const fs::path score_dir = run_dir / "score_inputs";
-  fs::create_directories(score_dir);
-  fs::copy_file(nominal_src, score_dir / "plain_0.png", fs::copy_options::overwrite_existing);
-  fs::copy_file(defect_src, score_dir / "scratch_0.png", fs::copy_options::overwrite_existing);
-
-  write_e2e_config(
-      "patchcore-anomaly-detector", config_path,
-      {
-          {"model.path", model_path},
-          {"source.type", "image_dir"},
-          {"source.image_dir", score_dir.string()},
-          {"calibration.nominal_images_dir", nominal_dir.string()},
-          {"calibration.threshold_images_dir", nominal_dir.string()},
-          {"memory_bank.path", bank_path.string()},
-          {"memory_bank.meta_path", meta_path.string()},
-          {"output.dir", out_dir},
-      });
-
-  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-
-  auto calibrate = spawn_and_wait(
-      python_bin, {python_main.string(), "--calibrate", "--config", config_path.string()}, timeout);
-  if (calibrate.exit_code != 0) {
-    std::cerr << "[FAIL] Python --calibrate exited with code " << calibrate.exit_code << "\n";
-    std::cerr << "stderr:\n" << calibrate.stderr_text << "\n";
-    remove_dir(out_dir);
-    return 1;
-  }
-
-  auto score = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
-  if (score.exit_code != 0) {
-    std::cerr << "[FAIL] C++ scoring against a Python-built bank exited with code " << score.exit_code
-              << "\n";
-    std::cerr << "stderr:\n" << score.stderr_text << "\n";
-    remove_dir(out_dir);
-    return 1;
-  }
-
-  static const std::regex kScoreRe(R"(([^\s:]+):\s*score=([-\d.]+))");
-  double nominal_score = -1.0;
-  double defect_score = -1.0;
-  for (std::sregex_iterator it(score.stdout_text.begin(), score.stdout_text.end(), kScoreRe), end;
-       it != end; ++it) {
-    const std::string path = (*it)[1].str();
-    const double value = std::stod((*it)[2].str());
-    if (path.find("plain_0.png") != std::string::npos) {
-      nominal_score = value;
-    } else if (path.find("scratch_0.png") != std::string::npos) {
-      defect_score = value;
-    }
-  }
-
-  remove_dir(out_dir);
-
-  if (nominal_score < 0.0 || defect_score < 0.0) {
-    std::cerr << "[FAIL] could not find both images' scores in stdout:\n" << score.stdout_text << "\n";
-    return 1;
-  }
-  if (!(defect_score > nominal_score)) {
-    std::cerr << "[FAIL] C++ scoring a Python-built bank must still separate defect from nominal: "
-              << "nominal=" << nominal_score << " defect=" << defect_score << "\n";
-    return 1;
-  }
-  std::cout << "[OK] C++ scores a Python-built bank correctly: defect (" << defect_score
-            << ") > nominal (" << nominal_score << ")\n";
-  return 0;
-}
-
-// A folder whose images differ in size must calibrate and score every image,
-// with each overlay at its input image's size.
-int run_mixed_image_sizes_calibrate_and_score(const std::string& binary,
-                                              const std::string& model_path) {
-  const fs::path nominal_dir = "assets/datasets/patchcore/nominal";
-  std::vector<fs::path> nominal;
-  if (fs::exists(nominal_dir)) {
-    for (const auto& entry : fs::directory_iterator(nominal_dir)) {
-      if (entry.is_regular_file() && entry.path().extension() == ".png") {
-        nominal.push_back(entry.path());
-      }
-    }
-  }
-  std::sort(nominal.begin(), nominal.end());
-  if (nominal.size() < 4) {
-    return skip_or_fail("need 4 nominal images under " + nominal_dir.string());
-  }
-
-  auto out_dir = create_test_output_dir("patchcore-anomaly-detector",
-                                        "test_mixed_image_sizes_calibrate_and_score");
-  if (out_dir.empty())
-    return 1;
-  const fs::path run_dir = fs::path(out_dir).parent_path();
-  const fs::path mixed_dir = run_dir / "mixed";
-  fs::create_directories(mixed_dir);
-  const std::vector<cv::Size> sizes = {{0, 0}, {448, 448}, {320, 240}, {0, 0}}; // 0 keeps 224x224
-  for (std::size_t i = 0; i < sizes.size(); ++i) {
-    cv::Mat image = cv::imread(nominal[i].string(), cv::IMREAD_COLOR);
-    if (sizes[i].width > 0) {
-      cv::resize(image, image, sizes[i], 0, 0, cv::INTER_CUBIC);
-    }
-    cv::imwrite((mixed_dir / nominal[i].filename()).string(), image);
-  }
-
-  const fs::path config_path = run_dir / "config.yaml";
-  write_e2e_config("patchcore-anomaly-detector", config_path,
-                   {
-                       {"model.path", model_path},
-                       {"source.type", "image_dir"},
-                       {"source.image_dir", mixed_dir.string()},
-                       {"calibration.nominal_images_dir", mixed_dir.string()},
-                       {"calibration.threshold_images_dir", mixed_dir.string()},
-                       {"memory_bank.path", (run_dir / "memory_bank.npy").string()},
-                       {"memory_bank.meta_path", (run_dir / "bank_meta.json").string()},
-                       {"output.dir", out_dir},
-                   });
-  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-
-  int rc = 0;
-  for (const auto& args : std::vector<std::vector<std::string>>{
-           {"--calibrate", "--config", config_path.string()}, {"--config", config_path.string()}}) {
-    auto result = spawn_and_wait(binary, args, timeout);
-    if (result.exit_code != 0) {
-      std::cerr << "[FAIL] mixed sizes: " << args[0] << " exited with code " << result.exit_code
-                << "\nstderr:\n"
-                << result.stderr_text << "\n";
-      rc = 1;
-      break;
-    }
-  }
-  for (std::size_t i = 0; rc == 0 && i < sizes.size(); ++i) {
-    const auto name = nominal[i].filename();
-    const cv::Mat src = cv::imread((mixed_dir / name).string(), cv::IMREAD_COLOR);
-    const cv::Mat out = cv::imread((fs::path(out_dir) / name).string(), cv::IMREAD_COLOR);
-    if (out.empty() || out.size() != src.size()) {
-      std::cerr << "[FAIL] mixed sizes: overlay for " << name << " missing or not at input size\n";
-      rc = 1;
-    }
-  }
-  if (rc == 0) {
-    std::cout << "[OK] mixed-size folder calibrates and scores with overlays at input size\n";
-  }
-  remove_dir(out_dir);
-  return rc;
-}
-
-int metadata_port() {
-  return env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
-}
-
-int video_port() {
-  return env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
-}
-
-// Collects the RTP timestamp of every packet the app sends to Insight's video port. A
-// thread reads while the app runs, so a burst of video packets cannot overflow the socket
-// buffer before the test looks at them.
-class VideoRtpTimestamps {
-public:
-  explicit VideoRtpTimestamps(int port) {
-    fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd_ < 0) {
-      error_ = std::string("socket failed: ") + std::strerror(errno);
-      return;
-    }
-    int reuse = 1;
-    (void)::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    timeval poll_interval{0, 200000};
-    (void)::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &poll_interval, sizeof(poll_interval));
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<uint16_t>(port));
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (::bind(fd_, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
-      error_ = "bind failed for video port " + std::to_string(port) + ": " + std::strerror(errno);
-      return;
-    }
-    reader_ = std::thread([this] { read(); });
-  }
-  ~VideoRtpTimestamps() {
-    stop();
-    if (fd_ >= 0) {
-      ::close(fd_);
-    }
-  }
-  bool ok() const { return error_.empty(); }
-  const std::string& error() const { return error_; }
-  // Stops reading and returns every RTP timestamp received.
-  const std::set<uint32_t>& stop() {
-    stopping_ = true;
-    if (reader_.joinable()) {
-      reader_.join();
-    }
-    return timestamps_;
-  }
-
-private:
-  void read() {
-    std::vector<uint8_t> packet(65536);
-    while (!stopping_) {
-      const ssize_t n = ::recv(fd_, packet.data(), packet.size(), 0);
-      if (n >= 12 && (packet[0] >> 6) == 2) {
-        timestamps_.insert((static_cast<uint32_t>(packet[4]) << 24) |
-                           (static_cast<uint32_t>(packet[5]) << 16) |
-                           (static_cast<uint32_t>(packet[6]) << 8) | packet[7]);
-      }
-    }
-  }
-
-  int fd_ = -1;
-  std::string error_;
-  std::atomic<bool> stopping_{false};
-  std::set<uint32_t> timestamps_;
-  std::thread reader_;
-};
-
-// Empty when Insight can draw the verdicts on their video frames: it pairs a verdict with
-// the frame whose RTP timestamp is within 90 ticks (1 ms) of timestamp_ms x 90. Allows 5%
-// unpaired for a lost UDP packet.
-std::string pairing_problem(const std::vector<MetadataJsonMessage>& messages,
-                            const std::set<uint32_t>& frames) {
-  if (frames.empty()) {
-    return "no video RTP packets reached the video port";
-  }
-  if (messages.empty()) {
-    return "no verdict metadata to pair with the video";
-  }
-  std::vector<std::string> unpaired;
+// Every segment is an anomaly with its box and outline in the frame; returns the segment count,
+// or -1 for an invalid one.
+int valid_segments(const std::vector<MetadataJsonMessage>& messages, int width, int height) {
+  int count = 0;
   for (const auto& message : messages) {
-    const auto target = static_cast<uint32_t>(message.timestamp_ms * 90);
-    uint32_t nearest = UINT32_MAX;
-    for (const uint32_t frame : frames) {
-      nearest = std::min({nearest, frame - target, target - frame});
-    }
-    if (nearest > 90) {
-      unpaired.push_back(message.frame_id);
-    }
-  }
-  if (unpaired.size() * 20 > messages.size()) {
-    return std::to_string(unpaired.size()) + " of " + std::to_string(messages.size()) +
-           " verdicts have no video frame within 1 ms (first frame id " + unpaired.front() +
-           "), so Insight cannot draw them on their frames";
-  }
-  return "";
-}
-
-// Runs --calibrate on the bundled nominal set, then one live run with the given source
-// settings. Returns the live run's stdout, or nullopt after printing a failure.
-std::optional<std::string>
-calibrate_and_run_live(const std::string& binary, const std::string& model_path,
-                       const std::string& test_name,
-                       const std::vector<std::pair<std::string, std::string>>& source, int frames,
-                       int save_every, std::string& out_dir) {
-  out_dir = create_test_output_dir("patchcore-anomaly-detector", test_name);
-  if (out_dir.empty()) {
-    return std::nullopt;
-  }
-  const fs::path run_dir = fs::path(out_dir).parent_path();
-  const fs::path config_path = run_dir / "config.yaml";
-  ConfigScalars values = {
-      {"model.path", model_path},
-      {"calibration.nominal_images_dir", "assets/datasets/patchcore/nominal"},
-      {"calibration.threshold_images_dir", ""},
-      {"memory_bank.path", (run_dir / "memory_bank.npy").string()},
-      {"memory_bank.meta_path", (run_dir / "bank_meta.json").string()},
-      {"output.dir", out_dir},
-      {"output.save_every", std::to_string(save_every)},
-      {"output.insight.host", "127.0.0.1"},
-      {"output.insight.video_port", std::to_string(video_port())},
-      {"output.insight.metadata_port", std::to_string(metadata_port())},
-      {"runtime.frames", std::to_string(frames)},
-  };
-  values.insert(source.begin(), source.end());
-  write_e2e_config("patchcore-anomaly-detector", config_path, values);
-
-  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-  std::string live_stdout;
-  for (const auto& args : std::vector<std::vector<std::string>>{
-           {"--calibrate", "--config", config_path.string()}, {"--config", config_path.string()}}) {
-    auto result = spawn_and_wait(binary, args, timeout);
-    if (result.exit_code != 0) {
-      std::cerr << "[FAIL] " << test_name << ": " << args[0] << " exited with code "
-                << result.exit_code << "\nstderr:\n"
-                << result.stderr_text << "\n";
-      remove_dir(out_dir);
-      return std::nullopt;
-    }
-    live_stdout = result.stdout_text;
-  }
-  return live_stdout;
-}
-
-// Frame number -> verdict for every "frame=N: score=... verdict=..." line.
-std::map<int, std::string> frame_verdicts(const std::string& text) {
-  static const std::regex kFrameRe(R"(frame=(\d+): score=[-\d.]+ threshold=[-\d.]+ verdict=(\w+))");
-  std::map<int, std::string> verdicts;
-  for (std::sregex_iterator it(text.begin(), text.end(), kFrameRe), end; it != end; ++it) {
-    verdicts[std::stoi((*it)[1].str())] = (*it)[2].str();
-  }
-  return verdicts;
-}
-
-// Empty when out_dir holds `expected` decodable frame_*.jpg snapshots of one size
-// (`size` if non-empty); otherwise the problem.
-std::string snapshots_problem(const std::string& out_dir, int expected, cv::Size size) {
-  std::vector<fs::path> snapshots;
-  for (const auto& entry : fs::directory_iterator(out_dir)) {
-    const auto name = entry.path().filename().string();
-    if (name.rfind("frame_", 0) == 0 && entry.path().extension() == ".jpg") {
-      snapshots.push_back(entry.path());
-    }
-  }
-  if (static_cast<int>(snapshots.size()) != expected) {
-    return "expected " + std::to_string(expected) + " snapshots, found " +
-           std::to_string(snapshots.size());
-  }
-  for (const auto& path : snapshots) {
-    const cv::Mat image = cv::imread(path.string(), cv::IMREAD_COLOR);
-    if (image.empty()) {
-      return path.filename().string() + " does not decode";
-    }
-    if (size.empty()) {
-      size = image.size();
-    }
-    if (image.size() != size) {
-      return path.filename().string() + " has an unexpected size";
-    }
-  }
-  return "";
-}
-
-// video_file streams to Insight and saves snapshots, with the verdicts the bundled clip
-// should get: its first 60 frames are plain texture, the rest carry defects.
-int run_video_file_live_run(const std::string& binary, const std::string& model_path) {
-  const fs::path video = "assets/datasets/patchcore/video/test.mp4";
-  if (!fs::exists(video)) {
-    return skip_or_fail("demo video missing: " + video.string());
-  }
-  sima_examples::testing::MetadataJsonListenerOptions listener_options;
-  listener_options.base_port = metadata_port();
-  listener_options.metadata_type = "classification";
-  listener_options.data_array_key = "top_classes";
-  sima_examples::testing::MetadataJsonListener listener(listener_options);
-  if (!listener.ok()) {
-    std::cerr << "[FAIL] video_file live run: metadata listener: " << listener.error() << "\n";
-    return 1;
-  }
-  VideoRtpTimestamps video_frames(video_port());
-  if (!video_frames.ok()) {
-    std::cerr << "[FAIL] video_file live run: video listener: " << video_frames.error() << "\n";
-    return 1;
-  }
-  std::string out_dir;
-  const auto stdout_text = calibrate_and_run_live(
-      binary, model_path, "test_video_file_live_run",
-      {{"source.type", "video_file"}, {"source.video_path", video.string()}}, 120, 40, out_dir);
-  if (!stdout_text) {
-    return 1;
-  }
-  const auto verdicts = frame_verdicts(*stdout_text);
-  std::string problem;
-  if (verdicts.size() != 120 || verdicts.begin()->first != 1 || verdicts.rbegin()->first != 120) {
-    problem = "expected verdicts for frames 1-120, got " + std::to_string(verdicts.size());
-  }
-  for (int f = 1; problem.empty() && f <= 50; ++f) {
-    if (verdicts.at(f) != "normal") {
-      problem = "plain frame " + std::to_string(f) + " flagged ANOMALOUS";
-    }
-  }
-  for (int f = 71; problem.empty() && f <= 120; ++f) {
-    if (verdicts.at(f) != "ANOMALOUS") {
-      problem = "defect frame " + std::to_string(f) + " not flagged";
-    }
-  }
-  if (problem.empty()) {
-    problem = snapshots_problem(out_dir, 3, cv::Size(224, 224));
-  }
-  // Insight receives each frame's verdict as metadata, matching the printed verdict.
-  if (problem.empty()) {
-    const auto metadata = listener.drain_pending();
-    int matched = 0;
-    for (const auto& message : metadata.messages) {
-      const auto json = nlohmann::json::parse(message.payload, nullptr, false);
-      const int frame = std::stoi(message.frame_id);
-      const auto it = verdicts.find(frame);
-      if (json.is_discarded() || it == verdicts.end() ||
-          json["data"]["anomaly"]["verdict"] != it->second) {
-        problem =
-            "metadata verdict for frame " + message.frame_id + " differs from the printed one";
-        break;
+    // A named value: a range-for over a member of a temporary would outlive the temporary.
+    const auto payload = nlohmann::json::parse(message.payload);
+    for (const auto& segment : payload.at("data").at("segments")) {
+      const auto bbox = segment.at("bbox").get<std::array<int, 4>>();
+      bool inside =
+          bbox[0] >= 0 && bbox[1] >= 0 && bbox[0] + bbox[2] <= width && bbox[1] + bbox[3] <= height;
+      for (const auto& point : segment.at("mask")) {
+        const int x = point.at(0).get<int>();
+        const int y = point.at(1).get<int>();
+        inside &= x >= 0 && x < width && y >= 0 && y < height;
       }
-      ++matched;
-    }
-    if (problem.empty() && matched < 100) {
-      problem = "expected verdict metadata for ~120 frames, got " + std::to_string(matched) + " " +
-                metadata.error;
-    }
-    if (problem.empty()) {
-      problem = pairing_problem(metadata.messages, video_frames.stop());
+      if (segment.at("label") != "anomaly" || segment.at("mask_format") != "polygon" || !inside) {
+        std::cerr << "[FAIL] unexpected segment: " << segment.dump() << "\n";
+        return -1;
+      }
+      ++count;
     }
   }
-  remove_dir(out_dir);
-  if (!problem.empty()) {
-    std::cerr << "[FAIL] video_file live run: " << problem << "\n";
-    return 1;
-  }
-  std::cout << "[OK] video_file: plain frames normal, defect frames ANOMALOUS, verdict metadata "
-               "paired with its video frames, 3 snapshots\n";
-  return 0;
+  return count;
 }
 
-// rtsp runs the model inside the graph, scores every joined frame, streams to Insight with
-// each verdict paired to its video frame, and saves snapshots at the stream's size.
-int run_rtsp_live_run(const std::string& binary, const std::string& model_path) {
-  const auto urls = rtsp_h264_urls_from_env();
-  if (urls.empty()) {
-    return skip_or_fail("SIMANEAT_TEST_RTSP_H264_URL is not set");
+// The first video packet's RTP header, or zeros when none arrives within 5 seconds.
+std::array<unsigned char, 12> first_video_header(int socket) {
+  const timeval timeout{5, 0};
+  ::setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  std::array<unsigned char, 65536> packet{};
+  std::array<unsigned char, 12> header{};
+  if (::recv(socket, packet.data(), packet.size(), 0) > 12) {
+    std::copy_n(packet.begin(), 12, header.begin());
   }
-  sima_examples::testing::MetadataJsonListenerOptions listener_options;
-  listener_options.base_port = metadata_port();
-  listener_options.metadata_type = "classification";
-  listener_options.data_array_key = "top_classes";
-  sima_examples::testing::MetadataJsonListener listener(listener_options);
+  return header;
+}
+
+int run_codec_case(const std::string& binary, const std::string& model_path,
+                   const StreamSourceCase& source_case, const std::string& url,
+                   const std::string& label) {
+  const std::string output_dir = create_test_output_dir(kExampleName, "test_" + label);
+  if (output_dir.empty()) {
+    return 1;
+  }
+  // This test is the Insight receiver, so the example publishes to loopback.
+  const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
+  const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
+  const fs::path config_path =
+      write_config(output_dir, model_path,
+                   "  type: rtsp\n  source: " + url + "\n  codec: " + source_case.codec +
+                       "\n  width: 0\n  height: 0\n  fps: 0\n  rtsp:\n    tcp: true\n"
+                       "    latency_ms: 100\n",
+                   video_port, metadata_port);
+  ProcessResult result;
+  if (!run_ok(binary, {"--config", config_path.string(), "--calibrate"}, label, result)) {
+    remove_dir(output_dir);
+    return 1;
+  }
+
+  MetadataJsonListenerOptions options;
+  options.base_port = metadata_port;
+  options.timeout_ms = 5000;
+  options.require_all_ports = true;
+  options.metadata_type = "segmentation";
+  options.data_array_key = "segments";
+  MetadataJsonListener listener(options);
   if (!listener.ok()) {
-    std::cerr << "[FAIL] rtsp live run: metadata listener: " << listener.error() << "\n";
+    std::cerr << "[FAIL] metadata listener failed: " << listener.error() << "\n";
     return 1;
   }
-  VideoRtpTimestamps video_frames(video_port());
-  if (!video_frames.ok()) {
-    std::cerr << "[FAIL] rtsp live run: video listener: " << video_frames.error() << "\n";
-    return 1;
-  }
-  std::string out_dir;
-  const auto stdout_text = calibrate_and_run_live(
-      binary, model_path, "test_rtsp_live_run",
-      {{"source.type", "rtsp"}, {"source.rtsp.url", urls.front()}}, 60, 20, out_dir);
-  if (!stdout_text) {
-    return 1;
-  }
-  const auto verdicts = frame_verdicts(*stdout_text);
-  std::string problem;
-  if (verdicts.size() != 60 || verdicts.begin()->first != 1 || verdicts.rbegin()->first != 60) {
-    problem = "expected verdicts for frames 1-60, got " + std::to_string(verdicts.size());
-  }
-  if (problem.empty()) {
-    problem = snapshots_problem(out_dir, 3, cv::Size());
-  }
-  if (problem.empty()) {
-    const auto metadata = listener.drain_pending();
-    if (metadata.messages.size() < 50) {
-      problem = "expected verdict metadata for ~60 frames, got " +
-                std::to_string(metadata.messages.size()) + " " + metadata.error;
-    } else {
-      problem = pairing_problem(metadata.messages, video_frames.stop());
+  const int video_socket = ::socket(AF_INET, SOCK_DGRAM, 0);
+  sockaddr_in video_address{};
+  video_address.sin_family = AF_INET;
+  video_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  video_address.sin_port = htons(static_cast<uint16_t>(video_port));
+  if (video_socket < 0 || ::bind(video_socket, reinterpret_cast<sockaddr*>(&video_address),
+                                 sizeof(video_address)) != 0) {
+    if (video_socket >= 0) {
+      ::close(video_socket);
     }
-  }
-  remove_dir(out_dir);
-  if (!problem.empty()) {
-    std::cerr << "[FAIL] rtsp live run: " << problem << "\n";
+    std::cerr << "[FAIL] could not bind Insight video port\n";
     return 1;
   }
-  std::cout << "[OK] rtsp: 60 frames scored in the graph, verdict metadata paired with its "
-               "video frames, 3 snapshots\n";
+  const bool ran = run_ok(binary, {"--config", config_path.string()}, label, result);
+  const auto header = first_video_header(video_socket);
+  ::close(video_socket);
+  remove_dir(output_dir);
+  if (!ran) {
+    return 1;
+  }
+  const auto metadata = listener.wait_for_messages();
+  const auto rest = listener.drain_pending();
+  std::smatch stream;
+  std::smatch summary;
+  if (!metadata.success ||
+      !std::regex_search(result.stdout_text, stream, std::regex(R"(stream=(\d+)x(\d+)@)")) ||
+      !std::regex_search(
+          result.stdout_text, summary,
+          std::regex("processed=" + std::to_string(kFrames) + R"( flagged=(\d+) )"))) {
+    std::cerr << "[FAIL] " << label << " sent no segmentation metadata: " << metadata.error
+              << "\nstdout:\n"
+              << result.stdout_text << "\n";
+    return 1;
+  }
+  const int width = std::stoi(stream[1]);
+  const int height = std::stoi(stream[2]);
+  const int first = valid_segments(metadata.messages, width, height);
+  const int later = valid_segments(rest.messages, width, height);
+  // The test streams show no part from the nominal set, so the model flags them.
+  if (std::stoi(summary[1]) == 0 || first < 0 || later < 0 || first + later == 0) {
+    std::cerr << "[FAIL] " << label << " sent no valid defect region\nstdout:\n"
+              << result.stdout_text << "\n";
+    return 1;
+  }
+  // VideoSender forwards the stream as received: RTP H.264 (96), H.265 (98), or JPEG (26).
+  const int payload_type = source_case.codec == "h265"    ? 98
+                           : source_case.codec == "mjpeg" ? 26
+                                                          : 96;
+  if ((header[0] >> 6) != 2 || (header[1] & 0x7F) != payload_type) {
+    std::cerr << "[FAIL] " << label << " did not publish RTP video with payload type "
+              << payload_type << " to Insight\n";
+    return 1;
+  }
+  std::cout << "[OK] " << label << " sent " << kFrames << " frames of regions and Insight video\n";
   return 0;
 }
 
@@ -975,21 +254,42 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
-  const std::string model_path = configured_model_path("patchcore-anomaly-detector", models_dir);
-  if (model_path.empty() || !fs::exists(model_path)) {
-    return skip_or_fail("patchcore model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+  // Absolute, because the example resolves a relative model.path from its config's folder.
+  const std::string models_dir =
+      fs::absolute(models_dir_raw != nullptr ? models_dir_raw : "models").string();
+  int rc = 0;
+  const std::vector<std::string> model_paths =
+      available_model_paths(configured_model_paths(kExampleName, models_dir), rc);
+  if (model_paths.empty()) {
+    return skip_or_fail("configured PatchCore model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
-  int failures = 0;
-  failures += run_calibrate_then_score(binary, model_path) != 0;
-  failures += run_partial_write_failure_fails_the_run(binary, model_path) != 0;
-  failures += run_bank_model_mismatch_fails_at_load(binary) != 0;
-  failures += run_held_out_normal_passes_and_defect_fails(binary, model_path) != 0;
-  failures += run_python_built_bank_scores_correctly_in_cpp(binary, model_path) != 0;
-  failures += run_mixed_image_sizes_calibrate_and_score(binary, model_path) != 0;
-  failures += run_video_file_live_run(binary, model_path) != 0;
-  failures += run_rtsp_live_run(binary, model_path) != 0;
+  int images_rc = 0;
+  for (const std::string& model_path : model_paths) {
+    images_rc |=
+        run_image_case(binary, model_path, "images",
+                       {"scratch_0.png", "scratch_1.png", "scratch_2.png", "scratch_3.png"});
+    // Known-good images the bank never saw score below the threshold.
+    images_rc |= run_image_case(binary, model_path, "held_out_normal", {});
+  }
 
-  return failures > 0 ? 1 : 0;
+  const int cases_rc = run_single_stream_source_cases(
+      "PatchCore anomaly detector",
+      {
+          {"rtsp_h264", "SIMANEAT_TEST_RTSP_H264_URL", "rtsp", "h264", 0, true},
+          {"rtsp_h265", "SIMANEAT_TEST_RTSP_H265_URL", "rtsp", "h265", 0, true},
+          {"rtsp_mjpeg", "SIMANEAT_TEST_RTSP_MJPEG_URL", "rtsp", "mjpeg", 0, true},
+      },
+      [&](const StreamSourceCase& source_case, const std::string& url) {
+        int case_rc = 0;
+        for (const std::string& model_path : model_paths) {
+          const std::string label =
+              model_case_label(source_case.name, model_path, model_paths.size());
+          if (run_codec_case(binary, model_path, source_case, url, label) != 0) {
+            case_rc = 1;
+          }
+        }
+        return case_rc;
+      });
+  return rc != 0 || images_rc != 0 ? 1 : cases_rc;
 }

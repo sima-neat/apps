@@ -1,1027 +1,474 @@
-/**
- * @example patchcore-anomaly-detector.cpp
- * PatchCore anomaly detection: a compiled wide_resnet50_2 patch-feature
- * extractor on the MLA, plus host-side coreset memory-bank scoring.
- *
- * Usage:
- *   patchcore-anomaly-detector --calibrate [--config <path>]
- *   patchcore-anomaly-detector [--config <path>]
- */
+// Copyright 2026 SiMa Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Flags surface defects with PatchCore and outlines them, in an RTSP stream or a folder of images.
+// The model turns each frame into patch features, and the host compares every patch with a memory
+// bank of known-good patches that --calibrate builds. Insight receives the stream as received and
+// each anomalous frame's defect regions as polygons; image_dir writes the outlined images instead.
+
 #include "neat.h"
-#include "neat/node_groups.h"
-#include "neat/nodes.h"
-#include <nodes/io/MetadataSender.h>
-#include "patchcore_memory_bank.h"
-#include "patchcore_overlay.h"
+#include "sima_examples/anomaly_regions.h"
 #include "sima_examples/config.h"
 #include "sima_examples/example_utils.h"
+#include "sima_examples/pull_status.h"
 #include "sima_examples/rtsp_probe.h"
-#include <nlohmann/json.hpp>
+#include "sima_examples/stop_signals.h"
+#include "utils/memory_bank.h"
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/videoio.hpp>
+
 #include <algorithm>
+#include <atomic>
 #include <cctype>
-#include <cmath>
+#include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <memory>
+#include <map>
 #include <stdexcept>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
-using sima_examples::time_ms;
+namespace neat = simaai::neat;
+namespace groups = simaai::neat::nodes::groups;
 
 namespace {
 
-constexpr int kEmbedDim = 1536;
-constexpr int kPatchGridH = 28;
-constexpr int kPatchGridW = 28;
-using patchcore::kModelInputSize;
-using patchcore::draw_overlay;
-using patchcore::letterbox_rect;
-// Maximum joined frame/embedding pairs waiting for host scoring.
-constexpr int kJoinedBuffers = 4;
-constexpr int kLetterboxPad = 114; // gray fill of Neat's letterbox resize, matched on the host
-// --calibrate sets aside every 5th nominal image to measure the threshold.
-constexpr std::size_t kThresholdEvery = 5;
+const std::map<std::string, groups::RtspCodec> kRtspCodecs = {
+    {"h264", groups::RtspCodec::H264},
+    {"h265", groups::RtspCodec::H265},
+    {"mjpeg", groups::RtspCodec::MJPEG},
+};
+const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
+    {"h264", neat::SimaDecodeType::H264},
+    {"h265", neat::SimaDecodeType::H265},
+    {"mjpeg", neat::SimaDecodeType::MJPEG},
+};
+const std::map<std::string, std::string> kInputTypes = {{"rtsp", "rtsp"},
+                                                        {"image_dir", "image_dir"}};
 constexpr const char* kBackbone = "wide_resnet50_2";
 constexpr const char* kTorchvisionWeights = "IMAGENET1K_V1";
-
-enum class SourceType { ImageDir, VideoFile, Rtsp };
-enum class RtspCodec { H264, H265, Mjpeg };
-
-struct Config {
-  std::string model_path;
-
-  SourceType source_type = SourceType::ImageDir;
-  fs::path image_dir;
-  fs::path video_path;
-  std::string rtsp_url;
-  RtspCodec rtsp_codec = RtspCodec::H264;
-  bool rtsp_tcp = true;
-  int rtsp_latency_ms = 200;
-  int rtsp_width = 0;
-  int rtsp_height = 0;
-
-  fs::path memory_bank_path;
-  fs::path bank_meta_path;
-
-  fs::path calibration_nominal_dir;
-  double coreset_ratio = 0.0004;
-  std::uint64_t seed = 0;
-  double threshold_percentile = 99.0;
-  fs::path calibration_threshold_dir; // empty = reuse calibration_nominal_dir
-  double threshold_margin = 1.0; // multiplier on both percentile thresholds (image and patch)
-
-  int num_neighbors = 9;
-  double gaussian_sigma = 4.0;
-
-  fs::path output_dir;
-  int save_every = 0; // image_dir: always saves regardless. video_file/rtsp: 0 disables local saving.
-  double overlay_alpha = 0.45;
-
-  std::string insight_host; // video_file/rtsp only
-  int insight_video_port = 9000;
-  int insight_channel = 0;
-  int insight_bitrate_kbps = 1000;
-  int insight_metadata_port = 9100;
-
-  int frames = 0;
-};
-
-SourceType parse_source_type(const std::string& v) {
-  if (v == "image_dir") return SourceType::ImageDir;
-  if (v == "video_file") return SourceType::VideoFile;
-  if (v == "rtsp") return SourceType::Rtsp;
-  throw std::runtime_error("source.type must be image_dir, video_file, or rtsp");
-}
-
-RtspCodec parse_rtsp_codec(const std::string& v) {
-  if (v == "h264") return RtspCodec::H264;
-  if (v == "h265") return RtspCodec::H265;
-  if (v == "mjpeg") return RtspCodec::Mjpeg;
-  throw std::runtime_error("source.rtsp.codec must be h264, h265, or mjpeg");
-}
-
-void validate_config(const Config& cfg) {
-  sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
-  if (cfg.source_type == SourceType::ImageDir) {
-    sima_examples::require(!cfg.image_dir.empty(),
-                           "source.image_dir must be set when source.type=image_dir");
-  }
-  if (cfg.source_type == SourceType::VideoFile) {
-    sima_examples::require(!cfg.video_path.empty(),
-                           "source.video_path must be set when source.type=video_file");
-  }
-  if (cfg.source_type == SourceType::Rtsp) {
-    sima_examples::require(!cfg.rtsp_url.empty(),
-                           "source.rtsp.url must be set when source.type=rtsp");
-  }
-  sima_examples::require(!cfg.memory_bank_path.empty(), "memory_bank.path must be set");
-  sima_examples::require(!cfg.bank_meta_path.empty(), "memory_bank.meta_path must be set");
-  sima_examples::require(!cfg.calibration_nominal_dir.empty(),
-                         "calibration.nominal_images_dir must be set");
-  sima_examples::require(!cfg.output_dir.empty(), "output.dir must be set");
-  // Overlays written among the known-good references would be calibrated on next time.
-  const fs::path output_dir = fs::weakly_canonical(cfg.output_dir);
-  sima_examples::require(output_dir != fs::weakly_canonical(cfg.calibration_nominal_dir) &&
-                             (cfg.calibration_threshold_dir.empty() ||
-                              output_dir != fs::weakly_canonical(cfg.calibration_threshold_dir)),
-                         "output.dir must not be calibration.nominal_images_dir or "
-                         "calibration.threshold_images_dir");
-  sima_examples::require(cfg.coreset_ratio > 0.0 && cfg.coreset_ratio <= 1.0,
-                         "calibration.coreset_ratio must be in (0, 1]");
-  sima_examples::require(cfg.threshold_percentile >= 0.0 && cfg.threshold_percentile <= 100.0,
-                         "calibration.threshold_percentile must be between 0 and 100");
-  sima_examples::require(cfg.threshold_margin >= 1.0, "calibration.threshold_margin must be >= 1.0");
-  sima_examples::require(cfg.num_neighbors >= 1, "scoring.num_neighbors must be >= 1");
-  sima_examples::require(cfg.frames >= 0, "runtime.frames must be >= 0");
-  if (cfg.source_type != SourceType::ImageDir) {
-    sima_examples::require(!cfg.insight_host.empty(),
-                           "output.insight.host must be set for source.type=video_file/rtsp");
-    sima_examples::require(cfg.insight_video_port > 0 && cfg.insight_video_port <= 65535,
-                           "output.insight.video_port must be in [1, 65535]");
-    sima_examples::require(cfg.insight_channel >= 0, "output.insight.channel must be >= 0");
-    sima_examples::require(cfg.insight_bitrate_kbps > 0, "output.insight.bitrate_kbps must be > 0");
-    sima_examples::require(cfg.insight_metadata_port > 0 && cfg.insight_metadata_port <= 65535,
-                           "output.insight.metadata_port must be in [1, 65535]");
-  }
-  // --calibrate writes both bank files; neither may overwrite the model or each other.
-  const fs::path model = fs::weakly_canonical(cfg.model_path);
-  const fs::path bank = fs::weakly_canonical(cfg.memory_bank_path);
-  const fs::path meta = fs::weakly_canonical(cfg.bank_meta_path);
-  sima_examples::require(model != bank && model != meta,
-                         "memory_bank.path and memory_bank.meta_path must not point at model.path");
-  sima_examples::require(bank != meta,
-                         "memory_bank.path and memory_bank.meta_path must be different files");
-}
-
-Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::Config::load(path);
-  Config cfg;
-  cfg.model_path = raw.string_or("model.path", "");
-
-  cfg.source_type = parse_source_type(raw.string_or("source.type", "image_dir"));
-  cfg.image_dir = raw.string_or("source.image_dir", "");
-  cfg.video_path = raw.string_or("source.video_path", "");
-  cfg.rtsp_url = raw.string_or("source.rtsp.url", "");
-  cfg.rtsp_codec = parse_rtsp_codec(raw.string_or("source.rtsp.codec", "h264"));
-  cfg.rtsp_tcp = raw.bool_or("source.rtsp.tcp", true);
-  cfg.rtsp_latency_ms = raw.int_or("source.rtsp.latency_ms", 200);
-  cfg.rtsp_width = raw.int_or("source.rtsp.width", 0);
-  cfg.rtsp_height = raw.int_or("source.rtsp.height", 0);
-
-  cfg.memory_bank_path = raw.string_or("memory_bank.path", "");
-  cfg.bank_meta_path = raw.string_or("memory_bank.meta_path", "");
-
-  cfg.calibration_nominal_dir = raw.string_or("calibration.nominal_images_dir", "");
-  cfg.coreset_ratio = raw.double_or("calibration.coreset_ratio", 0.0004);
-  cfg.seed = static_cast<std::uint64_t>(raw.int_or("calibration.seed", 0));
-  cfg.threshold_percentile = raw.double_or("calibration.threshold_percentile", 99.0);
-  cfg.calibration_threshold_dir = raw.string_or("calibration.threshold_images_dir", "");
-  cfg.threshold_margin = raw.double_or("calibration.threshold_margin", 1.0);
-
-  cfg.num_neighbors = raw.int_or("scoring.num_neighbors", 9);
-  cfg.gaussian_sigma = raw.double_or("scoring.gaussian_sigma", 4.0);
-
-  cfg.output_dir = raw.string_or("output.dir", "");
-  cfg.save_every = raw.int_or("output.save_every", 0);
-  cfg.overlay_alpha = raw.double_or("output.overlay_alpha", 0.45);
-  cfg.insight_host = raw.string_or("output.insight.host", "");
-  cfg.insight_video_port = raw.int_or("output.insight.video_port", 9000);
-  cfg.insight_channel = raw.int_or("output.insight.channel", 0);
-  cfg.insight_bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", 1000);
-  cfg.insight_metadata_port = raw.int_or("output.insight.metadata_port", 9100);
-
-  cfg.frames = raw.int_or("runtime.frames", 0);
-
-  validate_config(cfg);
-  return cfg;
-}
+constexpr int kEmbedDim = 1536;
+constexpr int kModelInputSide =
+    224; // The model's input, and the side of the map regions are found on.
+constexpr int kPatchGrid = 28;
+constexpr int kNumNeighbors =
+    9; // Neighborhood size of the image score's reweighting (paper Eq. 7-8).
+constexpr std::uint64_t kSeed = 0;
+constexpr double kMapSigma = 4.0; // Smoothing of the upsampled score map, in map pixels.
+constexpr int kMinRegionPx = 1;   // The smoothing already removes single-patch speckle.
+constexpr std::size_t kThresholdEvery =
+    5; // --calibrate keeps every 5th nominal image out of the bank.
+constexpr int kPullTimeoutMs = 100;
+const cv::Scalar kOutlineBgr(0, 0, 255);
 
 struct CliOptions {
   fs::path config_path;
   bool calibrate = false;
-  bool validate_config_only = false;
 };
 
 CliOptions parse_args(int argc, char** argv) {
+  const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
   CliOptions options;
-  options.config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  options.config_path = fs::exists(adjacent_config)
+                            ? adjacent_config
+                            : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--config") {
-      if (i + 1 >= argc) {
-        throw std::runtime_error("--config requires a path");
-      }
+    if (arg == "--config" && i + 1 < argc) {
       options.config_path = argv[++i];
     } else if (arg == "--calibrate") {
       options.calibrate = true;
-    } else if (arg == "--validate-config-only") {
-      options.validate_config_only = true;
-    } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: " << argv[0]
-                << " [--config <path>] [--calibrate] [--validate-config-only]\n";
-      std::exit(0);
     } else {
-      throw std::runtime_error("unknown argument: " + arg);
+      throw std::runtime_error("usage: " + std::string(argv[0]) +
+                               " [--config <path>] [--calibrate]");
     }
   }
   return options;
 }
 
-bool is_image(const fs::path& p) {
-  auto ext = p.extension().string();
-  for (auto& c : ext) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
+// Host-decoded RGB images, already at the model's input size, normalized as ImageNet.
+neat::Model::Options image_model_options() {
+  neat::Model::Options options;
+  options.preprocess.kind = neat::InputKind::Image;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::RGB;
+  options.preprocess.preset = neat::NormalizePreset::ImageNet;
+  return options;
 }
 
-std::vector<fs::path> find_images(const fs::path& dir) {
-  std::vector<fs::path> images;
-  if (!fs::is_directory(dir)) {
-    return images;
-  }
-  for (const auto& entry : fs::directory_iterator(dir)) {
-    if (entry.is_regular_file() && is_image(entry.path())) {
-      images.push_back(entry.path());
+// EV74 converts each NV12 frame, stretches it to the model input as image_input does on the host,
+// and normalizes it as ImageNet, so the bank's images and the stream match.
+neat::Model::Options stream_model_options(const sima_examples::RtspStreamInfo& stream) {
+  neat::Model::Options options;
+  options.preprocess.kind = neat::InputKind::Image;
+  options.preprocess.enable = neat::AutoFlag::On;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
+  options.preprocess.input_max_width = stream.width;
+  options.preprocess.input_max_height = stream.height;
+  options.preprocess.resize.enable = neat::AutoFlag::On;
+  options.preprocess.resize.mode = neat::ResizeMode::Stretch;
+  options.preprocess.preset = neat::NormalizePreset::ImageNet;
+  return options;
+}
+
+neat::Tensor image_input(const cv::Mat& bgr) {
+  cv::Mat resized, rgb;
+  cv::resize(bgr, resized, cv::Size(kModelInputSide, kModelInputSide), 0, 0, cv::INTER_LINEAR);
+  cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+  return neat::Tensor::from_cv_mat(rgb, neat::ImageSpec::PixelFormat::RGB,
+                                   neat::TensorMemory::EV74);
+}
+
+std::vector<fs::path> image_paths(const fs::path& folder) {
+  std::vector<fs::path> paths;
+  for (const auto& entry : fs::directory_iterator(folder)) {
+    std::string suffix = entry.path().extension().string();
+    std::transform(suffix.begin(), suffix.end(), suffix.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (suffix == ".bmp" || suffix == ".jpeg" || suffix == ".jpg" || suffix == ".png") {
+      paths.push_back(entry.path());
     }
   }
-  std::sort(images.begin(), images.end());
-  return images;
+  sima_examples::require(!paths.empty(), "no images in " + folder.string());
+  std::sort(paths.begin(), paths.end());
+  return paths;
 }
 
-simaai::neat::Model::Options image_model_options() {
-  simaai::neat::Model::Options opt;
-  opt.preprocess.kind = simaai::neat::InputKind::Image;
-  opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
-  opt.preprocess.preset = simaai::neat::NormalizePreset::ImageNet;
-  return opt;
+cv::Mat read_image(const fs::path& path) {
+  cv::Mat bgr = cv::imread(path.string(), cv::IMREAD_COLOR);
+  sima_examples::require(!bgr.empty(), "cannot read image " + path.string());
+  return bgr;
 }
 
-simaai::neat::Tensor rgb_tensor(const cv::Mat& bgr) {
-  cv::Mat rgb;
-  cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-  return simaai::neat::Tensor::from_cv_mat(rgb, simaai::neat::ImageSpec::PixelFormat::RGB,
-                                           simaai::neat::TensorMemory::EV74);
-}
-
-/// Letterboxes a host-decoded frame into the model input the same way the RTSP graph's
-/// preprocess does (centered, gray kLetterboxPad bars), so calibration images and every
-/// source match for any frame shape. A fixed input size also keeps the model from timing
-/// out when image sizes change.
-simaai::neat::Tensor model_input_tensor(const cv::Mat& bgr) {
-  if (bgr.size() == kModelInputSize) {
-    return rgb_tensor(bgr);
-  }
-  const cv::Rect rect = letterbox_rect(bgr.size());
-  cv::Mat canvas(kModelInputSize, CV_8UC3, cv::Scalar::all(kLetterboxPad));
-  cv::resize(bgr, canvas(rect), rect.size(), 0, 0, cv::INTER_LINEAR);
-  return rgb_tensor(canvas);
-}
-
-/// Splits the nominal images into (bank images, threshold images). Every
-/// kThresholdEvery-th image measures the threshold and is kept out of the bank, so the
-/// threshold isn't measured on images that match their own bank entries. With fewer
-/// images, all are reused for both.
-std::pair<std::vector<fs::path>, std::vector<fs::path>>
-split_nominal(const std::vector<fs::path>& paths) {
-  if (paths.size() < kThresholdEvery) {
-    return {paths, paths};
-  }
-  std::vector<fs::path> bank_paths;
-  std::vector<fs::path> threshold_paths;
-  for (std::size_t i = 0; i < paths.size(); ++i) {
-    (i % kThresholdEvery == kThresholdEvery - 1 ? threshold_paths : bank_paths).push_back(paths[i]);
-  }
-  return {bank_paths, threshold_paths};
-}
-
-patchcore::PatchEmbeddings embedding_from_tensor(const simaai::neat::Tensor& tensor) {
-  sima_examples::require(tensor.dtype == simaai::neat::TensorDType::Float32,
-                         "Expected Float32 embedding");
-  const auto bytes = tensor.dense_bytes_tight();
-  sima_examples::require(bytes > 0 && bytes % sizeof(float) == 0, "Invalid embedding size");
+patchcore::PatchEmbeddings tensor_features(const neat::Tensor& tensor) {
+  const std::size_t bytes = tensor.dense_bytes_tight();
   std::vector<float> values(bytes / sizeof(float));
   sima_examples::require(
-      tensor.copy_dense_bytes_tight_to(reinterpret_cast<uint8_t*>(values.data()), bytes),
-      "Cannot copy embedding");
+      tensor.dtype == neat::TensorDType::Float32 &&
+          tensor.copy_dense_bytes_tight_to(reinterpret_cast<std::uint8_t*>(values.data()), bytes),
+      "the model must return Float32 patch features");
   return patchcore::extract_hwc(tensor.shape, std::move(values), kEmbedDim);
 }
 
-patchcore::PatchEmbeddings extract_from_bgr(simaai::neat::Model& model, const cv::Mat& bgr) {
-  auto tensors = model.run(simaai::neat::TensorList{model_input_tensor(bgr)});
-  if (tensors.empty()) {
-    throw std::runtime_error("model returned no output tensors");
-  }
-  return embedding_from_tensor(tensors.front());
+patchcore::PatchEmbeddings patch_features(neat::Model& model, const cv::Mat& bgr) {
+  return tensor_features(model.run(neat::TensorList{image_input(bgr)}).front());
 }
 
-int cmd_calibrate(const Config& cfg) {
-  const auto nominal_paths = find_images(cfg.calibration_nominal_dir);
-  if (nominal_paths.empty()) {
-    std::cerr << "[FATAL] no images found in " << cfg.calibration_nominal_dir << "\n";
-    return 3;
+// Build the memory bank from the nominal images and measure both thresholds on the images it
+// keeps out, then write memory_bank.npy and bank_meta.json.
+void calibrate(const sima_examples::Config& config, const fs::path& model_path) {
+  const auto nominal = image_paths(config.string("app.nominal_images_dir"));
+  sima_examples::require(nominal.size() >= kThresholdEvery,
+                         "app.nominal_images_dir needs at least " +
+                             std::to_string(kThresholdEvery) + " images");
+  std::vector<fs::path> bank_images, held_out;
+  for (std::size_t i = 0; i < nominal.size(); ++i) {
+    (i % kThresholdEvery == kThresholdEvery - 1 ? held_out : bank_images).push_back(nominal[i]);
   }
-  std::vector<fs::path> paths;
-  std::vector<fs::path> threshold_paths;
-  std::string threshold_source;
-  if (!cfg.calibration_threshold_dir.empty()) {
-    paths = nominal_paths;
-    threshold_paths = find_images(cfg.calibration_threshold_dir);
-    threshold_source = cfg.calibration_threshold_dir.string();
-  } else {
-    std::tie(paths, threshold_paths) = split_nominal(nominal_paths);
-    if (nominal_paths.size() < kThresholdEvery) {
-      std::cerr << "[WARN] fewer than " << kThresholdEvery
-                << " nominal images: the threshold is measured on the bank's own images and "
-                   "will be too low\n";
-      threshold_source = cfg.calibration_nominal_dir.string() + " (same images as the bank)";
-    } else {
-      threshold_source = cfg.calibration_nominal_dir.string() + " (every " +
-                         std::to_string(kThresholdEvery) + "th image, kept out of the bank)";
-    }
+  neat::Model model(model_path.string(), image_model_options());
+  const double coreset_ratio = config.number("app.coreset_ratio");
+  std::vector<patchcore::PatchEmbeddings> features;
+  for (const auto& path : bank_images) {
+    features.push_back(patch_features(model, read_image(path)));
   }
+  const auto bank = patchcore::MemoryBank::build(features, coreset_ratio, kSeed);
 
-  simaai::neat::Model model(cfg.model_path, image_model_options());
-  std::cout << "Extracting patch embeddings from " << paths.size() << " nominal images ...\n";
-
-  std::vector<patchcore::PatchEmbeddings> per_image;
-  per_image.reserve(paths.size());
-  std::size_t total_patches = 0;
-  for (std::size_t i = 0; i < paths.size(); ++i) {
-    const auto& path = paths[i];
-    cv::Mat bgr = cv::imread(path.string(), cv::IMREAD_COLOR);
-    if (bgr.empty()) {
-      std::cerr << "[WARN] could not read image: " << path << "\n";
-      continue;
-    }
-    auto embedding = extract_from_bgr(model, bgr);
-    total_patches += embedding.patch_count();
-    per_image.push_back(std::move(embedding));
-    if ((i + 1) % 10 == 0 || i + 1 == paths.size()) {
-      std::cout << "  [" << (i + 1) << "/" << paths.size() << "] " << path.filename().string()
-                << "\n";
-    }
-  }
-
-  const auto bank = patchcore::MemoryBank::build(per_image, cfg.coreset_ratio, cfg.seed);
-  std::cout << "Coreset: " << bank.size() << " / " << total_patches
-            << " patches (ratio=" << cfg.coreset_ratio << ")\n";
-
-  std::vector<float> scores;
-  std::vector<float> patch_scores;
-  scores.reserve(threshold_paths.size());
-  for (const auto& path : threshold_paths) {
-    cv::Mat bgr = cv::imread(path.string(), cv::IMREAD_COLOR);
-    if (bgr.empty()) {
-      continue;
-    }
-    const auto embedding = extract_from_bgr(model, bgr);
-    const auto scored = bank.score(embedding, cfg.num_neighbors);
-    scores.push_back(scored.image_score);
+  std::vector<float> image_scores, patch_scores;
+  for (const auto& path : held_out) {
+    const auto scored = bank.score(patch_features(model, read_image(path)), kNumNeighbors);
+    image_scores.push_back(scored.image_score);
     patch_scores.insert(patch_scores.end(), scored.score_map.begin(), scored.score_map.end());
   }
-  const int threshold_num_images = static_cast<int>(scores.size());
-  const float threshold = patchcore::percentile_threshold(scores, cfg.threshold_percentile) *
-                          static_cast<float>(cfg.threshold_margin);
-  std::cout << "Threshold: " << threshold << " (p" << cfg.threshold_percentile << " over "
-            << threshold_num_images << " nominal images from " << threshold_source << ", x"
-            << cfg.threshold_margin << " margin)\n";
+  const double percentile = config.number("app.threshold_percentile");
+  const auto margin = static_cast<float>(config.number("app.threshold_margin"));
+  const float threshold = patchcore::percentile_threshold(image_scores, percentile) * margin;
+  const float patch_threshold = patchcore::percentile_threshold(patch_scores, percentile) * margin;
 
-  // Patch-level threshold for the overlay highlight, separate from the image-level threshold.
-  const float patch_threshold =
-      patchcore::percentile_threshold(patch_scores, cfg.threshold_percentile) *
-      static_cast<float>(cfg.threshold_margin);
-  const float patch_scale_min = patchcore::percentile_threshold(patch_scores, 50.0);
-  const float patch_scale_max = patch_threshold;
-  std::cout << "Patch threshold: " << patch_threshold << " (p" << cfg.threshold_percentile
-            << " over " << patch_scores.size() << " nominal patches, x" << cfg.threshold_margin
-            << " margin; overlay highlights above " << patch_scale_max << ", color span from "
-            << patch_scale_min << ")\n";
-
-  if (!cfg.memory_bank_path.parent_path().empty()) {
-    fs::create_directories(cfg.memory_bank_path.parent_path());
-  }
-  if (!cfg.bank_meta_path.parent_path().empty()) {
-    fs::create_directories(cfg.bank_meta_path.parent_path());
-  }
-  bank.save(cfg.memory_bank_path);
-
+  const fs::path bank_dir = config.string("app.memory_bank_dir");
+  fs::create_directories(bank_dir);
+  bank.save(bank_dir / "memory_bank.npy");
   patchcore::BankMeta meta;
-  meta.model_sha256 = patchcore::sha256_file(cfg.model_path);
-  meta.bank_sha256 = patchcore::sha256_file(cfg.memory_bank_path);
-  meta.model_filename = fs::path(cfg.model_path).filename().string();
+  meta.model_sha256 = patchcore::sha256_file(model_path);
+  meta.bank_sha256 = patchcore::sha256_file(bank_dir / "memory_bank.npy");
+  meta.model_filename = model_path.filename().string();
   meta.backbone = kBackbone;
   meta.torchvision_weights = kTorchvisionWeights;
   meta.embed_dim = kEmbedDim;
-  meta.patch_grid_h = kPatchGridH;
-  meta.patch_grid_w = kPatchGridW;
-  meta.coreset_ratio = cfg.coreset_ratio;
-  meta.seed = cfg.seed;
-  meta.num_nominal_images = static_cast<int>(per_image.size());
+  meta.patch_grid_h = kPatchGrid;
+  meta.patch_grid_w = kPatchGrid;
+  meta.coreset_ratio = coreset_ratio;
+  meta.seed = kSeed;
+  meta.num_nominal_images = static_cast<int>(bank_images.size());
   meta.bank_size = static_cast<int>(bank.size());
-  meta.num_neighbors = cfg.num_neighbors;
-  meta.gaussian_sigma = cfg.gaussian_sigma;
+  meta.num_neighbors = kNumNeighbors;
+  meta.gaussian_sigma = kMapSigma;
   meta.threshold_value = threshold;
-  meta.threshold_percentile = cfg.threshold_percentile;
-  meta.threshold_num_images = threshold_num_images;
+  meta.threshold_percentile = percentile;
+  meta.threshold_num_images = static_cast<int>(held_out.size());
   meta.has_patch_threshold = true;
   meta.patch_threshold_value = patch_threshold;
-  meta.patch_threshold_scale_min = patch_scale_min;
-  meta.patch_threshold_scale_max = patch_scale_max;
   meta.created_at = patchcore::current_utc_timestamp();
-  patchcore::save_bank_meta(cfg.bank_meta_path, meta);
-
-  std::cout << "Saved " << cfg.memory_bank_path << " (" << bank.size() << " x " << bank.embed_dim()
-            << ") and " << cfg.bank_meta_path << "\n";
-  return 0;
+  patchcore::save_bank_meta(bank_dir / "bank_meta.json", meta);
+  std::cout << "bank=" << bank.size() << " patches from " << bank_images.size()
+            << " images threshold=" << threshold << " patch_threshold=" << patch_threshold << " ("
+            << held_out.size() << " held-out images) saved=" << bank_dir.string() << std::endl;
 }
 
+struct CalibratedBank {
+  patchcore::MemoryBank bank;
+  patchcore::BankMeta meta;
+};
 
-int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
-                        int num_neighbors, double patch_scale_min, double patch_scale_max) {
-  const auto paths = find_images(cfg.image_dir);
-  if (paths.empty()) {
-    std::cerr << "[FATAL] no images found in " << cfg.image_dir << "\n";
-    return 3;
+// The calibrated bank and its metadata, checked against the configured model.
+CalibratedBank load_bank(const sima_examples::Config& config, const fs::path& model_path) {
+  const fs::path bank_dir = config.string("app.memory_bank_dir");
+  const fs::path bank_path = bank_dir / "memory_bank.npy";
+  const fs::path meta_path = bank_dir / "bank_meta.json";
+  sima_examples::require(fs::exists(bank_path) && fs::exists(meta_path),
+                         "no memory bank in " + bank_dir.string() + "; run with --calibrate first");
+  auto meta = patchcore::load_bank_meta(meta_path);
+  patchcore::verify_bank_matches_model(meta, model_path);
+  patchcore::verify_bank_hash(meta, bank_path);
+  sima_examples::require(meta.has_patch_threshold,
+                         meta_path.string() +
+                             " has no patch_threshold; run with --calibrate again");
+  return {patchcore::MemoryBank::load(bank_path), std::move(meta)};
+}
+
+sima_examples::RegionOptions region_options(const sima_examples::Config& config,
+                                            const patchcore::BankMeta& meta, int width,
+                                            int height) {
+  sima_examples::RegionOptions options;
+  options.width = width;
+  options.height = height;
+  options.threshold = meta.patch_threshold_value;
+  options.min_region_px = kMinRegionPx;
+  options.max_regions = config.integer("inference.max_detections");
+  return options;
+}
+
+struct FrameResult {
+  float score = 0.0F;                         // The frame's anomaly score.
+  std::vector<sima_examples::Region> regions; // Empty unless the score is above threshold.
+};
+
+FrameResult defect_regions(const patchcore::MemoryBank& bank,
+                           const patchcore::PatchEmbeddings& features, double threshold,
+                           const sima_examples::RegionOptions& options) {
+  const auto scored = bank.score(features, kNumNeighbors);
+  if (scored.image_score <= threshold) {
+    return {scored.image_score, {}};
   }
-  fs::create_directories(cfg.output_dir);
-  // fs::equivalent follows symlinks, so a symlinked alias of the input directory is rejected too.
-  if (fs::equivalent(cfg.output_dir, cfg.image_dir)) {
-    std::cerr << "[FATAL] output.dir (" << cfg.output_dir << ") must not be the same as "
-              << "source.image_dir (" << cfg.image_dir << ") -- this would overwrite the input images\n";
-    return 2;
-  }
+  const cv::Mat map =
+      patchcore::anomaly_map(scored, features.height, features.width, kModelInputSide, kMapSigma);
+  return {scored.image_score, sima_examples::defect_regions(map, options)};
+}
 
-  simaai::neat::Model model(cfg.model_path, image_model_options());
-
-  int processed = 0;
-  int write_failures = 0;
+// Score every image of input.source and write it to output.dir with its regions outlined.
+void score_images(const sima_examples::Config& config, const fs::path& model_path,
+                  const CalibratedBank& calibrated) {
+  const fs::path output_dir = config.string("output.dir");
+  fs::create_directories(output_dir);
+  const double threshold = calibrated.meta.threshold_value;
+  neat::Model model(model_path.string(), image_model_options());
+  int flagged = 0;
+  const auto paths = image_paths(config.string("input.source"));
   for (const auto& path : paths) {
-    cv::Mat bgr = cv::imread(path.string(), cv::IMREAD_COLOR);
-    if (bgr.empty()) {
-      std::cerr << "[WARN] could not read image: " << path << "\n";
+    cv::Mat bgr = read_image(path);
+    const auto result = defect_regions(calibrated.bank, patch_features(model, bgr), threshold,
+                                       region_options(config, calibrated.meta, bgr.cols, bgr.rows));
+    for (const auto& region : result.regions) {
+      std::vector<cv::Point> outline;
+      for (const auto& point : region.polygon) {
+        outline.emplace_back(point[0], point[1]);
+      }
+      cv::polylines(bgr, outline, true, kOutlineBgr, 2);
+    }
+    sima_examples::require(cv::imwrite((output_dir / path.filename()).string(), bgr),
+                           "cannot write " + (output_dir / path.filename()).string());
+    const bool anomalous = result.score > threshold;
+    std::printf("%s: %s score=%.2f threshold=%.2f regions=%zu\n", path.filename().c_str(),
+                anomalous ? "ANOMALOUS" : "normal", result.score, threshold, result.regions.size());
+    flagged += anomalous ? 1 : 0;
+  }
+  std::cout << "processed=" << paths.size() << " flagged=" << flagged
+            << " output=" << output_dir.string() << std::endl;
+}
+
+groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config,
+                                             const sima_examples::RtspStreamInfo& stream) {
+  groups::RtspEncodedInputOptions options;
+  options.url = config.string("input.source");
+  options.codec = config.choice("input.codec", kRtspCodecs);
+  options.tcp = config.boolean("input.rtsp.tcp");
+  options.latency_ms = config.integer("input.rtsp.latency_ms");
+  options.source_fps = stream.fps;
+  if (options.codec == groups::RtspCodec::H264) {
+    options.fallback_h264_width = stream.width;
+    options.fallback_h264_height = stream.height;
+  }
+  return options;
+}
+
+// Hardware decode to NV12 frames at the stream's size.
+neat::Graph decoder_graph(const sima_examples::Config& config,
+                          const sima_examples::RtspStreamInfo& stream) {
+  neat::SimaDecodeOptions decode;
+  decode.type = config.choice("input.codec", kDecodeTypes);
+  decode.dec_width = stream.width;
+  decode.dec_height = stream.height;
+  decode.dec_fps = stream.fps;
+  neat::Graph graph("decoder");
+  graph.add(neat::nodes::SimaDecode(std::move(decode)));
+  return graph;
+}
+
+// Decoded frames -> PatchCore feature extractor -> "features" output.
+neat::Graph features_graph(neat::Model& model) {
+  neat::Graph graph("extractor");
+  graph.add(model.graph());
+  graph.add(neat::nodes::Output("features"));
+  return graph;
+}
+
+// Send the stream to Insight as received.
+groups::VideoSenderOptions video_options(const sima_examples::Config& config) {
+  auto options = groups::VideoSenderOptions::Passthrough(config.choice("input.codec", kRtspCodecs));
+  options.host = config.string("output.insight.host");
+  options.video_port_base = config.integer("output.insight.video_port_base");
+  return options;
+}
+
+neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config) {
+  neat::MetadataSenderOptions options;
+  options.host = config.string("output.insight.host");
+  options.metadata_port_base = config.integer("output.insight.metadata_port_base");
+  return options;
+}
+
+neat::RunOptions run_options() {
+  neat::RunOptions options;
+  options.preset = neat::RunPreset::Realtime;
+  options.output_memory = neat::OutputMemory::ZeroCopy;
+  return options;
+}
+
+struct RegionCounts {
+  int processed = 0; // Frames processed.
+  int flagged = 0;   // Anomalous frames.
+};
+
+// Send every frame's defect regions to Insight until `frames` (0: no limit) or a stop signal.
+RegionCounts send_regions(neat::Run& run, neat::MetadataSender& metadata_sender,
+                          const patchcore::MemoryBank& bank, double threshold,
+                          const sima_examples::RegionOptions& options, int frames,
+                          const std::atomic<bool>& stop) {
+  RegionCounts counts;
+  while (!stop && (frames == 0 || counts.processed < frames)) {
+    neat::Sample sample;
+    neat::PullError error;
+    const auto status = run.pull("features", kPullTimeoutMs, sample, &error);
+    if (!sima_examples::pull_status_has_sample(status, "features", error, run.last_error())) {
       continue;
     }
-
-    const double mla_start = time_ms();
-    const auto embedding = extract_from_bgr(model, bgr);
-    const double mla_ms = time_ms() - mla_start;
-
-    const double host_start = time_ms();
-    const auto scored = bank.score(embedding, num_neighbors);
-    const cv::Mat overlay = draw_overlay(bgr, scored, embedding.height, embedding.width,
-                                         cfg.gaussian_sigma, cfg.overlay_alpha, patch_scale_min,
-                                         patch_scale_max);
-    const double host_ms = time_ms() - host_start;
-
-    const bool anomalous = scored.image_score > threshold;
-    std::cout << path.string() << ": score=" << scored.image_score << " threshold=" << threshold
-              << " verdict=" << (anomalous ? "ANOMALOUS" : "normal") << " (mla=" << mla_ms
-              << "ms host=" << host_ms << "ms)\n";
-    const fs::path out_path = cfg.output_dir / path.filename();
-    if (!cv::imwrite(out_path.string(), overlay)) {
-      std::cerr << "[ERROR] failed to write overlay: " << out_path << "\n";
-      ++write_failures;
-      continue;
+    const auto result = defect_regions(
+        bank, tensor_features(neat::tensors_from_sample(sample).front()), threshold, options);
+    // A normal frame sends no segments, which clears the last outline. A nonblocking send drops
+    // the message while the socket buffer is full; the drops are counted in the sender's stats
+    // and reported when the run ends. Any other failure throws.
+    std::string send_error;
+    if (!metadata_sender.send_metadata("segmentation", sima_examples::segments_json(result.regions),
+                                       sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1,
+                                       sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "",
+                                       &send_error) &&
+        !send_error.empty()) {
+      throw std::runtime_error("metadata send failed: " + send_error);
     }
-    ++processed;
+    ++counts.processed;
+    counts.flagged += result.regions.empty() ? 0 : 1;
   }
-  std::cout << "Done: " << processed << " images processed -- overlays written to " << cfg.output_dir
-            << "\n";
-  // Any failed write fails the run.
-  if (write_failures > 0) {
-    std::cerr << "[FATAL] " << write_failures << " overlay(s) failed to write\n";
-    return 3;
-  }
-  return processed > 0 ? 0 : 3;
+  return counts;
 }
 
-
-struct VideoSender {
-  simaai::neat::Graph graph{"insight"};
-  simaai::neat::Run run;
-  int port = 0;
-};
-
-/// A small, separate Insight push-graph: the host manually pushes each
-/// annotated frame into it.
-simaai::neat::Tensor nv12_tensor(const cv::Mat& frame) {
-  using namespace simaai::neat;
-  const int height = frame.rows * 2 / 3, width = frame.cols;
-  auto tensor = Tensor::from_cv_mat_view(frame, ImageSpec::PixelFormat::GRAY8);
-  tensor.semantic.image = ImageSpec{ImageSpec::PixelFormat::NV12, ""};
-  tensor.shape = {height, width};
-  tensor.strides_bytes.clear();
-  tensor.axis_semantics = {TensorAxisSemantic::H, TensorAxisSemantic::W};
-  tensor.planes = {
-      {PlaneRole::Y, {height, width}, {width, 1}, 0},
-      {PlaneRole::UV, {height / 2, width}, {width, 1}, static_cast<int64_t>(height) * width}};
-  return tensor;
-}
-
-VideoSender build_video_sender(const Config& cfg, double fps, int width, int height,
-                               bool nv12 = false) {
-  const int output_fps = std::max(1, static_cast<int>(std::lround(fps)));
-  simaai::neat::InputOptions input_options;
-  input_options.payload_type = simaai::neat::PayloadType::Image;
-  input_options.format = nv12 ? "NV12" : "BGR";
-  input_options.width = width;
-  input_options.height = height;
-  input_options.depth = nv12 ? 1 : 3;
-  input_options.fps_n = output_fps;
-  input_options.fps_d = 1;
-  // Keep each pushed frame's source timestamp; Insight pairs it with the verdict by timestamp.
-  input_options.do_timestamp = false;
-
-  auto sender_options =
-      simaai::neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = output_fps});
-  sender_options.host = cfg.insight_host;
-  sender_options.channel = cfg.insight_channel;
-  sender_options.video_port_base = cfg.insight_video_port;
-  sender_options.encoder.bitrate_kbps = cfg.insight_bitrate_kbps;
-
-  VideoSender sender;
-  sender.port = sender_options.video_port();
-  sender.graph.add(simaai::neat::nodes::Input(input_options));
-  sender.graph.add(simaai::neat::nodes::groups::VideoSender(sender_options));
-  cv::Mat seed(nv12 ? height * 3 / 2 : height, width, nv12 ? CV_8UC1 : CV_8UC3, cv::Scalar::all(0));
-  if (nv12) {
-    seed.rowRange(0, height).setTo(16);
-    seed.rowRange(height, seed.rows).setTo(128);
+int run_app(const CliOptions& cli) {
+  const auto config = sima_examples::Config::load(cli.config_path);
+  const fs::path model_path =
+      fs::absolute(cli.config_path).parent_path() / config.string("model.path");
+  if (cli.calibrate) {
+    calibrate(config, model_path);
+    return 0;
   }
-  const auto tensor =
-      nv12 ? nv12_tensor(seed)
-           : simaai::neat::Tensor::from_cv_mat(seed, simaai::neat::ImageSpec::PixelFormat::BGR,
-                                               simaai::neat::TensorMemory::CPU);
-  sender.run = sender.graph.build(simaai::neat::TensorList{tensor});
-  return sender;
-}
-
-/// Sends each frame's verdict to Insight as metadata, next to the video.
-std::unique_ptr<simaai::neat::MetadataSender> make_metadata_sender(const Config& cfg) {
-  simaai::neat::MetadataSenderOptions options;
-  options.host = cfg.insight_host;
-  options.channel = cfg.insight_channel;
-  options.metadata_port_base = cfg.insight_metadata_port;
-  std::string err;
-  auto sender = std::make_unique<simaai::neat::MetadataSender>(options, &err);
-  sima_examples::require(sender->ok(), "Insight metadata sender: " + err);
-  return sender;
-}
-
-/// Insight draws `top_classes` as a label on the video; `anomaly` carries the raw values
-/// for other consumers.
-void send_verdict(simaai::neat::MetadataSender& sender, float score, float threshold,
-                  bool anomalous, int64_t timestamp_ms, int64_t frame_id) {
-  const std::string verdict = anomalous ? "ANOMALOUS" : "normal";
-  char label[96];
-  std::snprintf(label, sizeof(label), "%s score=%.1f thr=%.1f", verdict.c_str(), score, threshold);
-  const nlohmann::json data = {
-      {"top_classes", nlohmann::json::array({{{"label", label}, {"confidence", 1.0}}})},
-      {"anomaly",
-       {{"verdict", verdict},
-        {"score", std::round(score * 1e4) / 1e4},
-        {"threshold", std::round(threshold * 1e4) / 1e4}}},
-  };
-  std::string err;
-  if (!sender.send_metadata("classification", data.dump(), timestamp_ms, std::to_string(frame_id),
-                            &err)) {
-    std::cerr << "[WARN] Insight metadata send failed: " << err << "\n";
-  }
-}
-
-/// Stamps the annotated frame with its source frame's timestamp and ID, so Insight pairs it
-/// with the verdict sent for that frame.
-void stream_frame(simaai::neat::Run& run, const cv::Mat& frame, int64_t pts_ns, int64_t frame_id,
-                  bool nv12 = false) {
-  const auto tensor =
-      nv12 ? nv12_tensor(frame)
-           : simaai::neat::Tensor::from_cv_mat(frame, simaai::neat::ImageSpec::PixelFormat::BGR,
-                                               simaai::neat::TensorMemory::CPU);
-  simaai::neat::Sample sample = simaai::neat::make_tensor_sample("", tensor);
-  sample.payload_type = simaai::neat::PayloadType::Image;
-  sample.media_type = "video/x-raw";
-  sample.format = nv12 ? "NV12" : "BGR";
-  sample.payload_tag = sample.format;
-  sample.pts_ns = pts_ns;
-  sample.frame_id = frame_id;
-  if (!run.push(sample)) {
-    throw std::runtime_error("Insight video push failed");
-  }
-}
-
-int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
-                         int num_neighbors, double patch_scale_min, double patch_scale_max) {
-  cv::VideoCapture video(cfg.video_path.string());
-  cv::Mat frame;
-  if (!video.isOpened() || !video.read(frame)) {
-    std::cerr << "[FATAL] failed to open video source: " << cfg.video_path << "\n";
-    return 2;
-  }
-  const int width = frame.cols;
-  const int height = frame.rows;
-
-  const double input_fps = video.get(cv::CAP_PROP_FPS);
-  const double fps = std::isfinite(input_fps) && input_fps > 0.0 ? input_fps : 30.0;
-
-  simaai::neat::Model model(cfg.model_path, image_model_options());
-  auto runner = model.build(simaai::neat::TensorList{model_input_tensor(frame)});
-  auto video_sender = build_video_sender(cfg, fps, width, height);
-  auto metadata_sender = make_metadata_sender(cfg);
-  std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port
-            << " metadata=" << metadata_sender->metadata_port() << "\n";
-
-  if (cfg.save_every > 0) {
-    fs::create_directories(cfg.output_dir);
+  const CalibratedBank calibrated = load_bank(config, model_path);
+  if (config.choice("input.type", kInputTypes) == "image_dir") {
+    score_images(config, model_path, calibrated);
+    return 0;
   }
 
-  int processed = 0;
-  int write_failures = 0;
-  while (cfg.frames <= 0 || processed < cfg.frames) {
-    const double mla_start = time_ms();
-    auto tensors = runner.run(simaai::neat::TensorList{model_input_tensor(frame)});
-    if (tensors.empty()) {
-      throw std::runtime_error("model returned no output tensors");
-    }
-    const auto embedding = embedding_from_tensor(tensors.front());
-    const double mla_ms = time_ms() - mla_start;
+  const auto stream = sima_examples::probe_rtsp_stream_info(
+      config.string("input.source"), config.boolean("input.rtsp.tcp"),
+      {config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")});
+  neat::Model model(model_path.string(), stream_model_options(stream));
 
-    const double host_start = time_ms();
-    const auto scored = bank.score(embedding, num_neighbors);
-    const cv::Mat overlay = draw_overlay(frame, scored, embedding.height, embedding.width,
-                                         cfg.gaussian_sigma, cfg.overlay_alpha, patch_scale_min,
-                                         patch_scale_max);
-    const double host_ms = time_ms() - host_start;
+  const neat::Graph rtsp = groups::RtspEncodedInput(rtsp_options(config, stream));
+  const neat::Graph decoder = decoder_graph(config, stream);
+  const neat::Graph video = groups::VideoSender(video_options(config));
+  neat::Graph graph;
+  graph.connect(rtsp, decoder);
+  // A plain link lets Core tee the encoded stream to the decoder and the video sender.
+  graph.connect(rtsp, video);
+  graph.connect(decoder, features_graph(model));
 
-    ++processed;
-    const bool anomalous = scored.image_score > threshold;
-    std::cout << "frame=" << processed << ": score=" << scored.image_score
-              << " threshold=" << threshold << " verdict=" << (anomalous ? "ANOMALOUS" : "normal")
-              << " (mla=" << mla_ms << "ms host=" << host_ms << "ms)\n";
+  std::string error;
+  neat::MetadataSender metadata_sender(metadata_options(config), &error);
+  sima_examples::require(metadata_sender.ok(), error);
+  const std::atomic<bool>& stop = sima_examples::stop_on_signals();
+  // The Run's destructor closes it when send_regions throws.
+  neat::Run run = graph.build(run_options());
+  const std::string host = config.string("output.insight.host");
+  const int video_port = config.integer("output.insight.video_port_base");
+  std::cout << "source=" << config.string("input.source")
+            << " codec=" << config.string("input.codec") << " stream=" << stream.width << "x"
+            << stream.height << "@" << stream.fps << " bank=" << calibrated.bank.size()
+            << " insight=" << host << " video=" << video_port
+            << " metadata=" << config.integer("output.insight.metadata_port_base") << std::endl;
+  const RegionCounts counts =
+      send_regions(run, metadata_sender, calibrated.bank, calibrated.meta.threshold_value,
+                   region_options(config, calibrated.meta, stream.width, stream.height),
+                   config.integer("inference.frames"), stop);
+  run.close();
 
-    const auto pts_ns = static_cast<int64_t>(std::llround((processed - 1) * 1e9 / fps));
-    stream_frame(video_sender.run, overlay, pts_ns, processed);
-    send_verdict(*metadata_sender, scored.image_score, threshold, anomalous, pts_ns / 1'000'000,
-                 processed);
-    if (cfg.save_every > 0 && processed % cfg.save_every == 0) {
-      const fs::path snapshot_path = cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
-      if (!cv::imwrite(snapshot_path.string(), overlay)) {
-        std::cerr << "[ERROR] failed to write snapshot: " << snapshot_path << "\n";
-        ++write_failures;
-      }
-    }
-
-    if ((cfg.frames > 0 && processed >= cfg.frames) || !video.read(frame)) {
-      break;
-    }
+  // std::endl flushes: after an RTSP run the process can exit without flushing stdout, which
+  // loses these lines on a pipe or a file.
+  std::cout << "processed=" << counts.processed << " flagged=" << counts.flagged
+            << " video_sender=" << host << ":" << video_port << std::endl;
+  const auto failures = metadata_sender.stats().send_failures;
+  if (failures > 0) {
+    std::cout << failures << " metadata messages dropped" << std::endl;
   }
-
-  runner.close();
-  video_sender.run.close();
-  std::cout << "Done: " << processed << " frames processed  video_sender=" << cfg.insight_host
-            << ":" << video_sender.port << "\n";
-  if (write_failures > 0) {
-    std::cerr << "[FATAL] " << write_failures << " snapshot(s) failed to write\n";
-    return 3;
-  }
-  return processed > 0 ? 0 : 3;
-}
-
-
-struct SourceGeometry {
-  int width = 0;
-  int height = 0;
-  int fps = 0;
-};
-
-SourceGeometry probe_rtsp_geometry(const Config& cfg) {
-  sima_examples::RtspStreamInfo probe;
-  sima_examples::RtspProbeOptions probe_options;
-  probe_options.latency_ms = cfg.rtsp_latency_ms;
-  probe_options.rtsp_tcp = cfg.rtsp_tcp;
-  (void)sima_examples::probe_rtsp_stream_info(cfg.rtsp_url, probe_options, probe);
-
-  SourceGeometry geometry;
-  geometry.width = cfg.rtsp_width > 0 ? cfg.rtsp_width : probe.width;
-  geometry.height = cfg.rtsp_height > 0 ? cfg.rtsp_height : probe.height;
-  geometry.fps = probe.fps;
-  if (cfg.rtsp_codec == RtspCodec::Mjpeg && geometry.fps <= 0) {
-    throw std::runtime_error(
-        "MJPEG source did not provide a valid frame rate; set source.rtsp.width/height or use a "
-        "source with probeable FPS metadata");
-  }
-  return geometry;
-}
-
-simaai::neat::Graph make_rtsp_source_fragment(const Config& cfg, const SourceGeometry& geometry) {
-  simaai::neat::nodes::groups::RtspDecodedInputOptions opt;
-  opt.url = cfg.rtsp_url;
-  opt.latency_ms = cfg.rtsp_latency_ms;
-  opt.tcp = cfg.rtsp_tcp;
-  opt.insert_queue = true;
-  opt.out_format = "NV12";
-  opt.decoder_name = "decoder";
-  opt.decoder_raw_output = true;
-  opt.codec = cfg.rtsp_codec == RtspCodec::H264
-                 ? simaai::neat::nodes::groups::RtspCodec::H264
-                 : cfg.rtsp_codec == RtspCodec::H265
-                       ? simaai::neat::nodes::groups::RtspCodec::H265
-                       : simaai::neat::nodes::groups::RtspCodec::MJPEG;
-  opt.source_fps = geometry.fps;
-  if (cfg.rtsp_codec == RtspCodec::H264) {
-    opt.auto_caps_from_stream = true;
-    opt.fallback_h264_width = geometry.width;
-    opt.fallback_h264_height = geometry.height;
-  } else {
-    // h265/mjpeg caps aren't self-describing the way h264 SPS is, so Neat
-    // needs an explicit hint; h264 negotiates it from the stream itself.
-    opt.dec_width = geometry.width;
-    opt.dec_height = geometry.height;
-  }
-  return simaai::neat::nodes::groups::RtspDecodedInput(opt);
-}
-
-const simaai::neat::Sample* find_field(const simaai::neat::Sample& sample,
-                                       const std::string& label) {
-  if (sample.stream_label == label) {
-    return &sample;
-  }
-  for (const auto& field : sample.fields) {
-    if (const auto* found = find_field(field, label)) {
-      return found;
-    }
-  }
-  return nullptr;
-}
-
-cv::Mat frame_nv12_from_sample(const simaai::neat::Sample& sample) {
-  const auto* field = find_field(sample, "frame");
-  if (!field)
-    field = &sample;
-  const auto tensors = simaai::neat::tensors_from_sample(*field, true);
-  sima_examples::require(!tensors.empty() && tensors.front().is_nv12(), "joined frame is not NV12");
-  const auto& tensor = tensors.front();
-  cv::Mat frame(tensor.height() * 3 / 2, tensor.width(), CV_8U);
-  sima_examples::require(tensor.copy_nv12_contiguous_to(frame.data, frame.total()),
-                         "Cannot copy NV12 frame");
-  return frame;
-}
-
-struct RtspRuntime {
-  simaai::neat::Graph graph;
-  simaai::neat::Run run;
-};
-
-// Model embedded in the RTSP graph: consumes the decoder's NV12 frames directly.
-simaai::neat::Model::Options rtsp_graph_model_options(const SourceGeometry& geometry) {
-  simaai::neat::Model::Options opt;
-  opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
-  opt.preprocess.input_max_width = geometry.width;
-  opt.preprocess.input_max_height = geometry.height;
-  // Letterbox exactly like model_input_tensor. Resize must be switched on explicitly:
-  // on Auto the planner leaves it off for frames that aren't the model input size.
-  opt.preprocess.resize.enable = simaai::neat::AutoFlag::On;
-  opt.preprocess.resize.mode = simaai::neat::ResizeMode::Letterbox;
-  opt.preprocess.resize.width = kModelInputSize.width;
-  opt.preprocess.resize.height = kModelInputSize.height;
-  opt.preprocess.resize.pad_value = kLetterboxPad;
-  opt.preprocess.preset = simaai::neat::NormalizePreset::ImageNet;
-  return opt;
-}
-
-// RTSP source -> branch -> {model route -> "embedding", "frame"}, joined per frame into
-// "patchcore_output".
-RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry,
-                               simaai::neat::Model& model) {
-  RtspRuntime rt;
-  auto source = make_rtsp_source_fragment(cfg, geometry);
-  auto branch = simaai::neat::graphs::Branch("source", {"model", "frame"});
-
-  simaai::neat::Graph model_graph("model");
-  model_graph.connect(simaai::neat::nodes::Input("model"),
-                      model.graph(simaai::neat::Model::RouteOptions{}));
-  simaai::neat::Graph embedding_graph("embedding");
-  embedding_graph.add(
-      simaai::neat::nodes::Output("embedding", simaai::neat::OutputOptions::EveryFrame(4)));
-  simaai::neat::Graph frame_graph("frame");
-  frame_graph.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
-  // Drop older frame/embedding pairs when host scoring falls behind.
-  simaai::neat::Graph joined("patchcore_output");
-  joined.add(simaai::neat::nodes::Input("frame"));
-  joined.add(simaai::neat::nodes::Input("embedding"));
-  auto newest = simaai::neat::OutputOptions::Latest();
-  newest.max_buffers = kJoinedBuffers;
-  newest.combine_policy = simaai::neat::CombinePolicy::ByFrame;
-  joined.add(simaai::neat::nodes::Output("patchcore_output", newest));
-  joined.connect("frame", "patchcore_output");
-  joined.connect("embedding", "patchcore_output");
-
-  rt.graph = simaai::neat::Graph("patchcore");
-  rt.graph.connect(source, branch);
-  rt.graph.connect(branch, model_graph);
-  rt.graph.connect(model_graph, embedding_graph);
-  rt.graph.connect(branch, frame_graph);
-  rt.graph.connect(frame_graph, joined);
-  rt.graph.connect(embedding_graph, joined);
-
-  simaai::neat::RunOptions run_options;
-  run_options.preset = simaai::neat::RunPreset::Realtime;
-  run_options.queue_depth = 16;
-  run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
-  run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
-  rt.run = rt.graph.build(run_options);
-  return rt;
-}
-
-struct ScoredEmbedding {
-  patchcore::AnomalyResult result;
-  cv::Size grid;
-};
-
-ScoredEmbedding score_embedding_from_sample(const simaai::neat::Sample& sample,
-                                            const patchcore::MemoryBank& bank, int num_neighbors) {
-  const auto* field = find_field(sample, "embedding");
-  if (!field)
-    throw std::runtime_error("joined output missing an embedding field");
-  const auto tensors = simaai::neat::tensors_from_sample(*field, true);
-  if (tensors.empty())
-    throw std::runtime_error("embedding field has no tensor");
-  const auto& tensor = tensors.front();
-  std::vector<int64_t> shape;
-  for (const auto dim : tensor.shape)
-    if (dim > 1)
-      shape.push_back(dim);
-  if (shape.size() == 3 && shape[2] == kEmbedDim && tensor.is_contiguous() &&
-      tensor.dtype == simaai::neat::TensorDType::Float32) {
-    const auto mapping = tensor.map_read();
-    sima_examples::require(mapping.data && mapping.size_bytes >= tensor.dense_bytes_tight(),
-                           "Cannot map embedding");
-    const cv::Mat patches(static_cast<int>(shape[0] * shape[1]), kEmbedDim, CV_32F, mapping.data);
-    // Score while this read mapping owns the producer loan, then release it before drawing.
-    return {bank.score(patches, num_neighbors),
-            {static_cast<int>(shape[1]), static_cast<int>(shape[0])}};
-  }
-  const auto embedding = embedding_from_tensor(tensor);
-  return {bank.score(embedding, num_neighbors), {embedding.width, embedding.height}};
-}
-
-int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
-                   int num_neighbors, double patch_scale_min, double patch_scale_max) {
-  const auto geometry = probe_rtsp_geometry(cfg);
-  if (geometry.width <= 0 || geometry.height <= 0 || geometry.fps <= 0) {
-    std::cerr << "[FATAL] failed to resolve source geometry for " << cfg.rtsp_url << "\n";
-    return 2;
-  }
-
-  simaai::neat::Model model(cfg.model_path, rtsp_graph_model_options(geometry));
-  auto rt = build_rtsp_runtime(cfg, geometry, model);
-  auto video_sender = build_video_sender(cfg, geometry.fps, geometry.width, geometry.height, true);
-  auto metadata_sender = make_metadata_sender(cfg);
-  std::cout << "streaming to Insight: " << cfg.insight_host << ":" << video_sender.port
-            << " metadata=" << metadata_sender->metadata_port() << "\n";
-
-  const bool save_frames = cfg.save_every > 0;
-  if (save_frames) {
-    fs::create_directories(cfg.output_dir);
-  }
-
-  int processed = 0;
-  int write_failures = 0;
-  while (cfg.frames <= 0 || processed < cfg.frames) {
-    cv::Mat frame;
-    ScoredEmbedding scored_embedding;
-    double mla_ms = 0.0, score_ms = 0.0;
-    int64_t pts_ns = -1;
-    int64_t source_frame_id = -1;
-    {
-      simaai::neat::Sample sample;
-      simaai::neat::PullError pull_error;
-      // The model runs inside the graph, so "mla" here is the wait for the joined output.
-      const double mla_start = time_ms();
-      // -1 waits forever, so a network stall doesn't end the loop.
-      const auto status = rt.run.pull("patchcore_output", -1, sample, &pull_error);
-      if (status == simaai::neat::PullStatus::Closed) {
-        break;
-      }
-      if (status != simaai::neat::PullStatus::Ok) {
-        throw std::runtime_error("failed to pull output: " + pull_error.message);
-      }
-      mla_ms = time_ms() - mla_start;
-      // Score the embedding view and own the frame before releasing the producer loans.
-      const double score_start = time_ms();
-      scored_embedding = score_embedding_from_sample(sample, bank, num_neighbors);
-      score_ms = time_ms() - score_start;
-      frame = frame_nv12_from_sample(sample);
-      pts_ns = sample.pts_ns;
-      source_frame_id = sample.frame_id;
-    }
-
-    const double host_start = time_ms();
-    const auto& scored = scored_embedding.result;
-    patchcore::draw_nv12_overlay(frame, scored, scored_embedding.grid.height,
-                                 scored_embedding.grid.width, cfg.gaussian_sigma, cfg.overlay_alpha,
-                                 patch_scale_min, patch_scale_max);
-    const bool anomalous = scored.image_score > threshold;
-    ++processed;
-    std::cout << "frame=" << processed << ": score=" << scored.image_score
-              << " threshold=" << threshold << " verdict=" << (anomalous ? "ANOMALOUS" : "normal")
-              << " (mla=" << mla_ms << "ms host=" << (score_ms + time_ms() - host_start) << "ms)\n";
-
-    // The video frame and its verdict carry the same source identity.
-    const int64_t frame_id = source_frame_id >= 0 ? source_frame_id : processed;
-    stream_frame(video_sender.run, frame, pts_ns, frame_id, true);
-    const int64_t timestamp_ms = pts_ns >= 0 ? pts_ns / 1'000'000 : -1;
-    send_verdict(*metadata_sender, scored.image_score, threshold, anomalous, timestamp_ms,
-                 frame_id);
-    if (save_frames && processed % cfg.save_every == 0) {
-      const fs::path snapshot_path =
-          cfg.output_dir / ("frame_" + std::to_string(processed) + ".jpg");
-      cv::Mat snapshot;
-      cv::cvtColor(frame, snapshot, cv::COLOR_YUV2BGR_NV12);
-      if (!cv::imwrite(snapshot_path.string(), snapshot)) {
-        std::cerr << "[ERROR] failed to write snapshot: " << snapshot_path << "\n";
-        ++write_failures;
-      }
-    }
-  }
-
-  rt.run.close();
-  video_sender.run.close();
-  std::cout << "Done: " << processed << " frames processed  video_sender=" << cfg.insight_host
-            << ":" << video_sender.port << "\n";
-  if (write_failures > 0) {
-    std::cerr << "[FATAL] " << write_failures << " snapshot(s) failed to write\n";
-    return 3;
-  }
-  return processed > 0 ? 0 : 3;
+  return 0;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-  std::cout.setf(std::ios::unitbuf);
-  std::cerr.setf(std::ios::unitbuf);
-
   try {
-    const CliOptions cli = parse_args(argc, argv);
-    if (cli.validate_config_only) {
-      load_config(cli.config_path);
-      std::cout << "Config validated: " << cli.config_path << "\n";
-      return 0;
-    }
-    const Config cfg = load_config(cli.config_path);
-
-    if (cli.calibrate) {
-      return cmd_calibrate(cfg);
-    }
-
-    if (!fs::exists(cfg.memory_bank_path) || !fs::exists(cfg.bank_meta_path)) {
-      std::cerr << "[FATAL] memory bank not found: " << cfg.memory_bank_path << " / "
-                << cfg.bank_meta_path
-                << "\n        Build it first: patchcore-anomaly-detector --calibrate --config <path>\n";
-      return 2;
-    }
-    const auto meta = patchcore::load_bank_meta(cfg.bank_meta_path);
-    std::cout << "Verifying model package...\n";
-    patchcore::verify_bank_matches_model(meta, cfg.model_path);
-    patchcore::verify_bank_hash(meta, cfg.memory_bank_path);
-    const auto bank = patchcore::MemoryBank::load(cfg.memory_bank_path);
-    const auto threshold = static_cast<float>(meta.threshold_value);
-    if (!meta.has_patch_threshold) {
-      std::cerr << "[FATAL] bank_meta.json is missing patch_threshold.scale_min; "
-                << "recalibrate with --calibrate to regenerate it\n";
-      return 2;
-    }
-    const double patch_scale_min = meta.patch_threshold_scale_min;
-    const double patch_scale_max = meta.patch_threshold_scale_max;
-    // Use the calibrated num_neighbors; the saved threshold depends on it.
-    const int num_neighbors = meta.num_neighbors;
-    if (num_neighbors != cfg.num_neighbors) {
-      std::cerr << "[WARN] scoring.num_neighbors=" << cfg.num_neighbors
-                << " in config differs from the bank's calibrated value (" << num_neighbors
-                << "); using " << num_neighbors
-                << " to stay consistent with the saved threshold. Recalibrate to adopt the new "
-                   "value.\n";
-    }
-
-    if (cfg.source_type == SourceType::ImageDir) {
-      return cmd_score_image_dir(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max);
-    }
-    if (cfg.source_type == SourceType::VideoFile) {
-      return cmd_score_video_file(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max);
-    }
-    return cmd_score_rtsp(cfg, bank, threshold, num_neighbors, patch_scale_min, patch_scale_max);
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n";
+    return run_app(parse_args(argc, argv));
+  } catch (const std::exception& error) {
+    std::cerr << "[ERR] " << error.what() << "\n";
     return 1;
   }
 }

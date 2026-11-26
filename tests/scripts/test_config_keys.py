@@ -42,7 +42,6 @@ PENDING_EXAMPLES = {
     "multi-stream-pose-estimator",
     "multi-stream-tracker",
     "neat-genai-studio",
-    "patchcore-anomaly-detector",
     "pcb-defect-detector",
     "pcie-high-density-multi-stream-object-detector",
     "single-stream-instance-segmenter",

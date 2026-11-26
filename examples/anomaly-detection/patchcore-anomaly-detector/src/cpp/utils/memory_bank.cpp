@@ -1,7 +1,8 @@
-#include "patchcore_memory_bank.h"
+#include "memory_bank.h"
 
 #include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <openssl/evp.h>
 
 #include <algorithm>
@@ -16,7 +17,6 @@
 #include <utility>
 
 namespace patchcore {
-
 
 std::string sha256_file(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
@@ -50,7 +50,6 @@ std::string sha256_file(const std::filesystem::path& path) {
   }
   return hex;
 }
-
 
 PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, std::vector<float> flat,
                             int embed_dim) {
@@ -94,7 +93,6 @@ PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, std::vector<float
   throw std::runtime_error("could not find the " + std::to_string(embed_dim) +
                            "-channel axis in the patch-embedding tensor");
 }
-
 
 namespace {
 
@@ -171,14 +169,14 @@ MemoryBank MemoryBank::load(const std::filesystem::path& path) {
   std::size_t header_len = 0;
   if (major == 1) {
     const std::string len_bytes = read_exact(in, 2);
-    header_len = static_cast<unsigned char>(len_bytes[0]) |
-                (static_cast<unsigned char>(len_bytes[1]) << 8);
+    header_len =
+        static_cast<unsigned char>(len_bytes[0]) | (static_cast<unsigned char>(len_bytes[1]) << 8);
   } else {
     const std::string len_bytes = read_exact(in, 4);
     header_len = static_cast<unsigned char>(len_bytes[0]) |
-                (static_cast<unsigned char>(len_bytes[1]) << 8) |
-                (static_cast<unsigned char>(len_bytes[2]) << 16) |
-                (static_cast<unsigned char>(len_bytes[3]) << 24);
+                 (static_cast<unsigned char>(len_bytes[1]) << 8) |
+                 (static_cast<unsigned char>(len_bytes[2]) << 16) |
+                 (static_cast<unsigned char>(len_bytes[3]) << 24);
   }
   const std::string header_dict = read_exact(in, header_len);
   const NpyHeader header = parse_header_dict(header_dict);
@@ -189,7 +187,7 @@ MemoryBank MemoryBank::load(const std::filesystem::path& path) {
   bank.vectors_.resize(header.rows * header.cols);
   if (!bank.vectors_.empty()) {
     in.read(reinterpret_cast<char*>(bank.vectors_.data()),
-           static_cast<std::streamsize>(bank.vectors_.size() * sizeof(float)));
+            static_cast<std::streamsize>(bank.vectors_.size() * sizeof(float)));
     if (static_cast<std::size_t>(in.gcount()) != bank.vectors_.size() * sizeof(float)) {
       throw std::runtime_error("memory bank .npy payload is truncated: " + path.string());
     }
@@ -204,7 +202,7 @@ void MemoryBank::save(const std::filesystem::path& path) const {
 
   std::ostringstream dict;
   dict << "{'descr': '<f4', 'fortran_order': False, 'shape': (" << num_vectors_ << ", "
-      << embed_dim_ << "), }";
+       << embed_dim_ << "), }";
   std::string header_dict = dict.str();
 
   const std::size_t prefix = 6 + 2 + 2;
@@ -227,12 +225,11 @@ void MemoryBank::save(const std::filesystem::path& path) const {
   out.write(len_bytes, sizeof(len_bytes));
   out.write(header_dict.data(), static_cast<std::streamsize>(header_dict.size()));
   out.write(reinterpret_cast<const char*>(vectors_.data()),
-           static_cast<std::streamsize>(vectors_.size() * sizeof(float)));
+            static_cast<std::streamsize>(vectors_.size() * sizeof(float)));
   if (!out.good()) {
     throw std::runtime_error("failed writing memory bank file: " + path.string());
   }
 }
-
 
 std::vector<std::size_t> greedy_coreset_indices(const std::vector<float>& vectors,
                                                 std::size_t embed_dim, double ratio,
@@ -241,8 +238,8 @@ std::vector<std::size_t> greedy_coreset_indices(const std::vector<float>& vector
     throw std::runtime_error("greedy_coreset_indices: vectors size is not a multiple of embed_dim");
   }
   const std::size_t n = vectors.size() / embed_dim;
-  const std::size_t k = std::max<std::size_t>(1, static_cast<std::size_t>(std::llround(
-                                                      static_cast<double>(n) * ratio)));
+  const std::size_t k = std::max<std::size_t>(
+      1, static_cast<std::size_t>(std::llround(static_cast<double>(n) * ratio)));
   std::vector<std::size_t> selected;
   selected.reserve(std::min(k, n));
   if (k >= n) {
@@ -314,11 +311,10 @@ MemoryBank MemoryBank::build(const std::vector<PatchEmbeddings>& per_image_embed
   bank.vectors_.resize(selected.size() * embed_dim);
   for (std::size_t i = 0; i < selected.size(); ++i) {
     std::copy_n(pooled.begin() + static_cast<std::ptrdiff_t>(selected[i] * embed_dim), embed_dim,
-               bank.vectors_.begin() + static_cast<std::ptrdiff_t>(i * embed_dim));
+                bank.vectors_.begin() + static_cast<std::ptrdiff_t>(i * embed_dim));
   }
   return bank;
 }
-
 
 namespace {
 
@@ -428,7 +424,6 @@ float percentile_threshold(std::vector<float> scores, double percentile) {
   return static_cast<float>(scores[lo] + frac * (scores[hi] - scores[lo]));
 }
 
-
 BankMeta load_bank_meta(const std::filesystem::path& path) {
   std::ifstream in(path);
   if (!in.good()) {
@@ -461,12 +456,9 @@ BankMeta load_bank_meta(const std::filesystem::path& path) {
     meta.threshold_num_images = t.value("num_images", 0);
   }
   if (j.contains("patch_threshold") && j["patch_threshold"].is_object() &&
-      j["patch_threshold"].contains("scale_min")) {
-    const auto& pt = j["patch_threshold"];
+      j["patch_threshold"].contains("value")) {
     meta.has_patch_threshold = true;
-    meta.patch_threshold_value = pt.value("value", 0.0);
-    meta.patch_threshold_scale_min = pt.value("scale_min", 0.0);
-    meta.patch_threshold_scale_max = pt.value("scale_max", 0.0);
+    meta.patch_threshold_value = j["patch_threshold"].value("value", 0.0);
   }
   meta.created_at = j.value("created_at", "");
   return meta;
@@ -492,11 +484,7 @@ void save_bank_meta(const std::filesystem::path& path, const BankMeta& meta) {
       {"percentile", meta.threshold_percentile},
       {"num_images", meta.threshold_num_images},
   };
-  j["patch_threshold"] = {
-      {"value", meta.patch_threshold_value},
-      {"scale_min", meta.patch_threshold_scale_min},
-      {"scale_max", meta.patch_threshold_scale_max},
-  };
+  j["patch_threshold"] = {{"value", meta.patch_threshold_value}};
   j["created_at"] = meta.created_at;
 
   std::ofstream out(path, std::ios::trunc);
@@ -528,6 +516,14 @@ void verify_bank_hash(const BankMeta& meta, const std::filesystem::path& bank_pa
         "(bank_meta.json bank_sha256=" +
         meta.bank_sha256 + ", actual=" + actual + "); rebuild both together with --calibrate");
   }
+}
+
+cv::Mat anomaly_map(const AnomalyResult& result, int grid_h, int grid_w, int side, double sigma) {
+  const cv::Mat scores(grid_h, grid_w, CV_32F, const_cast<float*>(result.score_map.data()));
+  cv::Mat upsampled;
+  cv::resize(scores, upsampled, cv::Size(side, side), 0, 0, cv::INTER_LINEAR);
+  cv::GaussianBlur(upsampled, upsampled, cv::Size(), sigma, sigma);
+  return upsampled;
 }
 
 std::string current_utc_timestamp() {

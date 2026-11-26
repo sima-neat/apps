@@ -17,12 +17,12 @@
 // Insight receives the video as received and every frame's regions as polygons.
 
 #include "neat.h"
+#include "sima_examples/anomaly_regions.h"
 #include "sima_examples/config.h"
 #include "sima_examples/example_utils.h"
 #include "sima_examples/pull_status.h"
 #include "sima_examples/rtsp_probe.h"
 #include "sima_examples/stop_signals.h"
-#include "utils/anomaly_regions.h"
 
 #include <opencv2/core.hpp>
 
@@ -152,9 +152,9 @@ neat::RunOptions run_options() {
   return options;
 }
 
-fastflow::RegionOptions region_options(const sima_examples::Config& config,
-                                       const sima_examples::RtspStreamInfo& stream) {
-  fastflow::RegionOptions options;
+sima_examples::RegionOptions region_options(const sima_examples::Config& config,
+                                            const sima_examples::RtspStreamInfo& stream) {
+  sima_examples::RegionOptions options;
   options.width = stream.width;
   options.height = stream.height;
   options.threshold = config.number("app.anomaly_threshold");
@@ -183,7 +183,7 @@ struct RegionCounts {
 
 // Send every frame's defect regions to Insight until `frames` (0: no limit) or a stop signal.
 RegionCounts send_regions(neat::Run& run, neat::MetadataSender& metadata_sender, int map_side,
-                          const fastflow::RegionOptions& options, int frames,
+                          const sima_examples::RegionOptions& options, int frames,
                           const std::atomic<bool>& stop) {
   RegionCounts counts;
   while (!stop && (frames == 0 || counts.processed < frames)) {
@@ -193,12 +193,12 @@ RegionCounts send_regions(neat::Run& run, neat::MetadataSender& metadata_sender,
     if (!sima_examples::pull_status_has_sample(status, "anomaly_map", error, run.last_error())) {
       continue;
     }
-    const auto regions = fastflow::defect_regions(anomaly_map(sample, map_side), options);
+    const auto regions = sima_examples::defect_regions(anomaly_map(sample, map_side), options);
     // A frame without a defect sends no segments, which clears the last outline. A nonblocking
     // send drops the message while the socket buffer is full; the drops are counted in the
     // sender's stats and reported when the run ends. Any other failure throws.
     std::string send_error;
-    if (!metadata_sender.send_metadata("segmentation", fastflow::segments_json(regions),
+    if (!metadata_sender.send_metadata("segmentation", sima_examples::segments_json(regions),
                                        sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1,
                                        sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "",
                                        &send_error) &&

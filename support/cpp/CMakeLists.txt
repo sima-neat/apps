@@ -2,6 +2,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/YamlCpp.cmake")
 sima_neat_apps_ensure_yaml_cpp()
 
 add_library(sima_neat_apps_support_runtime STATIC
+  sima_examples/anomaly_regions.cpp
   sima_examples/asset_utils.cpp
   sima_examples/config.cpp
   sima_examples/example_utils.cpp
