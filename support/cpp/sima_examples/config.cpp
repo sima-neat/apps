@@ -76,11 +76,10 @@ std::string shown(const YAML::Node& node) {
 
 } // namespace
 
-// Fills a Config from a YAML node; a friend of Config, so config.h needs no yaml-cpp header.
+// Fills a Config from a YAML node. It is a friend of Config, so config.h needs no yaml-cpp header.
 struct ConfigLoader {
-  // Store every leaf under its dotted key: a scalar as its text, null as "null", and a list of
-  // scalars as its items. A list holding a mapping keeps one Config per mapping. A list holding
-  // a null or a list is recorded as one string_list() rejects, as the Python reader does.
+  // A list holding a mapping keeps one Config per mapping. A list holding a null or a list is
+  // recorded as one string_list() rejects, as the Python reader does.
   static void add(Config& config, const std::string& key, const YAML::Node& node) {
     if (node.IsMap()) {
       for (const auto& entry : node) {

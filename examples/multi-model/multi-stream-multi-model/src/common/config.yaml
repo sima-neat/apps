@@ -18,9 +18,8 @@ model:                          # One entry per stream, in input.source order.
     labels: support/labels/coco80.txt
 
 input:
-  source:                       # One to four RTSP URLs, the most the example is tested with. The
-                                # same URL may repeat. Stream i runs entry i of model and goes
-                                # to Insight channel i.
+  source:                       # One to four RTSP URLs, the tested maximum. A URL may repeat.
+                                # Stream i runs model entry i and goes to Insight channel i.
     - <rtsp-url-1>
     - <rtsp-url-2>
     - <rtsp-url-3>

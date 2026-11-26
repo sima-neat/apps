@@ -6,8 +6,7 @@
 # tests/scripts/test_config_keys.py checks the config files of every converted example.
 #
 # Types: string, integer, number, boolean, string_list (a list of strings, or one string), and
-# mapping_list (a non-empty list of mappings, whose keys are the registered keys its fields list,
-# without their prefix).
+# mapping_list (a non-empty list of mappings whose fields are registered keys without a prefix).
 
 model.path:
   type: string

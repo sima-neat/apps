@@ -56,7 +56,7 @@ How does a frame move through multi-stream-multi-model?
 - The link into each model keeps the newest decoded frames. Core does not hold each model to the link's in-flight limit here, so the decoder's 12 buffers bound the frames a model holds.
 - `Output "frames_i"` keeps only the newest decoded frame. The pull loop reads it to know that the decoder is sending. The RTSP input feeds only the decoder and the video sender, so Core runs the three as one pipeline.
 - One pull loop reads every output in turn. It turns each result into Insight metadata and sends it on the stream's channel.
-- Decoded frames that arrive with no result for 10 seconds stop the application with an error, because a stalled model would otherwise leave its stream without results and without an error. The first result is allowed 30 seconds, because Core builds the rest of the pipeline on the first frame. A camera that pauses sends no frames, so it may wait without a limit.
+- Decoded frames that arrive with no result for 10 seconds stop the application with an error, because a stalled model would otherwise leave its stream without results and without an error. The application gives the first result 30 seconds, because Core builds the rest of the pipeline on the first frame. A camera that pauses sends no frames, so it may wait without a limit.
 
 ## Preview
 
@@ -120,7 +120,7 @@ Open `${APP_DIR}/src/common/config.yaml` and set:
 - `input.source`: one RTSP URL per stream. Stream i runs `model` entry i and goes to Insight channel i.
 - `input.codec`: `h264` or `h265`, the same for every stream.
 - `model`: one entry per stream, in `input.source` order. Each entry sets `id` and `path`. A detection or segmentation model also sets `labels`, the class-label file, which the shipped entries take from `support/labels/coco80.txt`. A relative `labels` path starts at the working directory. To run fewer streams, remove the same entries from `input.source` and `model`.
-- `output.insight.host`. Stream i sends video to `video_port_base` + i and results to `metadata_port_base` + i.
+- `output.insight.host`: the Insight host. Stream i sends video to `video_port_base` + i and results to `metadata_port_base` + i.
 
 `inference.frames` at 0 or less runs until you stop the application.
 
