@@ -28,7 +28,6 @@ TYPE_CHECKS = {
 PENDING_EXAMPLES = {
     "depth-estimator",
     "detection-to-vlm-assistant",
-    "detr-object-detector",
     "face-detector",
     "face-recognizer",
     "fastflow-anomaly-detector",
