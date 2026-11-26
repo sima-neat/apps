@@ -35,6 +35,14 @@ When the user names a model, look for a compiled package in the
   normalization from the model package, so without either setting the MLA receives raw pixel
   values. That gives no error, only lower accuracy, so confirm that
   `resolved_preprocess_plan().effective.normalize.enable` is `On`.
+- **A model with one gray input channel** (SuperPoint) takes no NV12: pull the NV12 frames and
+  run their Y plane as `GRAY8` through a `Model::Runner`.
+- When frames reach a model through `VideoConvert`, or `SimaDecode` with `raw_output = false`,
+  the model failed on a DevKit with `GstSimaMeta needs nonnegative frame-id and timestamp`.
+  Convert on the host and run a `Model::Runner`.
+- `Stretch` applies only with `resize.enable = AutoFlag::On`, a target size, or an
+  `interpolation`. Otherwise the image is letterboxed with black padding. `Crop` turns resize
+  on by itself.
 - **Tensors that already match `input_specs()`:** leave preprocessing unset. The archive's
   Cast, Quant, and Tess adapters stay automatic, and `preprocess.enable = Off` does not select
   MLA-only execution. Core's `model.mdx` covers raw tensor input.
@@ -112,13 +120,17 @@ When the user names a model, look for a compiled package in the
   covers drawing them.
 - `decode_superpoint` returns keypoints in model-input pixels until sima-neat/core#1328 is
   fixed. Scale them to the source frame with the width and height of
-  `Model::resolved_preprocess_plan().mla_contract`, as the
-  `feature-extraction/superpoint-feature-extractor` example does.
+  `Model::resolved_preprocess_plan().mla_contract`. This holds only after a `Stretch` resize
+  (`resize.mode = Stretch` with `resize.enable = On`). A letterbox needs its padding removed
+  first.
 - **One read per result:** in C++, copy float values with `copy_dense_bytes_tight_to(...)`.
   `data_ptr<T>()` requires mapped CPU storage and throws `tensor storage is not mappable` on
   some outputs, such as the RF-DETR transformer's `Owned` results. In Python,
   `to_numpy(copy=False)` reads a CPU result in place. `copy_payload_bytes()` makes another
   copy.
+- `Tensor.from_numpy` rejects a read-only array, such as a NumPy view over the bytes from
+  `copy_payload_bytes()`, with `BufferError: Cannot export readonly array`. Pass a writable
+  array, for example a `.copy()` of only the plane you need.
 
 ## Run the model directly
 

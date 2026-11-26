@@ -47,6 +47,9 @@ setup belongs to the Insight documentation or the installed Insight skill.
   - Report the drop count when the run ends, as both reference examples do.
 - A message larger than 1200 bytes is split into chunks that the receiving Insight version
   must reassemble. One message holds at most 65507 bytes.
+- **Loose points,** such as feature points: send them as the keypoints of one `pose-estimation`
+  pose, `{"poses": [{"keypoints": [{"x": 120, "y": 80}, ...]}]}`. Without joint names and
+  confidences, Insight draws only dots, with no skeleton and no box.
 
 ### Box overlay payload
 
