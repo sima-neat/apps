@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -709,11 +708,13 @@ bool test_paired_pose_content_validation() {
   return !paired_pose_content_matches(overlay, auxiliary);
 }
 
-// Every message carries its port's stream id and 33 valid keypoints per pose (image
-// and world for 2D poses), and at least one port publishes a non-empty 2D/3D pair
-// for one frame.
+// Ordered from no pair to a full match, so each port reports the closest it came.
+enum class PortPairing { kNoPair, kContentMismatch, kNoPtsMatch, kMatched };
+
+// Every message carries its port's stream id and 33 valid keypoints per pose, every port
+// publishes a 2D/3D pair matched in content and video PTS, and one pair is non-empty.
 bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_port_base,
-                       const RtpVideoListener& video, std::string& error) {
+                       int num_ports, const RtpVideoListener& video, std::string& error) {
   using FrameKey = std::tuple<int, int64_t, std::string>;
   std::map<FrameKey, nlohmann::json> pose_frames;
   std::map<FrameKey, nlohmann::json> world_pose_frames;
@@ -745,27 +746,41 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
     error = std::string("failed to validate pose metadata: ") + exception.what();
     return false;
   }
-  std::set<int> paired_ports;
+  // Every accepted frame publishes a pair, even without people, so every port must match one.
+  std::vector<PortPairing> pairing(static_cast<std::size_t>(num_ports), PortPairing::kNoPair);
   bool nonempty_pair = false;
-  for (const auto& entry : pose_frames) {
-    const auto world = world_pose_frames.find(entry.first);
-    if (world != world_pose_frames.end() &&
-        paired_pose_content_matches(entry.second, world->second)) {
-      const int port = std::get<0>(entry.first);
-      if (!video.has_correlated_timestamp(port - metadata_port_base, std::get<1>(entry.first))) {
-        continue;
-      }
-      paired_ports.insert(port);
-      nonempty_pair = nonempty_pair || !entry.second.empty();
+  for (const auto& [frame, poses] : pose_frames) {
+    const auto world = world_pose_frames.find(frame);
+    const int offset = std::get<0>(frame) - metadata_port_base;
+    if (world == world_pose_frames.end() || offset < 0 || offset >= num_ports) {
+      continue;
     }
+    PortPairing found = PortPairing::kMatched;
+    if (!paired_pose_content_matches(poses, world->second)) {
+      found = PortPairing::kContentMismatch;
+    } else if (!video.has_correlated_timestamp(offset, std::get<1>(frame))) {
+      found = PortPairing::kNoPtsMatch;
+    } else {
+      nonempty_pair = nonempty_pair || !poses.empty();
+    }
+    auto& best = pairing[static_cast<std::size_t>(offset)];
+    best = std::max(best, found);
   }
-  if (paired_ports.empty()) {
-    error = "no stream published a content-matched pair correlated to video PTS";
-    return false;
-  }
-  if (paired_ports.size() < result.ports_with_valid_json.size()) {
-    error = "not every metadata port published a content-matched 2D/3D pair for one frame";
-    return false;
+  for (int offset = 0; offset < num_ports; ++offset) {
+    const std::string port = "metadata port " + std::to_string(metadata_port_base + offset);
+    switch (pairing[static_cast<std::size_t>(offset)]) {
+    case PortPairing::kNoPair:
+      error = port + " published no 2D/3D pair for one frame";
+      return false;
+    case PortPairing::kContentMismatch:
+      error = port + " published 2D/3D pairs whose 2D and 3D poses differ";
+      return false;
+    case PortPairing::kNoPtsMatch:
+      error = port + " published content-matched 2D/3D pairs with no video PTS match";
+      return false;
+    case PortPairing::kMatched:
+      break;
+    }
   }
   if (!nonempty_pair) {
     error = "no stream published a non-empty content-matched 2D/3D pair for one frame";
@@ -788,10 +803,6 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
   listener_options.base_port = metadata_port_base;
   const int num_ports = static_cast<int>(urls.size());
   listener_options.num_ports = num_ports;
-  listener_options.timeout_ms = 10000;
-  // Every accepted frame publishes a pair, even without people, so every port
-  // must receive a correlated 2D/3D pair.
-  listener_options.require_all_ports = true;
   listener_options.contracts = {{"pose-estimation", "poses", 0},
                                 {"auxiliary-visualization", "payload.poses", 0}};
   MetadataJsonListener listener(listener_options);
@@ -808,23 +819,11 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
   }
 
   const ProcessResult process = spawn_and_wait(binary, {"--config", config.string()}, timeout_ms);
-  // The application has exited; drain the buffered metadata until every port holds
-  // a 2D/3D pair, one of them non-empty, a datagram is invalid, or 10 s pass.
-  MetadataJsonListenerResult metadata;
-  std::string metadata_error = "timed out waiting for a non-empty 2D/3D metadata pair";
-  const auto metadata_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  while (std::chrono::steady_clock::now() < metadata_deadline && metadata.error.empty()) {
-    listener.poll_messages(metadata, 250);
-    std::string error;
-    if (validate_metadata(metadata, metadata_port_base, video_listener, error) &&
-        metadata.success) {
-      metadata_error.clear();
-      break;
-    }
-    metadata_error = error.empty() ? "not every metadata port received a 2D/3D pair" : error;
-  }
-  if (!metadata.error.empty()) {
-    metadata_error = metadata.error;
+  // The application has exited, so all its metadata is queued: read every port at once.
+  const MetadataJsonListenerResult metadata = listener.drain_pending();
+  std::string metadata_error = metadata.error;
+  if (metadata_error.empty()) {
+    validate_metadata(metadata, metadata_port_base, num_ports, video_listener, metadata_error);
   }
   const std::string exit_error = exit_problem(process);
   int result = 0;
