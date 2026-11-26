@@ -153,7 +153,7 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
   `neatjpegudpsink`, the build fails with `VideoSender MJPEG: RTP/JPEG carries
   widths and heights in multiples of 8 up to 2040`. RTSP MJPEG passthrough
   always fits, because the source sends RTP/JPEG too: on a DevKit with Core
-  0.6.2 (`b1f9556c`), a 1276 × 716 RTSP source arrived as 1280 × 720 and passed
+  0.6.2, a 1276 × 716 RTSP source arrived as 1280 × 720 and passed
   the capsfilter `n<index>_rtp_jpeg_dimensions`. Fix: use a camera mode or a
   frame size such as 1280 × 720 or 1920 × 1080.
 - **Encoder settings on MJPEG.** `FromRaw` throws `SimaEncode: MJPEG does not
@@ -188,9 +188,7 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 
 - C++ headers: `include/nodes/groups/VideoSender.h`, `include/nodes/sima/SimaEncode.h`, `include/nodes/io/UdpOutput.h`, `include/nodes/groups/RtspCodec.h`
 - Python binding: `python/src/module.cpp`, `VideoSenderOptions`, `VideoSenderRtpOptions`, `VideoSenderEncoderOptions`, `SimaEncodeOptions`, `SimaEncodeType`, `RtspCodec`, `UdpOutputOptions`, `groups.video_sender`, `nodes.sima_encode`, `nodes.udp_output`
-- The MJPEG size check, read at Core `7e5317be`:
-  `src/nodes/io/internal/JpegRtpUdpSink.cpp` lines 39-47 (the build error only
-  for a sized input) and 18-19 (the running caps filter), and
-  `src/nodes/groups/RtspEncodedInput.cpp` lines 103-115 (the MJPEG path, which
-  sets no size).
+- The MJPEG size check: `src/nodes/io/internal/JpegRtpUdpSink.cpp` (the build
+  error only for a sized input, and the running caps filter), and
+  `src/nodes/groups/RtspEncodedInput.cpp` (the MJPEG path, which sets no size).
 - Core commit: `3f8b8d04`

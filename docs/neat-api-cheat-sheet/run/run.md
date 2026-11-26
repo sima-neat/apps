@@ -176,8 +176,7 @@ the device logs then reach the console.
 - The preset depths and the sync defaults are runtime behavior, not header
   values. They were read from Core at the commit below and are not part of the
   published API.
-- The stdout and stderr forwarding, read at Core `7e5317be`: `src/gst/GstInit.cpp`
-  lines 221-283 (`start_stdio_filter`, which detaches its thread on line 282), 285-292
-  (`install_stdio_filters`), and 1185-1186 (installed while `SIMA_GST_SUPPRESS_DEVICE_LOGS`
-  is on).
+- The stdout and stderr forwarding: `src/gst/GstInit.cpp`, `start_stdio_filter` (which
+  detaches its thread) and `install_stdio_filters` (installed while
+  `SIMA_GST_SUPPRESS_DEVICE_LOGS` is on).
 - Core commit: `c68a5241`
