@@ -35,6 +35,7 @@ def test_publishes_insight_video_and_segments(
     request, source, models_dir, test_timeout_ms, skip_unless_e2e_ready, e2e_config_writer
 ):
     source_url = request.getfixturevalue(source["url_fixture"])
+    # The application finds the text encoder next to the model.
     model, text_encoder = models_dir / MODEL, models_dir / TEXT_ENCODER
     for path in (model, text_encoder):
         skip_unless_e2e_ready(path.exists(), f"missing EfficientSAM3 artifact: {path}")
@@ -42,25 +43,32 @@ def test_publishes_insight_video_and_segments(
     video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
     config_path = e2e_config_writer(
         {
-            "model": {"path": str(model), "text_encoder": str(text_encoder)},
-            "prompt": {"text": "person"},
-            "source": {"rtsp_url": source_url, "codec": source["codec"]},
+            "model": {"path": str(model.absolute())},
+            "input": {"source": source_url, "codec": source["codec"]},
             "inference": {"frames": FRAMES},
             "output": {
-                "insight": {"host": "127.0.0.1", "video_port": video_port, "metadata_port": metadata_port}
+                "insight": {
+                    "host": "127.0.0.1",
+                    "video_port_base": video_port,
+                    "metadata_port_base": metadata_port,
+                }
             },
+            "app": {"prompt": "person"},
         }
     )
 
-    with MetadataJsonListener(
-        "127.0.0.1",
-        metadata_port,
-        num_ports=1,
-        metadata_type="segmentation",
-        data_array_key="segments",
-        require_all_ports=True,
-        min_object_count=1,
-    ) as listener, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video:
+    with (
+        MetadataJsonListener(
+            "127.0.0.1",
+            metadata_port,
+            num_ports=1,
+            metadata_type="segmentation",
+            data_array_key="segments",
+            require_all_ports=True,
+            min_object_count=1,
+        ) as listener,
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video,
+    ):
         video.bind(("127.0.0.1", video_port))
         video.settimeout(5.0)
         result = subprocess.run(

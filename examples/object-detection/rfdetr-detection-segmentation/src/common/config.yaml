@@ -18,6 +18,7 @@ inference:
   frames: 0                     # Results to send before stopping; 0 runs until Ctrl+C.
   min_score: 0.5                # Lowest score a result needs; use 0.5 for det-* and 0.3 for seg-*.
   max_detections: 100           # Results kept per frame; use 100 for det-* and 24 for seg-*.
+  mask_threshold: 0.08          # seg-* only: mask probability at which a pixel belongs to the object.
 
 output:
   insight:
@@ -26,5 +27,4 @@ output:
     metadata_port_base: 9100    # Insight metadata port.
 
 app:
-  mask_threshold: 0.08          # seg-* only: mask probability at which a pixel belongs to the object.
   mask_grid_size: 640           # seg-* only: grid the mask is resized to before its outline is traced; the model's mask size (78, 96, or 108) skips the resize and uses less CPU.

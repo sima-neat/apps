@@ -40,7 +40,7 @@ def test_shipped_config_names_a_supported_model_stream_and_labels():
                 "output.insight.video_port_base", "output.insight.metadata_port_base"):
         assert config.integer(key) >= 0, key
     assert 0 <= config.number("inference.min_score") <= 1
-    assert 0 <= config.number("app.mask_threshold") <= 1
+    assert 0 <= config.number("inference.mask_threshold") <= 1
     assert config.string("output.insight.host")
     assert config.boolean("input.rtsp.tcp")
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // CLIP tokenizer for the EfficientSAM3 text encoder, after OpenAI CLIP (MIT, see
-// src/common/LICENSE-CLIP.txt).
+// src/common/LICENSE-CLIP.txt). Mirrors utils/clip_tokenizer.py in the Python implementation.
 #pragma once
 
 #include <zlib.h>
@@ -65,6 +65,7 @@ public:
     return ids;
   }
 
+  // `length` token ids: start, the text's, end, then 0s; a long text is cut before the end token.
   std::vector<int64_t> encode(const std::string& text, int length) const {
     std::vector<int64_t> ids{ids_.at("<start_of_text>")};
     const std::vector<int64_t> text_ids = tokens(text);
@@ -217,3 +218,19 @@ private:
   std::unordered_map<std::string, int> ranks_;
   std::unordered_map<std::string, int64_t> ids_;
 };
+
+// The prompt's `length` token ids. A prompt the text encoder would not read whole fails: one with
+// no tokens, or with more than the `length - 2` that fit between the start and end tokens.
+inline std::vector<int64_t> prompt_tokens(const ClipTokenizer& tokenizer, const std::string& prompt,
+                                          int length) {
+  const std::size_t count = tokenizer.tokens(prompt).size();
+  if (count == 0) {
+    throw std::runtime_error("app.prompt must name what to segment");
+  }
+  if (count > static_cast<std::size_t>(length - 2)) {
+    throw std::runtime_error("app.prompt is " + std::to_string(count) +
+                             " tokens; the text encoder reads at most " +
+                             std::to_string(length - 2) + ", so shorten it");
+  }
+  return tokenizer.encode(prompt, length);
+}

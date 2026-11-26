@@ -54,6 +54,9 @@ inference.nms_iou:
 inference.max_detections:
   type: integer
   meaning: Detections kept per frame.
+inference.mask_threshold:
+  type: number
+  meaning: Mask probability at which a pixel belongs to its instance, from 0 to 1.
 inference.max_inflight_per_stream:
   type: integer
   meaning: Frames of one stream the shared model holds at once.

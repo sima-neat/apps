@@ -28,7 +28,6 @@ TYPE_CHECKS = {
 PENDING_EXAMPLES = {
     "depth-estimator",
     "detection-to-vlm-assistant",
-    "efficientsam3-promptable-segmenter",
     "face-detector",
     "face-recognizer",
     "fastflow-anomaly-detector",
