@@ -1,17 +1,5 @@
-# yaml-cpp for the support library without the -dev package in the SDK sysroot.
-#
-# Neat Core already links libyaml-cpp.so.0.8, so the board and the SDK sysroot carry that
-# runtime library; only the headers are missing. They come from the matching upstream
-# release, pinned by hash, and the examples link the same runtime library Core uses.
-# One yaml-cpp in the process, and no change to the sysroot.
-#
-# Offline builds: point FETCHCONTENT_SOURCE_DIR_YAML_CPP at an unpacked yaml-cpp-0.8.0,
-# or YAML_CPP_SOURCE_URL at a local copy of the tarball, both absolute paths, as a -D
-# option or an environment variable, so `YAML_CPP_SOURCE_URL=<tarball> ./build.sh` works.
-# A non-empty environment variable replaces the cached value on every configure.
-# The SHA-256 check covers only the tarball; a source directory is checked only for
-# include/yaml-cpp/yaml.h. A source directory stays cached: clear it with
-# -DFETCHCONTENT_SOURCE_DIR_YAML_CPP= or a new build directory (./build.sh --clean).
+# Headers for the sysroot's libyaml-cpp.so.0.8, which Core links. The SDK ships no -dev package.
+# Offline builds: README "Build From Source".
 include_guard(GLOBAL)
 
 # The function below records these policy settings where it is defined.
@@ -19,9 +7,7 @@ include_guard(GLOBAL)
 if (POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
 endif()
-# FetchContent_Populate(<name>) downloads without add_subdirectory() on every CMake from
-# 3.16; CMake 3.30 deprecates it in favour of FetchContent_MakeAvailable, which needs 3.18
-# to skip yaml-cpp's own CMakeLists.txt.
+# Keep FetchContent_Populate(<name>), deprecated in CMake 3.30, until the minimum CMake is 3.18.
 if (POLICY CMP0169)
   cmake_policy(SET CMP0169 OLD)
 endif()
@@ -31,7 +17,7 @@ function(sima_neat_apps_ensure_yaml_cpp)
     return()
   endif()
 
-  # The ABI of these headers must match the runtime library below: change both together.
+  # Keep this library and the tarball URL and hash below at the same yaml-cpp version (0.8).
   find_library(SIMA_NEAT_APPS_YAML_CPP_LIBRARY NAMES libyaml-cpp.so.0.8)
   if (NOT SIMA_NEAT_APPS_YAML_CPP_LIBRARY)
     message(FATAL_ERROR
@@ -74,9 +60,7 @@ function(sima_neat_apps_ensure_yaml_cpp)
   endif()
 
   add_library(SimaNeatApps::yaml_cpp SHARED IMPORTED GLOBAL)
-  # Consumers get this directory with -isystem, which GCC searches before the sysroot's
-  # /usr/include. The SDK's -I<sysroot>/usr/include is dropped as a duplicate of that
-  # system directory, so yaml-cpp headers in the sysroot do not take precedence.
+  # Consumers get this directory as -isystem, which GCC searches before <sysroot>/usr/include.
   set_target_properties(SimaNeatApps::yaml_cpp PROPERTIES
     IMPORTED_LOCATION "${SIMA_NEAT_APPS_YAML_CPP_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${yaml_cpp_SOURCE_DIR}/include"
