@@ -51,10 +51,11 @@ MODEL_IDS = {
 # The key that holds a message's entries, for each metadata type.
 DATA_KEYS = {DETECTION: "objects", SEGMENTATION: "segments", POSE: "poses"}
 # How long a stream's decoded frames may arrive with no result before the app stops with an
-# error. Not measured on a DevKit: a result takes a fraction of a second.
+# error. On a DevKit, four 1280x720@30 streams with the default models: largest gap 0.37 s (C++)
+# and 0.25 s (Python) over 12 minutes.
 RESULT_DEADLINE_S = 10.0
 # The same for the first result, which also waits for Core to build the rest of the pipeline on
-# the first frame (EdgeRouter.cpp). Not measured on a DevKit.
+# the first frame (EdgeRouter.cpp). Measured on the same DevKit: 0.6 to 2 s after the first frame.
 FIRST_RESULT_DEADLINE_S = 30.0
 # Decoded frames each stream's decoder keeps. Before the conversion, 12 covered the host queue's
 # 4, the model's 4, and 4 to decode into. Here they bound the frames the model and frames_<i>
@@ -190,12 +191,14 @@ def frames_graph(index: int) -> pyneat.Graph:
     """The newest decoded frame of one stream, which tells the pull loop the decoder is sending."""
     # Core gap: a Run reports no count of the frames a model holds, so the pull loop watches
     # each decoder's frames to tell a stalled model from a paused camera.
-    # Core gap: this output frees the model from the 4 frames per stream a realtime link admits.
-    # Core admits a decoded frame once and keeps its credit on the frame's shared storage
+    # Core gap: the model is not held to the 4 frames per stream a realtime link admits. Core
+    # admits a decoded frame once and keeps its credit on the frame's shared storage
     # (EdgeRouter.cpp:752, SampleUtil.cpp:3162). The decoder's fan-out retains only credits a
-    # frame already carries (EdgeRouter.cpp:1211), and each pull here releases the frame's
-    # credit (RunCore.cpp:1610, RunPull.cpp:168). So the decoder's buffers, not the credit,
-    # bound the frames the model holds.
+    # frame already carries (EdgeRouter.cpp:1211), and the first pull of a frame, here or from
+    # results_<i>, releases its credit (RunCore.cpp:1610, RunPull.cpp:168). On a DevKit
+    # (SIMA_GRAPH_REALTIME_CREDIT_DEBUG=1) a stream held at most 2 of 4, and without this output
+    # Core registered no credit at all. So the decoder's buffers, not the credit, bound the
+    # frames the model holds.
     graph = pyneat.Graph()
     graph.add(pyneat.nodes.output(frames_output(index), pyneat.OutputOptions.latest()))
     return graph

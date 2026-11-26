@@ -75,10 +75,11 @@ const std::map<std::string, std::string> kDataKeys = {
     {kPose, "poses"},
 };
 // How long a stream's decoded frames may arrive with no result before the app stops with an
-// error. Not measured on a DevKit: a result takes a fraction of a second.
+// error. On a DevKit, four 1280x720@30 streams with the default models: largest gap 0.37 s (C++)
+// and 0.25 s (Python) over 12 minutes.
 constexpr double kResultDeadlineS = 10.0;
 // The same for the first result, which also waits for Core to build the rest of the pipeline on
-// the first frame (EdgeRouter.cpp). Not measured on a DevKit.
+// the first frame (EdgeRouter.cpp). Measured on the same DevKit: 0.6 to 2 s after the first frame.
 constexpr double kFirstResultDeadlineS = 30.0;
 // Decoded frames each stream's decoder keeps. Before the conversion, 12 covered the host queue's 4,
 // the model's 4, and 4 to decode into. Here they bound the frames the model and frames_<i> hold,
@@ -219,12 +220,13 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
 neat::Graph frames_graph(std::size_t index) {
   // Core gap: a Run reports no count of the frames a model holds, so the pull loop watches each
   // decoder's frames to tell a stalled model from a paused camera.
-  // Core gap: this output frees the model from the 4 frames per stream a realtime link admits.
-  // Core admits a decoded frame once and keeps its credit on the frame's shared storage
-  // (EdgeRouter.cpp:752, SampleUtil.cpp:3162). The decoder's fan-out retains only credits a frame
-  // already carries (EdgeRouter.cpp:1211), and each pull here releases the frame's credit
-  // (RunCore.cpp:1610, RunPull.cpp:168). So the decoder's buffers, not the credit, bound the
-  // frames the model holds.
+  // Core gap: the model is not held to the 4 frames per stream a realtime link admits. Core admits
+  // a decoded frame once and keeps its credit on the frame's shared storage (EdgeRouter.cpp:752,
+  // SampleUtil.cpp:3162). The decoder's fan-out retains only credits a frame already carries
+  // (EdgeRouter.cpp:1211), and the first pull of a frame, here or from results_<i>, releases its
+  // credit (RunCore.cpp:1610, RunPull.cpp:168). On a DevKit (SIMA_GRAPH_REALTIME_CREDIT_DEBUG=1) a
+  // stream held at most 2 of 4, and without this output Core registered no credit at all. So the
+  // decoder's buffers, not the credit, bound the frames the model holds.
   neat::Graph graph;
   graph.add(neat::nodes::Output(frames_output(index), neat::OutputOptions::Latest()));
   return graph;
