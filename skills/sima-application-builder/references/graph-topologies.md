@@ -206,7 +206,7 @@ Changing these values for speed belongs to the `sima-application-optimizer` skil
    - Python: `run.pull("name", timeout_ms)` returns `None` on a timeout and on a closed run.
      After `None`, stop when `run.last_error()` is set or `run.running()` is false, and
      otherwise pull again. On a graph with one output, also stop when `run.can_pull()` is
-     false: on a Core with core#1431 that means the output reached end of stream.
+     false: on a Core with sima-neat/core#1431 that means the output reached end of stream.
 
 Pushing from one thread and pulling from another is safe. Several threads pushing into the same
 `Run` must take turns behind one lock.
