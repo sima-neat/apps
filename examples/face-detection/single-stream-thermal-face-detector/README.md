@@ -68,8 +68,6 @@ those outputs with the same math, in `src/cpp/utils/yolov5_face.h` and
   on the Modalix DevKit, or in a Neat SDK container paired with it.
 - A running [Neat Insight](https://developer.sima.ai/software/tools/insight/)
   instance reachable from the target, with an RTSP source containing faces.
-- The model expects an 800x800 compiled canvas; its on-device preprocess accepts
-  NV12, BGR, RGB, I420, or grayscale input up to 4096x4096.
 
 ## Install Apps
 
@@ -107,20 +105,14 @@ relative `model.path` starts at the config file.
 ## Prepare Insight
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive landmark metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
-In the Palette SDK, install the sample video assets:
-
-```bash
-sima-cli install assets/multi-video-sources
-```
-
-This provides 720p and 480p videos that Insight can stream as RTSP sources. This
-example expects faces in frame, so upload a thermal or visible-light face clip of
-your own when the sample videos do not contain any.
+Install videos directly from the Insight catalog or through Insight's YouTube support. This
+example expects faces in frame, so upload a thermal or visible-light face clip of your own when
+the catalog videos do not contain any.
 
 To create a reproducible RTSP input:
 1. Run `neat` in the Palette SDK and open the reported `Insight Web UI`.
 2. In Insight, open `RTSP Source`.
-3. Use a sample video or upload your own video.
+3. Pick a catalog video with faces, or upload your own.
 4. Start the stream and copy the RTSP URL.
 5. Put that RTSP URL into `input.source`.
 
@@ -200,7 +192,7 @@ The preview image is a reference visualization: it pairs the thermal stream
 with its visible-light source and draws face, eye, and mouth boxes. The
 application publishes only the five landmarks, not those boxes.
 
-## Debugging Notes
+## Troubleshooting
 
 - A missing or mistyped config key stops the application with the key's name, such as
   `input.source`. An unedited placeholder, such as `<insight-host-ip>`, fails when the
@@ -208,10 +200,6 @@ application publishes only the five landmarks, not those boxes.
 - `failed to probe RTSP frame size` means the stream did not report its size from the target;
   verify the RTSP URL from the board itself, or set `input.width`, `input.height`, and
   `input.fps`.
-- `method SETUP failed: 461 Unsupported Transport` was observed once at startup
-  against an Insight-hosted source, after which the pipeline built and the run
-  completed normally. Treat a single occurrence as noise unless the pipeline also
-  fails to start.
 - If the run reports no frames at all, verify the RTSP URL from the board itself
   rather than from the machine running Insight. The URL Insight displays is not
   always reachable from the target, and the ports table above explains why.
@@ -220,17 +208,14 @@ application publishes only the five landmarks, not those boxes.
   `/api/ingest/stats` to check `metadata.messages_received`.
 - If the viewer shows no video, verify the video UDP port and that RTP is arriving
   (`/api/ingest/stats` -> `rtp.packets_received`, `media.seen_sps`).
-- If keypoints look mis-anchored, the model may have been retrained with different
-  anchors: update `STRIDES` and `ANCHORS` in `src/python/utils/yolov5_face.py` and
-  `kStrides` and `kAnchors` in `src/cpp/utils/yolov5_face.h` to match.
 - Use `inference.min_score` and `inference.nms_iou` to tune detection sensitivity.
 
 ## Source Files
-- C++ source: `src/cpp/main.cpp`, `src/cpp/utils/yolov5_face.h`
-- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+- C++ reference source: `src/cpp/main.cpp`, `src/cpp/utils/yolov5_face.h`
 - Python source: `src/python/main.py`, `src/python/utils/yolov5_face.py`
-- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
-- Shared assets: `src/common/face_label.txt`
+- Shared config: `src/common/config.yaml`
+- Class label: `src/common/face_label.txt`
+- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable
 under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
