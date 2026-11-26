@@ -331,8 +331,8 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
         gaps = _sequence_gaps(headers[index])
         lost = [timestamp for timestamp in unpaired if _in_gap(timestamp, gaps)]
         unpaired = [timestamp for timestamp in unpaired if not _in_gap(timestamp, gaps)]
-        # A frame the video link dropped leaves its message unpaired, so allow 5%, as for the
-        # count.
+        # The video link sends every frame, so a message stays unpaired only when its frame was
+        # lost after the sender. Allow 5%, as for the count.
         assert len(unpaired) <= len(stream_messages) * 5 // 100, (
             f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}, "
             f"{len(lost)} messages in a sequence gap\n{video_report}"

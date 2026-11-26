@@ -493,7 +493,8 @@ int run_case(const std::string& binary, const std::string& models_dir,
     unpaired.erase(std::remove_if(unpaired.begin(), unpaired.end(),
                                   [&](std::int64_t timestamp) { return in_gap(timestamp, gaps); }),
                    unpaired.end());
-    // A frame the video link dropped leaves its message unpaired, so allow 5%, as for the count.
+    // The video link sends every frame, so a message stays unpaired only when its frame was lost
+    // after the sender. Allow 5%, as for the count.
     if (static_cast<int>(unpaired.size()) > messages * 5 / 100) {
       problems.push_back(stream + ": " + std::to_string(unpaired.size()) +
                          " timestamps with no video frame, first " +

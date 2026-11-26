@@ -400,9 +400,8 @@ def main(argv: list[str] | None = None) -> int:
         # pipeline (ExecutionGraphCompiler.cpp), so the frames output taps the decoder instead.
         graph.connect(rtsp, decoder)
         graph.connect(decoder, model_graph(models[-1], index), realtime_link())
-        graph.connect(
-            rtsp, pyneat.groups.video_sender(video_options(config, index)), realtime_link()
-        )
+        # A plain link sends Insight every encoded frame, so each result has its frame.
+        graph.connect(rtsp, pyneat.groups.video_sender(video_options(config, index)))
         graph.connect(decoder, frames_graph(index), realtime_link())
         streams.append(
             Stream(

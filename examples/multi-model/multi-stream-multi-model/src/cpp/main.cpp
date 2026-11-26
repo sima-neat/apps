@@ -438,7 +438,8 @@ int run_app(const fs::path& config_path) {
     // (ExecutionGraphCompiler.cpp), so the frames output taps the decoder instead.
     graph.connect(rtsp, decoder);
     graph.connect(decoder, model_graph(models.back(), index), realtime_link());
-    graph.connect(rtsp, groups::VideoSender(video_options(config, index)), realtime_link());
+    // A plain link sends Insight every encoded frame, so each result has its frame.
+    graph.connect(rtsp, groups::VideoSender(video_options(config, index)));
     graph.connect(decoder, frames_graph(index), realtime_link());
     std::string error;
     neat::MetadataSender metadata_sender(metadata_options(config, index), &error);
