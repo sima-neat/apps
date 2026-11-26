@@ -110,4 +110,3 @@ examples, for example
 
 - C++ header: `include/nodes/common/Queue.h` (`Queue`, `QueueOptions`), `include/policy/OverflowPolicy.h` (`OverflowPolicy`)
 - Python binding: `python/src/module.cpp`, `pyneat.nodes.queue`, `QueueOptions`, `OverflowPolicy`
-- Core commit: `c68a5241`

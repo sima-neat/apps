@@ -31,11 +31,11 @@ option and show each default. Set only the options whose default does not fit. C
   sources, because arrival-time corrections drift during high-rate replay.
 - Frame rate and caps for H.264:
   - With `auto_caps_from_stream = true` (the default), Neat reads the size and rate from the
-    stream and uses `fallback_h264_width`, `fallback_h264_height`, and `fallback_h264_fps` when
-    the stream lacks them.
-  - With `auto_caps_from_stream = false`, Neat takes the rate from `source_fps` (or
-    `fallback_h264_fps`) and the size from the fallback fields, and the build fails when any is
-    missing.
+    stream and uses `fallback_h264_width` and `fallback_h264_height` when the stream lacks them.
+    `fallback_h264_fps` has no effect when `source_fps` or `h264_fps` is set.
+  - With `auto_caps_from_stream = false`, Neat takes the rate from `source_fps` or `h264_fps`,
+    then `fallback_h264_fps`, and the size from `h264_width` and `h264_height`, then the
+    fallback fields. The build fails when the rate or a dimension is still missing.
   - The high-density example sets the fallback fields to the stream's size and rate, turns
     auto caps off when its configuration gives the rate, and leaves them on when it does not.
 - `source_fps` declares the rate for H.265 and MJPEG too. Set it when the stream does not
@@ -49,7 +49,8 @@ option and show each default. Set only the options whose default does not fit. C
   them to the stream's own size and rate. The model's preprocessing resizes later.
 - `next_element` selects the decoder's downstream consumer, `"CVU"` or `"APU"`. The
   high-density example sets `"CVU"`, where its frames go to the model's EV74 preprocessing.
-  `decoder_name` only overrides the element name.
+  `decoder_name` names the element and its output buffer. The model's preprocessing reads the
+  buffer named by `Model::Options::upstream_name`, `"decoder"` by default.
 - `num_buffers`, `input_buffers`, `decoder_tuning`, and `memory_opt` trade memory for
   throughput. The high-density example sets all four for many streams, and the RF-DETR example
   raises only `num_buffers` (to 32) for MJPEG. The `sima-application-optimizer` skill's tuning
@@ -175,7 +176,8 @@ run = graph.build(run_options)
 - `detector_link(index)` is a `GraphLinkOptions` with
   `policy = GraphLinkPolicy::RealtimeLatestByStream`, `stream_id = f"stream{index}"`,
   `max_inflight_per_stream`, and `max_inflight_total`. The pulled `Sample` carries the
-  `stream_id`, so one pull loop on `detections` routes each result to its stream.
+  `stream_id`, so one pull loop on `detections` routes each result to its stream. With one
+  source, the sample carries the decoder name instead, so route it to stream 0.
 - `RunOptions` sets `preset = RunPreset::Realtime`, `queue_depth`, and
   `output_memory = OutputMemory::ZeroCopy`.
 
