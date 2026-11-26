@@ -1,15 +1,11 @@
 // Unit tests for the DETR object detector: the checks the application leaves to its config, and
 // the image size and annotated names it handles. tests/python/test_unit.py runs the same checks in
-// Python. This file also tests the shared C++ image_folder, image_io, and detection_overlay, as
-// agents/rules.md "Tests" says; tests/scripts/test_image_folder.py, test_image_io.py, and
-// test_detection_overlay.py run the same cases in Python.
+// Python. This file also tests the shared C++ image_folder, as agents/rules.md "Tests" says;
+// tests/scripts/test_image_folder.py runs the same cases in Python.
 
-#include "../../src/cpp/utils/annotate.h"
 #include "../../src/cpp/utils/images.h"
 #include "sima_examples/config.h"
-#include "sima_examples/detection_overlay.h"
 #include "sima_examples/image_folder.h"
-#include "sima_examples/image_io.h"
 #include "sima_examples/labels.h"
 #include "sima_examples/testing/test_checks.h"
 
@@ -193,8 +189,11 @@ bool test_largest_image_size_takes_the_widest_and_the_tallest_image() {
 }
 
 bool test_output_name_marks_the_detr_result() {
-  return expect_true(annotate::output_name("in/street.jpg") == "street_detr.png",
-                     "output_name appends _detr.png to the image's name");
+  bool ok = expect_true(sima_examples::output_name("in/street.jpg", "_detr") == "street_detr.png",
+                        "output_name puts the suffix between the stem and .png");
+  ok &= expect_true(sima_examples::output_name("in/a.b.jpg", "") == "a.b.png",
+                    "output_name keeps a dotted stem");
+  return ok;
 }
 
 bool test_draw_detections_draws_the_box_in_its_class_color_on_a_copy() {

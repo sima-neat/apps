@@ -32,7 +32,7 @@ How does an image move through detr-object-detector?
 ╰┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
         ▼ BBOX tensor, decode_bbox_tensor
    ┌────────────────────────────────────────────┐
-   │ draw_detections (support/)                 │
+   │ draw_detections (support/image_folder)     │
    └────────────────────────────────────────────┘
         │ boxes drawn
         ▼
@@ -143,8 +143,8 @@ is too high for the content.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`, with `src/cpp/utils/images.h` for the largest image size and `src/cpp/utils/annotate.h` for the annotated names
-- Python source: `src/python/main.py`, with `src/python/utils/images.py` and `src/python/utils/annotate.py`
+- C++ reference source: `src/cpp/main.cpp`, with `src/cpp/utils/images.h` for the largest image size
+- Python source: `src/python/main.py`, with `src/python/utils/images.py` for the largest image size
 - Shared config: `src/common/config.yaml`
 - Class labels: `support/labels/coco91.txt` in `prebuilt-apps/`, shared with the other examples that score the same classes
 - Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself, and their C++ reference source in `support/cpp/sima_examples/`

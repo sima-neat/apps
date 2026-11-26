@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sima_examples.image_io import read_image
+from sima_examples.image_folder import read_image
 
 
 def largest_image_size(paths: list[Path]) -> tuple[int, int]:
