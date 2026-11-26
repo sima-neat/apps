@@ -95,7 +95,7 @@ no effect while `decode_type` is `Unspecified` (see Pitfalls).
 | Decoder | `decode_type` | `decode_type` | `BoxDecodeType::Unspecified`: no BoxDecode stage; the route returns raw head tensors | Selects the decoder for the model family and adds the BoxDecode stage. See [`BoxDecodeType` values](#boxdecodetype-values). | Set it for every detection, pose, segmentation, oriented-box or SuperPoint model you want decoded. Pick the value for the family and export of your model, as the model's documentation names it. |
 | Head layout | `decode_type_option` | `decode_type_option` | `BoxDecodeTypeOption::Auto`: the package's contract decides | Forces one arrangement of the head tensors when the decoder cannot tell it apart. See [`BoxDecodeTypeOption` values](#boxdecodetypeoption-values). | `Auto` decides logits or probabilities only when the package's tensor names or score activation declare it. A decoded score above 1 means it read logits as probabilities: set the matching `...Logit` option, such as `GroupedByRoleLogit`, and do not clamp the scores. Core's decode-types guide names one more case: a YOLOv6 export with grouped `[bbox, class_prob]` outputs needs `GroupedByRoleProbability` and `num_classes`. |
 | Score threshold | `score_threshold` | `score_threshold` | `0.0`: no score filter | Drops detections whose score is below this value. `0` keeps zero-score detections; NMS and `top_k` still apply. For `SuperPoint`, `0` takes the profile's default, for example 0.1 for `A65V1`. | Set it to the confidence below which a detection is noise for your application: the YOLO26 Object Detector uses 0.40, the PCB Defect Detector 0.25, the SSD-MobileNet Object Detector 0.55. Raise it when a live display shows false boxes. Lower it only when you rank or filter the boxes yourself. |
-| NMS overlap | `nms_iou_threshold` | `nms_iou_threshold` | `0.0`. For YOLO26 (`YoloV26`, `YoloV26Pose`, `YoloV26Seg`) this turns NMS off. It does not turn NMS off for the other detectors: YOLOv5 to v10, YOLOX, EfficientDet, SSD and `YoloV8Obb` always run NMS, and at `0` it removes every box that overlaps a higher-scoring box of the same class, even slightly. With the default, these decoders silently lose objects that overlap (see Pitfalls). | Non-maximum suppression (NMS), the step that removes duplicate boxes, removes a box that overlaps a higher-scoring box of the same class by more than this IoU (intersection over union, 0–1). | Set 0.45 to 0.6 for every decoder that runs NMS, as the YOLO26 examples do. Raise it when real objects overlap, such as a crowd, so their boxes are kept. Lower it when the same object gets two boxes. Leave `0` for `YoloV26Obb`, `Detr` and `DetrFocal`, which apply no NMS. |
+| NMS overlap | `nms_iou_threshold` | `nms_iou_threshold` | `0.0`. For YOLO26 (`YoloV26`, `YoloV26Pose`, `YoloV26Seg`) this turns NMS off. It does not turn NMS off for the other detectors: YOLOv5 to v10, YOLOX, EfficientDet, SSD and `YoloV8Obb` always run NMS, and at `0` it removes every box that overlaps a higher-scoring box of the same class, even slightly. With the default, these decoders silently lose objects that overlap (see Pitfalls). | Non-maximum suppression (NMS), the step that removes duplicate boxes, removes a box that overlaps a higher-scoring box of the same class by more than this IoU (intersection over union, 0–1). | Set 0.45 to 0.6 for every decoder that runs NMS, as the YOLO26 examples do. Raise it when real objects overlap, such as a crowd, so their boxes are kept. Lower it when the same object gets two boxes. Leave `0` for `YoloV26Obb`, `Detr` and `DetrFocal`, which apply no NMS. `YoloV26Obb` rejects any other value: the build fails with `YOLO26-OBB does not support per-tile NMS`. Rotated NMS (`YoloV8Obb`): 0.7 is Ultralytics' default for oriented boxes. |
 | Detection cap | `top_k` | `top_k` | `0`: unset, and box routes fail on it (see Pitfalls) | The most detections one frame can return. It also sizes the output tensor: 4 + 24 × `top_k` bytes for plain boxes. | Always set it on a box route, to the most objects you expect in one frame: 50 in the YOLO26 Object Detector, 300 in the PCB Defect Detector for many small defects. For `SuperPoint`, `0` takes Core's default of 600 for every profile. |
 | SuperPoint settings | `superpoint` | `superpoint` | `SuperPointOptions{}`: profile `Auto`, `nms_radius = -1`, `border_margin = -1`, Float32 descriptors, `FeaturePointsV1` output | Settings of the `SuperPoint` decoder. See [SuperPoint and YOLOX settings](#superpoint-and-yolox-settings). | Only with `decode_type = SuperPoint`. The SuperPoint Feature Extractor sets the `A65V1` profile explicitly. |
 | Class count | `num_classes` | `num_classes` | `0`: taken from the model package | The number of classes the detection heads produce. | Set it when the package cannot give the right count. The Multi-Stream Multi-Model example sets `1` for YOLO pose, whose package declares 80 detector classes for single-class pose heads. For every YOLO26 type, `YoloV5` and `YoloXSegPose`, a value that differs from the heads fails, so leave `0` there unless you want that check. Other types print a warning and use your value. |
@@ -140,9 +140,9 @@ reads it (see [Reading the result](#reading-the-result-the-decode-helpers)).
 | `YoloX` | YOLOX with separate box, objectness and class heads | `BBOX`: `decode_bbox` |
 | `Ssd` | Four prepared SSD models only: SSD300, SSD-Mobile-300, SSD-Mobile-320 and SSDlite-Mobile-320. Needs a `Stretch` resize; any other SSD fails | `BBOX`: `decode_bbox` |
 | `SuperPoint` | SuperPoint keypoints and descriptors | `FEATURE_POINTS_V1`: `decode_superpoint` |
-| `YoloV26Obb` | YOLO26 oriented (rotated) boxes. No NMS; leave `nms_iou_threshold` at 0 | `BBOX_OBB_V1`: `decode_obb` |
+| `YoloV26Obb` | YOLO26 oriented (rotated) boxes. No NMS: a nonzero `nms_iou_threshold` fails the build. Needs one scale on both axes (see Pitfalls) | `BBOX_OBB_V1`: `decode_obb` |
 | `YoloXSegPose` | A YOLOX export with box, mask and keypoint heads together | Boxes, masks and keypoints in one tensor: `decode_segmentation_pose` |
-| `YoloV8Obb` | YOLOv8 and YOLO11 oriented boxes, with rotated NMS | `BBOX_OBB_V1`: `decode_obb` |
+| `YoloV8Obb` | YOLOv8 and YOLO11 oriented boxes, with rotated NMS. Needs one scale on both axes (see Pitfalls) | `BBOX_OBB_V1`: `decode_obb` |
 | `DetrFocal` | DETR-style query detectors with normalized boxes and sigmoid class scores, without a background class. Needs a `Stretch` resize; no NMS | `BBOX`: `decode_bbox` |
 | `MobileSam` | MobileSAM prompt decoder. Its image encoder needs a top-left letterbox | One mask at the original image size: `decode_segmentation` |
 | `EdgeTamSeg` | EdgeTAM mask decoder | One mask: `decode_segmentation` |
@@ -296,6 +296,13 @@ payload stores whole pixels, so the floats have no fractional part.
   0.01 returned 7 boxes, none overlapping another of its class; at 0.5 it
   returned 10 boxes. `YoloV26` at `0` skipped NMS and returned 17 boxes, some
   of them duplicates. There is no error in either case. Fix: set 0.45 to 0.6.
+- **Oriented boxes need one scale on both axes.** `YoloV26Obb` and `YoloV8Obb`
+  fail on a frame whose scale to the model input differs between the axes, with
+  `oriented boxes require equal authoritative affine scales`. That works when
+  the stream, scaled to the model input, has whole-pixel sides, as 16:9 sizes
+  do. With a 1024 × 1024 model input, such as yolo26n_obb's, a 640 × 512 stream
+  scales to 1024 × 819.2 and fails. Fix: re-encode the
+  stream to a size such as 1280 × 720.
 - **`top_k = 0` fails on a box route.** The first `run` (or `build`) fails
   with `[misconfig.pipeline_shape] ... top_k is unresolved: set a positive
   output capacity`. Fix: set a positive `top_k`.
@@ -357,7 +364,7 @@ payload stores whole pixels, so the floats have no fractional part.
 - `YoloV26Seg` with `decode_segmentation`:
   [Single-Stream Instance Segmenter](../../../examples/segmentation/single-stream-instance-segmenter/),
   [Multi-Stream Multi-Model](../../../examples/multi-model/multi-stream-multi-model/)
-- `YoloV26Obb` and `YoloV8Obb` with `decode_obb`:
+- `YoloV26Obb` and `YoloV8Obb` with `decode_obb_tensor`:
   [Multi-Stream OBB Detector](../../../examples/object-detection/multi-stream-obb-detector/)
 - `Ssd`: [SSD-MobileNet Object Detector](../../../examples/object-detection/ssd-mobilenet-object-detector/)
 - `Detr`: [DETR Object Detector](../../../examples/object-detection/detr-object-detector/)
