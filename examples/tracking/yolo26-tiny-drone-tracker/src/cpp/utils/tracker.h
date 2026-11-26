@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Two-stage, motion-aware tracking of small detections, one tracker per stream. Mirrors
-// utils/tracker.py in the Python implementation, so both languages give the same track IDs to the
-// same boxes. High-score detections start and confirm tracks. A low-score detection may continue
-// a confirmed track, but it cannot start or confirm one.
+// utils/tracker.py, so both languages give the same track IDs to the same boxes.
 
 #pragma once
 
@@ -18,10 +16,8 @@
 
 namespace drone_tracker {
 
-// A match needs the detection's center within this distance of the track's predicted center, in
-// units of the mean box diagonal of the two boxes. Tiny boxes that move a few pixels rarely
-// overlap, so this gate does all of the matching: two boxes that overlap are always closer than
-// one mean diagonal. IoU only ranks the pairs that pass it.
+// Center distance gate, in mean box diagonals. Tiny boxes rarely overlap, so it does all the
+// matching, and IoU only ranks the pairs that pass it.
 constexpr double kMaxCenterDistance = 3.0;
 // Weight of the previous velocity when a match updates it; the rest is the measured motion.
 constexpr double kVelocityMomentum = 0.75;
@@ -69,11 +65,8 @@ private:
     int hits = 1;
   };
 
-  // The stream's frame number at `pts_ns`, counted at `fps` from an earlier frame. A realtime link
-  // drops frames, so the frames this tracker sees are not consecutive. A frame without a timestamp
-  // (`pts_ns` below 0) counts as the next frame. A timestamp before the last frame's, as after the
-  // source restarts, counts as the next frame and numbers the frames after it. A timestamp within
-  // half a frame of the last one counts as the same frame.
+  // The stream's frame number at `pts_ns`, counted at `fps`, since the link drops frames. No
+  // timestamp, or one before the last frame's after a source restart, is the next frame.
   int frame_index_at(std::int64_t pts_ns);
 
   void associate(const std::vector<BBox>& boxes, const std::vector<int>& detection_indices,

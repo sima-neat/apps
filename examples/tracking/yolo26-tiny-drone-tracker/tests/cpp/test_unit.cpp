@@ -1,7 +1,5 @@
-// Unit tests for the tiny-drone tracker: the checks the application leaves to its config, and the
-// tracker's matching rules. tests/python/test_unit.py runs the same tests in Python. This example
-// also holds the test of the shared C++ detection_egress::serialize_tracks, since support/ has no
-// C++ test program; tests/scripts/test_detection_egress.py tests the Python one.
+// The tracker's tests, as tests/python/test_unit.py. It also tests the shared C++
+// serialize_tracks, since support/ has no C++ test program.
 
 #include "examples/tracking/yolo26-tiny-drone-tracker/src/cpp/utils/tracker.h"
 #include "sima_examples/config.h"
@@ -170,8 +168,7 @@ bool test_predicted_motion_keeps_a_fast_box_on_its_track() {
   // 40 px is 2.8 box diagonals, within the 3-diagonal gate, and sets a velocity of 10 px.
   bool ok = expect_true(ids(object_tracker.update({box(40, 0, 50, 10)}, pts(1))) == std::vector{1},
                         "a box 40 px away continues track 1");
-  // 44 px from the last box is 3.1 diagonals, outside the gate. The predicted box is 34 px away,
-  // 2.4 diagonals, so the track continues.
+  // 44 px from the last box is 3.1 diagonals, outside the gate, but 2.4 from the predicted box.
   ok &= expect_true(ids(object_tracker.update({box(84, 0, 94, 10)}, pts(2))) == std::vector{1},
                     "the predicted motion keeps the box on track 1");
   return ok;
@@ -183,9 +180,8 @@ bool test_velocity_takes_a_quarter_of_the_measured_motion() {
     ObjectTracker object_tracker(settings(), kFps);
     object_tracker.update({box(0, 0, 10, 10)}, pts(0));
     object_tracker.update({box(40, 0, 50, 10)}, pts(1));
-    // The 40 px move sets a velocity of 10 px, so the box is predicted at x 50..60. Both third
-    // boxes are 40 px from there, within the 42.4 px gate. A velocity below 7.6 px loses the
-    // first, and one above 12.4 px loses the second.
+    // Both third boxes are 40 px from the box predicted with a 10 px velocity, inside the 42.4 px
+    // gate. A velocity below 7.6 px loses the first, and one above 12.4 px the second.
     ok &= expect_true(ids(object_tracker.update({third_box}, pts(2))) == std::vector{1},
                       "a box 40 px from the predicted box at x " +
                           std::to_string(static_cast<int>(third_box.x1)) + " continues track 1");
@@ -333,10 +329,8 @@ bool test_tracks_stop_at_max_active_tracks() {
                      "300 boxes start 256 tracks");
 }
 
-// The tracking message carries each track's ID, label, score, and box as [x, y, width, height],
-// in the envelope the object-detection message uses. decode_bbox_tensor already clamps every
-// corner to the frame. The second box ends past the right edge, as a box from another source may,
-// and is cut at the frame.
+// The second box ends past the right edge, as a box not from decode_bbox_tensor may, and is cut
+// at the frame.
 bool test_serialize_tracks_builds_the_tracking_message() {
   const std::vector<TrackedDetection> tracks{
       {7, 10.9f, 2.0f, 35.9f, 20.8f, 0.75f, 0},

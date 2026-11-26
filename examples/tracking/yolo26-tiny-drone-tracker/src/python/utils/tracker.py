@@ -1,8 +1,6 @@
 """Two-stage, motion-aware tracking of small detections, one tracker per stream.
 
 Mirrors src/cpp/utils/tracker.h, so both languages give the same track IDs to the same boxes.
-High-score detections start and confirm tracks. A low-score detection may continue a confirmed
-track, but it cannot start or confirm one.
 """
 
 from __future__ import annotations
@@ -13,10 +11,8 @@ from typing import Protocol
 
 import numpy as np
 
-# A match needs the detection's center within this distance of the track's predicted center,
-# in units of the mean box diagonal of the two boxes. Tiny boxes that move a few pixels rarely
-# overlap, so this gate does all of the matching: two boxes that overlap are always closer than
-# one mean diagonal. IoU only ranks the pairs that pass it.
+# Center distance gate, in mean box diagonals. Tiny boxes rarely overlap, so it does all the
+# matching, and IoU only ranks the pairs that pass it.
 MAX_CENTER_DISTANCE = 3.0
 # Weight of the previous velocity when a match updates it; the rest is the measured motion.
 VELOCITY_MOMENTUM = 0.75
@@ -163,13 +159,9 @@ class ObjectTracker:
         return tracked
 
     def _frame_index_at(self, pts_ns: int) -> int:
-        """The stream's frame number at `pts_ns`, counted at `fps` from an earlier frame. A
-        realtime link drops frames, so the frames this tracker sees are not consecutive.
+        """The stream's frame number at `pts_ns`, counted at `fps`, since the link drops frames.
 
-        A frame without a timestamp (`pts_ns` below 0) counts as the next frame. A timestamp
-        before the last frame's, as after the source restarts, counts as the next frame and
-        numbers the frames after it. A timestamp within half a frame of the last one counts as
-        the same frame.
+        No timestamp, or one before the last frame's after a source restart, is the next frame.
         """
         if pts_ns < 0:
             self._frame_index += 1
@@ -207,8 +199,7 @@ class ObjectTracker:
         if not track_ids or not candidates:
             return
 
-        # Score every track and detection pair at once: a loop per pair in Python costs tens
-        # of milliseconds per frame with 100 detections.
+        # Score every pair at once, since a Python loop per pair is too slow for 100 detections.
         predicted = np.array(
             [self._tracks[track_id].predict(frame_index) for track_id in track_ids],
             dtype=np.float64,

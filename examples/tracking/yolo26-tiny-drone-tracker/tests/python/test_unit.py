@@ -147,9 +147,8 @@ def test_velocity_takes_a_quarter_of_the_measured_motion(third_box):
     object_tracker = tracker.ObjectTracker(settings(), FPS)
     object_tracker.update([Box(0, 0, 10, 10)], pts(0))
     object_tracker.update([Box(40, 0, 50, 10)], pts(1))
-    # The 40 px move sets a velocity of 10 px, so the box is predicted at x 50..60. Both third
-    # boxes are 40 px from there, within the 42.4 px gate. A velocity below 7.6 px loses the
-    # first, and one above 12.4 px loses the second.
+    # Both third boxes are 40 px from the box predicted with a 10 px velocity, inside the 42.4 px
+    # gate. A velocity below 7.6 px loses the first, and one above 12.4 px the second.
     assert ids(object_tracker.update([third_box], pts(2))) == [1]
 
 

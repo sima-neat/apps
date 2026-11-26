@@ -1,7 +1,6 @@
 """Track tiny drones in up to four RTSP streams with one shared YOLO26 model, shown in Insight.
 
-Each stream's decoded frames feed the model. Each stream's tracker gives every drone an ID, and
-Insight draws each frame's tracks over that stream's video, one channel per stream.
+Each stream has its own tracker, which gives every drone an ID, and its own Insight channel.
 """
 
 from __future__ import annotations
@@ -33,12 +32,7 @@ RTSP_CODECS = {"h264": pyneat.RtspCodec.H264, "h265": pyneat.RtspCodec.H265}
 DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeType.H265}
 # The model's one class.
 LABELS = ["drone"]
-# Frames all streams together may have in the shared model: 4, one stream's default
-# (RealtimeLinkOptions.h). On four 25 fps streams, 4 and 16 both gave about 12.8 results/s per
-# stream (Vulcan CI runs 45586507970 and 45412976943, on Core develop/0420557512d1 and
-# develop/530580ae4d76), so more frames in flight did not add results. Core's default total is
-# min(4 * streams, 8): GraphBuildSource.cpp (fused_max_inflight_total) sets it for two or more
-# streams, and EdgeRouter.cpp for one.
+# Frames all streams together may have in the shared model. More in flight gave no more results.
 MAX_INFLIGHT_TOTAL = 4
 PULL_TIMEOUT_MS = 100
 
@@ -57,7 +51,7 @@ def model_options(
     options.preprocess.kind = pyneat.InputKind.Image
     options.preprocess.enable = pyneat.AutoFlag.On
     options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
-    # Lets streams above Core's 1920x1080 default in (PreprocessPlan.h).
+    # Lets streams above Core's 1920x1080 default in.
     options.preprocess.input_max_width = stream.width
     options.preprocess.input_max_height = stream.height
     options.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
@@ -170,8 +164,7 @@ def stream_info(config: Config, sources: list[str]) -> list[RtspStreamInfo]:
 
     Every stream has the same size, because the streams share one model input.
     """
-    # Behaves as probe_rtsp_streams, which #793 adds to sima_examples.rtsp_probe. Whichever of
-    # #785 and #793 merges second calls that instead.
+    # Same as #793's probe_rtsp_streams. Whichever of #785 and #793 merges second calls it.
     configured = RtspStreamInfo(
         config.integer("input.width"),
         config.integer("input.height"),
@@ -247,8 +240,7 @@ def send_tracks(
             stream.height,
             detection_egress.frame_metadata(sample, index),
         )
-        # A nonblocking send drops the message while the socket buffer is full; the drops are
-        # counted in the sender's stats and reported when the run ends. Any other failure raises.
+        # A full socket buffer drops the message, and the run's end reports the count.
         try:
             metadata_senders[index].send_raw_json(payload)
         except RuntimeError as error:
@@ -275,11 +267,10 @@ def main(argv: list[str] | None = None) -> int:
         stream = streams[index]
         rtsp = pyneat.groups.rtsp_encoded_input(rtsp_options(config, url, stream))
         decoder = decoder_graph(config, stream)
-        # A plain link keeps every encoded frame. A dropped one corrupts the decoded frames
-        # after it until the next keyframe.
+        # A dropped encoded frame would corrupt the decoded frames until the next keyframe.
         graph.connect(rtsp, decoder)
         graph.connect(decoder, detector, detector_link(index))
-        # A plain link sends Insight every encoded frame, so each tracking message has its frame.
+        # Every encoded frame reaches Insight, so each tracking message has its frame.
         graph.connect(rtsp, pyneat.groups.video_sender(video_options(config, index)))
         metadata_senders.append(pyneat.MetadataSender(metadata_options(config, index)))
         trackers.append(tracker.ObjectTracker(tracker_settings(config), stream.fps))

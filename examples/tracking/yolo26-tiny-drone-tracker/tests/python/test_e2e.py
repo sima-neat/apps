@@ -24,25 +24,17 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 FRAMES = 150
 # Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 MIN_SCORE = 0.1
-# Each stream's results per second, about 80% of the C++ test in Vulcan CI run 45586507970 on
-# 1f70fac (Modalix devkit-8, firmware 3.0.1_master_B2798, Core develop/0420557512d1, 25 fps
-# sources, 4 frames in flight for all streams). With one or two streams, each stream gave 24.7 to
-# 25.2, the source's rate. With four, each gave 12.7 to 12.9, about 51 in all, which is what the
-# model gives.
+# Each stream's results per second, about 80% of what CI measured. Four streams share the model.
 MIN_RESULTS_PER_S = 20.0
 MIN_FOUR_STREAM_RESULTS_PER_S = 10.0
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
-# Each video socket's receive buffer. A keyframe arrives as a burst of packets, and a full buffer
-# drops the rest of the burst. In Vulcan CI run 45612521061 on 35bfc9c, 30 of 150 messages of the
-# h264-four-streams case had no video frame, in runs of adjacent frames. Linux caps the size at
-# net.core.rmem_max (212992 bytes by default), and getsockopt reports twice what it set, so the
-# report prints what the socket got.
+# A keyframe arrives as a burst that a small buffer drops. net.core.rmem_max caps the size, so
+# the report prints what the socket got.
 VIDEO_RECEIVE_BUFFER = 8 << 20
 
-# The last value: whether stream 0 must send tracks. CI's first H.264 and H.265 URLs show objects
-# the model tracks: in run 45586507970 on 1f70fac, stream 0 sent 273 tracks in 10 track IDs for
-# H.264 and 185 in 10 for H.265.
+# The last value: whether stream 0 must send tracks, as CI's first H.264 and H.265 URLs show
+# objects the model tracks.
 CASES = [
     pytest.param("h264", 2, MIN_RESULTS_PER_S, True, id="h264"),
     pytest.param("h265", 2, MIN_RESULTS_PER_S, True, id="h265"),
@@ -60,7 +52,6 @@ def _env_int(name: str, default: int) -> int:
 
 def _drain_video(sock: socket.socket, stop: threading.Event, headers: list[bytes]) -> None:
     """Keep each video packet's RTP header until `stop` is set and the socket is empty."""
-    # A copy of single-stream's helper. #823 moves it into tests/utils/rtp_video.py.
     # The loop only reads, into one buffer, so it empties the socket as fast as it can.
     sock.settimeout(0.2)
     packet = bytearray(65536)
@@ -124,9 +115,8 @@ def _in_gap(timestamp_ms: int, gaps: list[tuple[int, int, int]]) -> bool:
 
 
 def _video_report(headers: list[bytes], timestamps_ms: list[int], fps: int) -> str:
-    """What one video socket got: its packets, the packets missing from the RTP sequence, and the
-    frames with a timestamp in the span the metadata covers against the frames the source has in
-    that span."""
+    """What one video socket got: its packets, the gaps in their sequence, and the frames received
+    against the source's frames in the span the metadata covers."""
     missing = sum(lost for lost, _, _ in _sequence_gaps(headers))
     rtp_timestamps = {int.from_bytes(header[4:8], "big") for header in headers}
     first, last = min(timestamps_ms), max(timestamps_ms)
@@ -306,8 +296,7 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         assert all(m.frame_id for m in stream_messages), f"stream {index}: a message lacks frame_id"
         frame_ids = [int(message.frame_id) for message in stream_messages]
         assert frame_ids == sorted(set(frame_ids)), f"stream {index}: frame IDs out of order"
-        # The per-track checks cover only the tracks a stream sent. In run 45586507970, stream 1
-        # of the h264 and h265 cases, CI's second URLs, sent none.
+        # The per-track checks cover only the tracks a stream sent: CI's second URLs send none.
         per_message = [json.loads(m.payload)["data"]["tracks"] for m in stream_messages]
         tracks = [track for message_tracks in per_message for track in message_tracks]
         if index == 0 and first_stream_tracks:

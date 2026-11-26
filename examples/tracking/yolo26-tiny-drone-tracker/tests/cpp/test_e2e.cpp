@@ -44,19 +44,12 @@ constexpr const char* kExampleName = "yolo26-tiny-drone-tracker";
 constexpr int kFrames = 150;
 // Above the shipped 0.05, so the tracks show that the example applies inference.min_score.
 constexpr double kMinScore = 0.1;
-// Each stream's results per second, about 80% of this test in Vulcan CI run 45586507970 on
-// 1f70fac (Modalix devkit-8, firmware 3.0.1_master_B2798, Core develop/0420557512d1, 25 fps
-// sources, 4 frames in flight for all streams). With one or two streams, each stream gave 24.7 to
-// 25.2, the source's rate. With four, each gave 12.7 to 12.9, about 51 in all, which is what the
-// model gives.
+// Each stream's results per second, about 80% of what CI measured. Four streams share the model.
 constexpr double kMinResultsPerS = 20.0;
 constexpr double kMinFourStreamResultsPerS = 10.0;
 
-// Each video socket's receive buffer. A keyframe arrives as a burst of packets, and a full buffer
-// drops the rest of the burst. In Vulcan CI run 45612521061 on 35bfc9c, 30 of 150 messages of the
-// Python h264-four-streams case had no video frame, in runs of adjacent frames. Linux caps the size
-// at net.core.rmem_max (212992 bytes by default), and getsockopt reports twice what it set, so the
-// report prints what the socket got.
+// A keyframe arrives as a burst that a small buffer drops. net.core.rmem_max caps the size, so
+// the report prints what the socket got.
 constexpr int kVideoReceiveBuffer = 8 << 20;
 
 using Clock = std::chrono::steady_clock;
@@ -73,8 +66,7 @@ std::string regex_escape(const std::string& text) {
 
 using RtpHeader = std::array<unsigned char, 12>;
 
-// Receives one stream's video and keeps each packet's RTP header until `stop` is set. A copy of
-// single-stream's helper: #823 moves it into support/cpp/sima_examples/testing/rtp_video.
+// Receives one stream's video and keeps each packet's RTP header until `stop` is set.
 class VideoDrain {
 public:
   VideoDrain(int port, const std::atomic<bool>& stop) {
@@ -211,9 +203,8 @@ bool in_gap(std::int64_t timestamp_ms, const std::vector<SequenceGap>& gaps) {
   });
 }
 
-// What one video socket got: its packets, the packets missing from the RTP sequence, and the
-// frames with a timestamp in the span the metadata covers against the frames the source has in
-// that span.
+// What one video socket got: its packets, the gaps in their sequence, and the frames received
+// against the source's frames in the span the metadata covers.
 std::string video_report(const std::vector<RtpHeader>& headers,
                          const std::vector<std::int64_t>& timestamps_ms, int fps) {
   long long missing = 0;
@@ -414,8 +405,7 @@ int run_case(const std::string& binary, const std::string& model_path,
                            std::to_string(previous_frame_id));
       }
       previous_frame_id = frame_id;
-      // The per-track checks cover only the tracks a stream sent. In run 45586507970, stream 1 of
-      // the h264 and h265 cases, CI's second URLs, sent none.
+      // The per-track checks cover only the tracks a stream sent: CI's second URLs send none.
       // Named, because before C++23 a range-for over a member of a temporary reads it after the
       // temporary is destroyed.
       const auto payload = nlohmann::json::parse(message.payload);
@@ -524,13 +514,12 @@ int main(int argc, char** argv) {
   }
   const MultiStreamSourceCase h264{"h264", rtsp_h264_urls_from_env()};
   const MultiStreamSourceCase h265{"h265", rtsp_h265_urls_from_env()};
-  // The bool: whether stream 0 must send tracks. CI's first H.264 and H.265 URLs show objects the
-  // model tracks: in run 45586507970 on 1f70fac, stream 0 sent 273 tracks in 10 track IDs for H.264
-  // and 185 in 10 for H.265. With one source, Core names the samples after the decoder instead of
-  // the stream.
+  // The bool: whether stream 0 must send tracks, as CI's first H.264 and H.265 URLs show objects
+  // the model tracks.
   const std::vector<std::tuple<MultiStreamSourceCase, int, double, bool, std::string>> cases = {
       {h264, 2, kMinResultsPerS, true, "h264"},
       {h265, 2, kMinResultsPerS, true, "h265"},
+      // With one source, Core names the samples after the decoder instead of the stream.
       {h264, 1, kMinResultsPerS, false, "h264-one-stream"},
       {h264, 4, kMinFourStreamResultsPerS, false, "h264-four-streams"}};
   int cases_run = 0;

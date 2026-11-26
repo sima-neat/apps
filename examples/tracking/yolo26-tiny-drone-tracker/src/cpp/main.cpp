@@ -13,8 +13,7 @@
 // limitations under the License.
 
 // Tracks tiny drones in up to four RTSP streams with one shared YOLO26 model, shown in Insight.
-// Each stream's decoded frames feed the model. Each stream's tracker gives every drone an ID, and
-// Insight draws each frame's tracks over that stream's video, one channel per stream.
+// Each stream has its own tracker, which gives every drone an ID, and its own Insight channel.
 
 #include "neat.h"
 #include "sima_examples/config.h"
@@ -52,12 +51,7 @@ const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
 };
 // The model's one class.
 const std::vector<std::string> kLabels = {"drone"};
-// Frames all streams together may have in the shared model: 4, one stream's default
-// (RealtimeLinkOptions.h). On four 25 fps streams, 4 and 16 both gave about 12.8 results/s per
-// stream (Vulcan CI runs 45586507970 and 45412976943, on Core develop/0420557512d1 and
-// develop/530580ae4d76), so more frames in flight did not add results. Core's default total is
-// min(4 * streams, 8): GraphBuildSource.cpp (fused_max_inflight_total) sets it for two or more
-// streams, and EdgeRouter.cpp for one.
+// Frames all streams together may have in the shared model. More in flight gave no more results.
 constexpr int kMaxInflightTotal = 4;
 
 fs::path parse_args(int argc, char** argv) {
@@ -84,7 +78,7 @@ neat::Model::Options model_options(const sima_examples::Config& config,
   options.preprocess.kind = neat::InputKind::Image;
   options.preprocess.enable = neat::AutoFlag::On;
   options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
-  // Lets streams above Core's 1920x1080 default in (PreprocessPlan.h).
+  // Lets streams above Core's 1920x1080 default in.
   options.preprocess.input_max_width = stream.width;
   options.preprocess.input_max_height = stream.height;
   options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
@@ -195,8 +189,7 @@ drone_tracker::TrackerSettings tracker_settings(const sima_examples::Config& con
 // stream has the same size, because the streams share one model input.
 std::vector<sima_examples::RtspStreamInfo> stream_info(const sima_examples::Config& config,
                                                        const std::vector<std::string>& sources) {
-  // Behaves as probe_rtsp_streams, which #793 adds to sima_examples/rtsp_probe. Whichever of #785
-  // and #793 merges second calls that instead.
+  // Same as #793's probe_rtsp_streams. Whichever of #785 and #793 merges second calls it.
   const sima_examples::RtspStreamInfo configured{
       config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")};
   const bool tcp = config.boolean("input.rtsp.tcp");
@@ -277,8 +270,7 @@ std::vector<int> send_tracks(neat::Run& run, std::vector<neat::MetadataSender>& 
     const std::string payload = sima_examples::detection_egress::serialize_tracks(
         tracks, kLabels, stream.width, stream.height,
         sima_examples::detection_egress::frame_metadata(sample, index));
-    // A nonblocking send drops the message while the socket buffer is full; the drops are
-    // counted in the sender's stats and reported when the run ends. Any other failure throws.
+    // A full socket buffer drops the message, and the run's end reports the count.
     std::string send_error;
     if (!metadata_senders.at(slot).send_raw_json(payload, &send_error) && !send_error.empty()) {
       throw std::runtime_error("metadata send failed: " + send_error);
@@ -307,11 +299,10 @@ int run_app(const fs::path& config_path) {
     const auto& stream = streams[static_cast<std::size_t>(index)];
     const neat::Graph rtsp = groups::RtspEncodedInput(rtsp_options(config, url, stream));
     const neat::Graph decoder = decoder_graph(config, stream);
-    // A plain link keeps every encoded frame. A dropped one corrupts the decoded frames after it
-    // until the next keyframe.
+    // A dropped encoded frame would corrupt the decoded frames until the next keyframe.
     graph.connect(rtsp, decoder);
     graph.connect(decoder, detector, detector_link(index));
-    // A plain link sends Insight every encoded frame, so each tracking message has its frame.
+    // Every encoded frame reaches Insight, so each tracking message has its frame.
     graph.connect(rtsp, groups::VideoSender(video_options(config, index)));
     std::string error;
     metadata_senders.emplace_back(metadata_options(config, index), &error);
@@ -331,8 +322,7 @@ int run_app(const fs::path& config_path) {
                                      config.integer("inference.frames"), stop);
   run.close();
 
-  // Core candidate: after an RTSP run, the process exits with code 0 without flushing stdout, so
-  // on a pipe or a file the lines below are lost unless std::endl flushes them (#673).
+  // Core candidate (#673): stdout is not flushed at exit after an RTSP run, so std::endl does it.
   for (std::size_t index = 0; index < metadata_senders.size(); ++index) {
     std::cout << "[stream " << index << "] processed=" << processed[index]
               << " tracks_started=" << trackers[index].tracks_started() << std::endl;
