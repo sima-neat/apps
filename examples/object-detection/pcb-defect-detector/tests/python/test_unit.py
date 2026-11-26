@@ -41,7 +41,8 @@ def test_shipped_config_names_the_model_labels_and_folders():
     assert output_dir.startswith("sandbox/")
     # An annotated image written into input.source would be read as a board on the next run.
     assert Path(output_dir) != Path(config.string("input.source"))
-    assert 0 <= config.number("inference.min_score") <= 1
+    # Core's YOLO26 box decode fails at build with a score threshold of 1.0.
+    assert 0 <= config.number("inference.min_score") < 1
     assert 0 <= config.number("inference.nms_iou") <= 1
     assert config.integer("inference.max_detections") > 0
     assert config.integer("app.input_max_width") > 0

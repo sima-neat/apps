@@ -48,7 +48,7 @@ constructor ([model.md](model.md)).
 
 C++, from
 [`pcb-defect-detector/src/cpp/main.cpp`](../../../examples/object-detection/pcb-defect-detector/src/cpp/main.cpp)
-(lines 71–76, de-indented):
+(lines 72–77, de-indented):
 
 ```cpp
 options.decode_type = neat::BoxDecodeType::YoloV26;
@@ -61,7 +61,7 @@ options.num_classes = static_cast<int>(labels.size());
 
 Python, from
 [`pcb-defect-detector/src/python/main.py`](../../../examples/object-detection/pcb-defect-detector/src/python/main.py)
-(lines 53–58, de-indented):
+(lines 54–59, de-indented):
 
 ```python
 options.decode_type = pyneat.BoxDecodeType.YoloV26

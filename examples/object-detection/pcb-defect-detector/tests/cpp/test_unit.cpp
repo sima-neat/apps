@@ -59,9 +59,9 @@ bool test_shipped_config_names_the_model_labels_and_folders() {
                         fs::path(output_dir) != fs::path(config.string("input.source")),
                     "output.dir is under sandbox/ and is not input.source");
   ok &= expect_true(
-      config.number("inference.min_score") >= 0.0 && config.number("inference.min_score") <= 1.0 &&
+      config.number("inference.min_score") >= 0.0 && config.number("inference.min_score") < 1.0 &&
           config.number("inference.nms_iou") >= 0.0 && config.number("inference.nms_iou") <= 1.0,
-      "the shipped score and IoU thresholds are from 0 to 1");
+      "the shipped score threshold is from 0 up to 1, and the IoU threshold from 0 to 1");
   ok &= expect_true(config.integer("inference.max_detections") > 0 &&
                         config.integer("app.input_max_width") > 0 &&
                         config.integer("app.input_max_height") > 0,
