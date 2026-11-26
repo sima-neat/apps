@@ -29,14 +29,21 @@ namespace {
 
 constexpr const char* kExampleName = "fastflow-anomaly-detector";
 constexpr int kFrames = 60;
-constexpr double kThreshold = 0.5;
-constexpr int kMinRegionPx = 300;
+// Every map pixel reaches a threshold of 0, so every frame sends one segment, whatever the test
+// stream shows.
+constexpr double kThreshold = 0.0;
+constexpr int kMinRegionPx = 1;
 
-// Every segment is an anomaly at or above the threshold, with its box and outline in the frame.
+// Every message has a segment, and every segment is an anomaly at or above the threshold, with its
+// box and outline in the frame.
 bool valid_segments(const std::vector<MetadataJsonMessage>& messages, int width, int height) {
   for (const auto& message : messages) {
     // A named value: a range-for over a member of a temporary would outlive the temporary.
     const auto payload = nlohmann::json::parse(message.payload);
+    if (payload.at("data").at("segments").empty()) {
+      std::cerr << "[FAIL] a frame sent no segment: " << message.payload << "\n";
+      return false;
+    }
     for (const auto& segment : payload.at("data").at("segments")) {
       const auto bbox = segment.at("bbox").get<std::array<int, 4>>();
       bool inside =
@@ -134,7 +141,8 @@ int run_codec_case(const std::string& binary, const std::string& model_path,
   const auto rest = listener.drain_pending();
   std::smatch stream;
   const std::regex stream_size(R"(stream=(\d+)x(\d+)@)");
-  const std::regex summary("processed=" + std::to_string(kFrames) + R"( flagged=\d+ )");
+  const std::regex summary("processed=" + std::to_string(kFrames) +
+                           " flagged=" + std::to_string(kFrames) + " ");
   if (!metadata.success || !following.success ||
       !std::regex_search(result.stdout_text, stream, stream_size)) {
     std::cerr << "[FAIL] " << label << " sent no segmentation metadata: " << metadata.error

@@ -34,10 +34,16 @@ std::vector<Region> defect_regions(const cv::Mat& anomaly_map, const RegionOptio
     const cv::Mat member = labels == index;
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(member, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    std::vector<cv::Point> outline;
-    cv::approxPolyDP(contours.front(), outline, 1.0, true);
     const int x = stat[cv::CC_STAT_LEFT];
     const int y = stat[cv::CC_STAT_TOP];
+    std::vector<cv::Point> outline;
+    cv::approxPolyDP(contours.front(), outline, 1.0, true);
+    // A polygon needs three points; a dot or a line is sent as its box instead.
+    if (outline.size() < 3) {
+      const int right = x + stat[cv::CC_STAT_WIDTH];
+      const int bottom = y + stat[cv::CC_STAT_HEIGHT];
+      outline = {{x, y}, {x, bottom}, {right, bottom}, {right, y}};
+    }
     // Integer scaling, the same in both languages: map pixel m covers frame pixels from
     // m * width / map_width.
     const int x0 = x * options.width / map_width;

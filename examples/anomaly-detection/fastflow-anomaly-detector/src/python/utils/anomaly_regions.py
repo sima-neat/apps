@@ -44,8 +44,14 @@ def defect_regions(anomaly_map: np.ndarray, options: RegionOptions) -> list[Regi
         contours, _ = cv2.findContours(
             member.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
-        outline = cv2.approxPolyDP(contours[0], 1.0, True)
         x, y, width, height = (int(value) for value in stats[index, :4])
+        outline = [
+            (int(point[0][0]), int(point[0][1]))
+            for point in cv2.approxPolyDP(contours[0], 1.0, True)
+        ]
+        # A polygon needs three points; a dot or a line is sent as its box instead.
+        if len(outline) < 3:
+            outline = [(x, y), (x, y + height), (x + width, y + height), (x + width, y)]
         # Integer scaling, the same in both languages: map pixel m covers frame pixels from
         # m * width // map_width.
         x0, y0 = x * options.width // map_width, y * options.height // map_height
@@ -56,11 +62,8 @@ def defect_regions(anomaly_map: np.ndarray, options: RegionOptions) -> list[Regi
                 bbox=(x0, y0, x1 - x0, y1 - y0),
                 score=float(anomaly_map[member].max()),
                 polygon=[
-                    [
-                        int(point[0][0]) * options.width // map_width,
-                        int(point[0][1]) * options.height // map_height,
-                    ]
-                    for point in outline
+                    [px * options.width // map_width, py * options.height // map_height]
+                    for px, py in outline
                 ],
             )
         )

@@ -101,7 +101,7 @@ The packaged config already points `model.path` at `models/fastflow_demo_mpk.tar
 
 ## Prepare an RTSP source
 
-1. In Insight, open **Media Sources** and import a clip of blue discs, such as `TODO(clip): ask Onat which catalog clip`, or a clip of your own parts.
+1. In Insight, open **Media Sources** and import a clip of blue discs, such as `TODO(clip): name the catalog clip`, or a clip of your own parts.
 2. Assign the video under **Streaming Sources** and start the source.
 3. Copy its RTSP URL into `input.source` and set `input.codec` to match the video. Use a host and published port reachable from the target, not `localhost`.
 

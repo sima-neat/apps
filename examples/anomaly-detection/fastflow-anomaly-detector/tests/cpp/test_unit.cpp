@@ -104,6 +104,26 @@ bool test_a_map_below_the_threshold_has_no_region() {
   return ok;
 }
 
+// Insight draws a polygon only from three points, so a region approxPolyDP reduces to fewer
+// gets its box.
+bool test_a_dot_or_a_line_is_outlined_by_its_box() {
+  cv::Mat map = cv::Mat::zeros(16, 16, CV_32FC1);
+  map.at<float>(9, 7) = 0.9F;
+  map(cv::Rect(2, 14, 5, 1)).setTo(0.8F);
+  const fastflow::RegionOptions dot_options = {
+      .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
+  const auto regions = fastflow::defect_regions(map, dot_options);
+  if (!expect_true(regions.size() == 2U, "the dot and the line are regions")) {
+    return false;
+  }
+  const std::vector<std::array<int, 2>> dot_outline = {{14, 27}, {14, 30}, {16, 30}, {16, 27}};
+  const std::vector<std::array<int, 2>> line_outline = {{4, 42}, {4, 45}, {14, 45}, {14, 42}};
+  return expect_true(regions[0].bbox == std::array<int, 4>{14, 27, 2, 3} &&
+                         regions[1].bbox == std::array<int, 4>{4, 42, 10, 3} &&
+                         regions[0].polygon == dot_outline && regions[1].polygon == line_outline,
+                     "a dot and a line are outlined by their boxes");
+}
+
 bool test_segments_carry_the_box_outline_and_score() {
   const auto regions = fastflow::defect_regions(three_region_map(), options(1));
   const auto segments = nlohmann::json::parse(fastflow::segments_json(regions)).at("segments");
@@ -126,6 +146,7 @@ int main() {
   ok &= test_regions_below_min_region_px_are_speckle();
   ok &= test_max_regions_keeps_the_highest_scores();
   ok &= test_a_map_below_the_threshold_has_no_region();
+  ok &= test_a_dot_or_a_line_is_outlined_by_its_box();
   ok &= test_segments_carry_the_box_outline_and_score();
   return ok ? 0 : 1;
 }

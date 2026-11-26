@@ -17,8 +17,10 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 FRAMES = 60
-THRESHOLD = 0.5
-MIN_REGION_PX = 300
+# Every map pixel reaches a threshold of 0, so every frame sends one segment, whatever the
+# test stream shows.
+THRESHOLD = 0.0
+MIN_REGION_PX = 1
 
 
 def _env_int(name: str, default: int) -> int:
@@ -83,14 +85,16 @@ def test_publishes_insight_video_and_regions(
         rest = listener.drain_pending()
         video_packet = video.recv(65536)
 
-    assert re.search(rf"processed={FRAMES} flagged=\d+ ", result.stdout), result.stdout
+    assert f"processed={FRAMES} flagged={FRAMES} " in result.stdout, result.stdout
     assert metadata.success, metadata.error
     assert following.success, following.error
     first, last = metadata.messages[-1], following.messages[-1]
     assert int(last.frame_id) > int(first.frame_id)
     width, height = (int(value) for value in re.search(r"stream=(\d+)x(\d+)@", result.stdout).groups())
     for message in metadata.messages + following.messages + rest.messages:
-        for segment in json.loads(message.payload)["data"]["segments"]:
+        segments = json.loads(message.payload)["data"]["segments"]
+        assert segments, message.payload
+        for segment in segments:
             assert segment["label"] == "anomaly", segment
             assert THRESHOLD <= segment["confidence"] <= 1.0, segment
             x, y, box_width, box_height = segment["bbox"]
