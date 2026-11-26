@@ -1,6 +1,6 @@
 """Contract tests for support/python/sima_examples/image_folder.py, the image list of the examples
-that read a folder of image files. The SSD-MobileNet example's C++ unit test runs the same cases
-on support/cpp/sima_examples/image_folder.h.
+that read a folder of image files. The DETR example's C++ unit test runs the same cases on
+support/cpp/sima_examples/image_folder.h.
 """
 
 from __future__ import annotations
