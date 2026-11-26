@@ -9,8 +9,6 @@ keeps that format and writes its sentences by these rules.
 
 - Use the Core API's name for each thing, as the cheat sheet spells it, and keep that name.
   Explain a term at its first use when a reader outside the work may not know it.
-- Keep instructions within about 20 words and descriptions within about 25. These are
-  ceilings, not targets, and tables, commands, and identifiers are exempt.
 - Write full sentences with their articles and verbs, never fragments.
 - Give one action per sentence, with its condition first: "If the build fails, fix its first
   error."

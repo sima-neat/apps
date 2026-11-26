@@ -110,7 +110,7 @@ Refs #<issue>, #<issue>
 - **State each fact once.** A fact in the Summary does not come back in What Changed or
   Validation.
 - **Follow the [language rules](../../references/writing.md#language):** one name for each
-  thing in every section, sentence length, full sentences, the condition first, active voice,
+  thing in every section, full sentences, the condition first, active voice,
   and the plain word.
 - **Before publishing, read it as the reviewer.** Delete each line whose removal would not
   change the review.
