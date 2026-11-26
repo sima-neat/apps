@@ -4,7 +4,7 @@ model:
   path: ../../../../../models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
   # The 80 COCO classes YOLO26 scores, one label per line in class ID order; a relative path
   # starts at the working directory.
-  labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
+  labels: support/labels/coco80.txt
 
 input:
   source: assets/datasets/coco  # Folder of .jpg, .jpeg, .png, and .bmp images.

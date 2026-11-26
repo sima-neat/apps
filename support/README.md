@@ -49,7 +49,7 @@ its label file in its `src/common/`.
 
 | File | Classes | Used by |
 | --- | --- | --- |
-| `coco80.txt` | The 80 COCO classes as IDs 0 to 79, as YOLO models score them | single-stream, high-density, PCIe high-density |
+| `coco80.txt` | The 80 COCO classes as IDs 0 to 79, as YOLO models score them | single-stream, high-density, PCIe high-density, YOLO26 |
 | `coco91.txt` | The COCO class IDs 0 to 90, with `N/A` for the 11 IDs that name no class, as DETR models score them | DETR, RF-DETR |
 
 ## Changing the library
