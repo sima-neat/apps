@@ -19,15 +19,20 @@ class PendingResults:
         self.first_result_s = first_result_s
         self.has_result = False
         self.last_result_frame_id = -1
+        self.newest_frame_id = -1
         self.pending_since: float | None = None
 
     def observe(self, frame_id: int | None, result_frame_id: int | None, now_s: float) -> None:
         """Record one pull round, given the frame ID of the frame and of the result it pulled
         (None for no pull), then raise when the pending result is late. An ID of -1 is unknown."""
+        if frame_id is not None:
+            self.newest_frame_id = max(self.newest_frame_id, frame_id)
         if result_frame_id is not None:
             self.has_result = True
             self.last_result_frame_id = result_frame_id
-            self.pending_since = None
+            # A frame newer than this result, pulled in this or an earlier round, still waits.
+            waiting = result_frame_id >= 0 and self.newest_frame_id > result_frame_id
+            self.pending_since = now_s if waiting else None
         if frame_id is not None and self.pending_since is None:
             if frame_id >= 0 and self.last_result_frame_id >= 0:
                 newer = frame_id > self.last_result_frame_id

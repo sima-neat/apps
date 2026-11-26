@@ -3,6 +3,7 @@
 
 #include "pending_results.h"
 
+#include <algorithm>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -16,10 +17,15 @@ PendingResults::PendingResults(int stream_index, std::string model_path, double 
 
 void PendingResults::observe(std::optional<std::int64_t> frame_id,
                              std::optional<std::int64_t> result_frame_id, double now_s) {
+  if (frame_id) {
+    newest_frame_id_ = std::max(newest_frame_id_, *frame_id);
+  }
   if (result_frame_id) {
     has_result_ = true;
     last_result_frame_id_ = *result_frame_id;
-    pending_since_.reset();
+    // A frame newer than this result, pulled in this or an earlier round, still waits.
+    const bool waiting = *result_frame_id >= 0 && newest_frame_id_ > *result_frame_id;
+    pending_since_ = waiting ? std::optional<double>(now_s) : std::nullopt;
   }
   if (frame_id && !pending_since_) {
     // With an unknown ID, a frame pulled with a result may be that result's own.

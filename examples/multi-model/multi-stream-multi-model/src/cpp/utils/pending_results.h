@@ -31,6 +31,7 @@ private:
   double first_result_s_;
   bool has_result_ = false;
   std::int64_t last_result_frame_id_ = -1;
+  std::int64_t newest_frame_id_ = -1;
   std::optional<double> pending_since_;
 };
 

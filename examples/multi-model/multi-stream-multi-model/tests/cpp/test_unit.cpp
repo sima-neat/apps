@@ -351,6 +351,21 @@ bool test_newer_frame_with_a_result_in_one_round_starts_the_deadline() {
   return ok;
 }
 
+bool test_newer_frame_before_an_older_result_keeps_the_deadline() {
+  // Frame 9 arrives while frame 8 is pending, then the result for 8 comes in the next round.
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, kNone, 7, 90.0);
+  ok &= observes(pending, 8, kNone, 95.0);
+  ok &= observes(pending, 9, kNone, 99.0);
+  ok &= observes(pending, kNone, 8, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 110.0).empty(), "the deadline has not passed");
+  const std::string error = error_of(pending, kNone, kNone, 110.5);
+  ok &= expect_true(
+      error == "stream 0: model m.tar.gz returned no result for 10 s while its decoder sent frames",
+      "a newer frame pulled before an older result keeps the deadline: " + error);
+  return ok;
+}
+
 bool test_frame_no_newer_than_the_last_result_is_not_pending() {
   PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
   bool ok = observes(pending, kNone, 8, 100.0);
@@ -550,6 +565,7 @@ int main(int argc, char** argv) {
   ok &= test_result_clears_the_pending_frame();
   ok &= test_frame_with_its_result_in_one_round_is_not_pending();
   ok &= test_newer_frame_with_a_result_in_one_round_starts_the_deadline();
+  ok &= test_newer_frame_before_an_older_result_keeps_the_deadline();
   ok &= test_frame_no_newer_than_the_last_result_is_not_pending();
   ok &= test_frame_with_an_unknown_id_is_pending_only_without_a_result();
   ok &= test_first_result_has_its_own_deadline();

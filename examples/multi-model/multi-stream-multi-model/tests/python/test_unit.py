@@ -216,6 +216,19 @@ def test_newer_frame_with_a_result_in_one_round_starts_the_deadline():
     )
 
 
+def test_newer_frame_before_an_older_result_keeps_the_deadline():
+    # Frame 9 arrives while frame 8 is pending, then the result for 8 comes in the next round.
+    pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
+    pending.observe(None, 7, 90.0)
+    pending.observe(8, None, 95.0)
+    pending.observe(9, None, 99.0)
+    pending.observe(None, 8, 100.0)
+    assert error_of(pending, None, None, 110.0) == ""
+    assert error_of(pending, None, None, 110.5) == (
+        "stream 0: model m.tar.gz returned no result for 10 s while its decoder sent frames"
+    )
+
+
 def test_frame_no_newer_than_the_last_result_is_not_pending():
     pending = PendingResults(0, "m.tar.gz", 10.0, 30.0)
     pending.observe(None, 8, 100.0)
