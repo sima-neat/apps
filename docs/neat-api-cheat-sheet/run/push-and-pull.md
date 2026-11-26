@@ -16,7 +16,8 @@ wait timed out, the pipeline reached end of stream, or the runtime failed.
 `PullStatus` is that answer and `PullError` carries the detail when the answer
 is `Error`. Python has no `PullStatus` form. On a graph with one output, a
 Python application separates the middle two with `can_pull()`, which is
-`false` once that output is at end of stream.
+`false` once that output is at end of stream on a Core with core#1431. On
+Core 0.6.2, `can_pull()` stays `true` there.
 
 ## When to use it
 
@@ -91,7 +92,7 @@ not public API; no shipped example uses them.
 | Call | C++ | Python | What it does | Why and when to use it |
 |---|---|---|---|---|
 | Can the run take pushes | `can_push()` | `can_push()` | `true` while the input side accepts pushes, `false` once it is closed. It checks only the default input, so on a graph with more than one input it is always `false`. | On a graph with one input, branch on it once after `build()` to tell a push-driven graph from a source-driven one. |
-| Can the run yield samples | `can_pull()` | `can_pull()` | `true` while the output side may still produce a sample, `false` at end of stream. It checks only the default output, so on a graph with more than one output it is always `false`. | **The end-of-stream check on a graph with one output.** In Python it is then the only way to tell a `None` from `pull()` apart from a timeout. |
+| Can the run yield samples | `can_pull()` | `can_pull()` | `true` while the output side may still produce a sample, `false` at end of stream on a Core with core#1431 (on Core 0.6.2 it stays `true`). It checks only the default output, so on a graph with more than one output it is always `false`. | **The end-of-stream check on a graph with one output.** In Python it is then the only way to tell a `None` from `pull()` apart from a timeout. |
 | Input port names | `input_names()` | `input_names()` | The names accepted by `push(name, ...)`. Empty for an unnamed or linear run. | Call it once after `build()` to learn the ports a multi-input graph exposes, instead of hard-coding the strings. |
 | Output port names | `output_names()` | `output_names()` | The names accepted by `pull(name, ...)`. Empty for an unnamed or linear run. | The same for outputs, and the natural way to drive a drain loop over every output of a multi-stream graph. |
 
@@ -137,9 +138,13 @@ with one output, call `run.can_pull()` after a `None` to tell them apart:
 than one output, `can_pull()` is always `false`, and Python has no call that
 tells a timeout from end of stream for one output. `run.running()` does not
 fill that gap: it reports the pipeline state, which can still be playing while
-an output is drained. The shipped Python examples use `running()` plus
-`last_error()`; see `pull_result_has_sample` in
-[fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/src/python/main.py).
+an output is drained. The one-output Python examples stop on `last_error()`,
+`not running()`, or `not can_pull()`: see `send_detections` in
+[single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/src/python/main.py).
+On a graph with more than one output, `running()` plus `last_error()` is all
+that is left. `pull_result_has_sample` in
+[fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/src/python/main.py)
+checks those two.
 A C++ application should use the `PullStatus` form rather than either.
 
 **Python rejects a bare `Tensor` or `Sample` in `push()`.** The binding calls
@@ -202,6 +207,7 @@ or `DropIncoming`, and the frame was not accepted.
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — the four-way `PullStatus` loop over many named outputs
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) — Python `pull(name, 0)` drain loop plus `pull(name, 50)`
 - [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — pulls NV12 frames from a named `Output` and runs each one through a `Model::Runner`
+- [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/), [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/), [multi-stream-obb-detector](../../../examples/object-detection/multi-stream-obb-detector/), and superpoint-feature-extractor — the Python one-output end-of-stream check with `can_pull()`
 - [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — the Python `pull_result_has_sample` workaround
 - [rfdetr-detection-segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/) — `close_input()` at shutdown, both languages
 

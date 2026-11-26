@@ -212,8 +212,13 @@ def send_detections(
     while not stop.is_set() and (frames == 0 or processed < frames):
         sample = run.pull("detections", PULL_TIMEOUT_MS)
         if sample is None:
-            if run.last_error() or not run.running():
-                raise RuntimeError(f"detections output closed: {run.last_error()}")
+            # Core candidate: Python pull() has no PullStatus, so None is a timeout or a closed
+            # output. With one output, can_pull() tells them apart on a Core with core#1431.
+            if run.last_error() or not run.running() or not run.can_pull():
+                detail = run.last_error()
+                raise RuntimeError(
+                    "detections output closed unexpectedly" + (f": {detail}" if detail else "")
+                )
             continue
         payload = detection_egress.serialize(
             decode_boxes(sample, stream, max_detections),
