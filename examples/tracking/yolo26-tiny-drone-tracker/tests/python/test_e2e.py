@@ -33,15 +33,16 @@ PAYLOAD_TYPES = {"h264": 96, "h265": 98}
 # the report prints what the socket got.
 VIDEO_RECEIVE_BUFFER = 8 << 20
 
-# The last value: whether stream 0 must send tracks, as CI's first H.264 and H.265 URLs show
-# objects the model tracks.
+# The last value: whether the config sets input.width, input.height, and input.fps to the
+# stream's values instead of 0, which skips the app's probe.
 CASES = [
-    pytest.param("h264", 2, MIN_RESULTS_PER_S, True, id="h264"),
-    pytest.param("h265", 2, MIN_RESULTS_PER_S, True, id="h265"),
+    pytest.param("h264", 2, MIN_RESULTS_PER_S, False, id="h264"),
+    pytest.param("h265", 2, MIN_RESULTS_PER_S, False, id="h265"),
     # With one source, Core names the samples after the decoder instead of the stream.
     pytest.param("h264", 1, MIN_RESULTS_PER_S, False, id="h264-one-stream"),
     # Four streams of the first URL, the most the README lists, share 4 frames in flight.
     pytest.param("h264", 4, MIN_FOUR_STREAM_RESULTS_PER_S, False, id="h264-four-streams"),
+    pytest.param("h264", 1, MIN_RESULTS_PER_S, True, id="h264-configured-size"),
 ]
 
 
@@ -140,13 +141,13 @@ def _pairs(timestamp_ms: int, rtp_timestamps: set[int]) -> bool:
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize(("codec", "streams", "min_results_per_s", "first_stream_tracks"), CASES)
+@pytest.mark.parametrize(("codec", "streams", "min_results_per_s", "configured_size"), CASES)
 def test_streams_reach_their_insight_channels_as_video_and_tracks(
     request,
     codec,
     streams,
     min_results_per_s,
-    first_stream_tracks,
+    configured_size,
     e2e_model_path,
     tmp_output_dir,
     test_timeout_ms,
@@ -166,11 +167,20 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
     model_path = os.path.relpath(Path(e2e_model_path).resolve(), config_dir.resolve())
     # The app runs from the Apps root, so only a path joined to the config file finds the model.
     assert not (APPS_ROOT / model_path).exists(), model_path
+    size = {}
+    if configured_size:
+        # Imported here, so collecting this file needs no OpenCV.
+        sys.path.insert(0, str(APPS_ROOT / "support" / "python"))
+        from sima_examples.rtsp_probe import probe_rtsp_stream_info
+
+        # The packaged config receives RTSP over TCP.
+        stream = probe_rtsp_stream_info(urls[0], True)
+        size = {"width": stream.width, "height": stream.height, "fps": stream.fps}
     config_path = e2e_config_writer(
         {
             # Relative to the generated config, so the test runs the app's path join.
             "model": {"path": model_path},
-            "input": {"source": urls[:streams], "codec": codec},
+            "input": {"source": urls[:streams], "codec": codec, **size},
             "inference": {"frames": FRAMES, "min_score": MIN_SCORE},
             # This test is the Insight receiver, so the example sends to loopback.
             "output": {
@@ -271,9 +281,10 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         for name in ("RcvbufErrors", "SndbufErrors")
         if name in udp_before and name in udp_after
     )
+    stream_size = rf"{size['width']}x{size['height']}@({size['fps']})" if size else r"\d+x\d+@(\d+)"
     for index in range(streams):
         start = re.search(
-            rf"^\[stream {index}\] rtsp={re.escape(urls[index])} stream=\d+x\d+@(\d+) "
+            rf"^\[stream {index}\] rtsp={re.escape(urls[index])} stream={stream_size} "
             rf"insight=127\.0\.0\.1 video={video_port + index} metadata={metadata_port + index}$",
             stdout,
             re.MULTILINE,
@@ -299,7 +310,8 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         # The per-track checks cover only the tracks a stream sent: CI's second URLs send none.
         per_message = [json.loads(m.payload)["data"]["tracks"] for m in stream_messages]
         tracks = [track for message_tracks in per_message for track in message_tracks]
-        if index == 0 and first_stream_tracks:
+        # CI's first H.264 and H.265 URLs show objects the model tracks.
+        if index == 0:
             assert tracks, "stream 0 sent no tracks"
             # The tracker keeps an ID across frames: some ID is in two or more messages.
             messages_per_id = Counter(
@@ -320,11 +332,9 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
         unpaired = [
             m.timestamp_ms for m in stream_messages if not _pairs(m.timestamp_ms, rtp_timestamps)
         ]
-        # A frame in a gap of the RTP sequence was lost between the sender and this test, so its
-        # message counts against the frames received, not against the app's timestamps.
+        # The report names the unpaired messages whose frame fell in a gap of the RTP sequence.
         gaps = _sequence_gaps(headers[index])
         lost = [timestamp for timestamp in unpaired if _in_gap(timestamp, gaps)]
-        unpaired = [timestamp for timestamp in unpaired if not _in_gap(timestamp, gaps)]
         fps = int(start.group(1))
         report = _video_report(headers[index], [m.timestamp_ms for m in stream_messages], fps)
         video = (

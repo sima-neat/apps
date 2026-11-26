@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -94,6 +95,9 @@ bool test_boxes_are_clipped_to_the_frame_before_their_size_is_measured() {
       {{700.0f, 10.0f, 760.0f, 50.0f, 0.8f, 0}, {640.0f, 10.0f, 0.0f, 40.0f}},
       // int(x2) - int(x1), not int(x2 - x1), which would give 29 x 39.
       {{10.6f, 20.6f, 40.4f, 60.4f, 0.8f, 0}, {10.0f, 20.0f, 30.0f, 40.0f}},
+      // A NaN corner clips to 0, as in Core.
+      {{std::numeric_limits<float>::quiet_NaN(), 10.0f, 40.0f, 50.0f, 0.8f, 0},
+       {0.0f, 10.0f, 40.0f, 40.0f}},
   };
   const std::vector<std::string> labels{"person"};
   const sima_examples::detection_egress::FrameMetadata frame;

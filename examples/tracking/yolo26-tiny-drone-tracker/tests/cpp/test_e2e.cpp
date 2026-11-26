@@ -1,5 +1,6 @@
 // End-to-end tests: RTSP streams reach Insight as video and tracking metadata, each on its own
 // channel. tests/python/test_e2e.py runs the same checks in Python.
+#include "sima_examples/rtsp_probe.h"
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/source_cases.h"
 #include "sima_examples/testing/test_config.h"
@@ -242,7 +243,7 @@ bool pairs(std::int64_t timestamp_ms, const std::set<std::uint32_t>& rtp_timesta
 
 int run_case(const std::string& binary, const std::string& model_path,
              const MultiStreamSourceCase& source_case, int streams, double min_results_per_s,
-             bool first_stream_tracks, const std::string& label) {
+             bool configured_size, const std::string& label) {
   const std::string output_dir = create_test_output_dir(
       kExampleName, "test_streams_reach_their_insight_channels_as_video_and_tracks_" + label);
   if (output_dir.empty()) {
@@ -266,17 +267,33 @@ int run_case(const std::string& binary, const std::string& model_path,
       streams == 4
           ? std::vector<std::string>(4, source_case.urls.front())
           : std::vector<std::string>(source_case.urls.begin(), source_case.urls.begin() + streams);
-  write_e2e_config(kExampleName, config_path,
-                   {// Relative to the generated config, so the test runs the app's path join.
-                    {"model.path", relative_model},
-                    {"input.codec", source_case.codec},
-                    {"inference.frames", std::to_string(kFrames)},
-                    {"inference.min_score", std::to_string(kMinScore)},
-                    // This test is the Insight receiver, so the example sends to loopback.
-                    {"output.insight.host", "127.0.0.1"},
-                    {"output.insight.video_port_base", std::to_string(video_port)},
-                    {"output.insight.metadata_port_base", std::to_string(metadata_port)}},
-                   {{"input.source", urls}});
+  ConfigScalars overrides = {
+      // Relative to the generated config, so the test runs the app's path join.
+      {"model.path", relative_model},
+      {"input.codec", source_case.codec},
+      {"inference.frames", std::to_string(kFrames)},
+      {"inference.min_score", std::to_string(kMinScore)},
+      // This test is the Insight receiver, so the example sends to loopback.
+      {"output.insight.host", "127.0.0.1"},
+      {"output.insight.video_port_base", std::to_string(video_port)},
+      {"output.insight.metadata_port_base", std::to_string(metadata_port)}};
+  std::string stream_size = "\\d+x\\d+@(\\d+)";
+  if (configured_size) {
+    sima_examples::RtspStreamInfo stream;
+    try {
+      // The packaged config receives RTSP over TCP.
+      stream = sima_examples::probe_rtsp_stream_info(urls.front(), true);
+    } catch (const std::exception& error) {
+      std::cerr << "[FAIL] " << label << " " << error.what() << "\n";
+      return 1;
+    }
+    overrides["input.width"] = std::to_string(stream.width);
+    overrides["input.height"] = std::to_string(stream.height);
+    overrides["input.fps"] = std::to_string(stream.fps);
+    stream_size = std::to_string(stream.width) + "x" + std::to_string(stream.height) + "@(" +
+                  std::to_string(stream.fps) + ")";
+  }
+  write_e2e_config(kExampleName, config_path, overrides, {{"input.source", urls}});
 
   MetadataJsonListenerOptions metadata_options;
   metadata_options.host = "127.0.0.1";
@@ -349,11 +366,11 @@ int run_case(const std::string& binary, const std::string& model_path,
   }
   for (int index = 0; index < streams; ++index) {
     const std::string stream = "stream " + std::to_string(index);
-    const std::regex start_line("(^|\n)\\[" + stream +
-                                "\\] rtsp=" + regex_escape(urls[static_cast<std::size_t>(index)]) +
-                                " stream=\\d+x\\d+@(\\d+) insight=127\\.0\\.0\\.1 video=" +
-                                std::to_string(video_port + index) +
-                                " metadata=" + std::to_string(metadata_port + index) + "\n");
+    const std::regex start_line(
+        "(^|\n)\\[" + stream + "\\] rtsp=" + regex_escape(urls[static_cast<std::size_t>(index)]) +
+        " stream=" + stream_size +
+        " insight=127\\.0\\.0\\.1 video=" + std::to_string(video_port + index) +
+        " metadata=" + std::to_string(metadata_port + index) + "\n");
     std::smatch start;
     int fps = 0;
     if (std::regex_search(result.stdout_text, start, start_line)) {
@@ -430,7 +447,8 @@ int run_case(const std::string& binary, const std::string& model_path,
         unpaired.push_back(message.timestamp_ms);
       }
     }
-    if (index == 0 && first_stream_tracks) {
+    // CI's first H.264 and H.265 URLs show objects the model tracks.
+    if (index == 0) {
       if (tracks == 0) {
         problems.push_back(stream + " sent no tracks");
       }
@@ -445,16 +463,12 @@ int run_case(const std::string& binary, const std::string& model_path,
       problems.push_back(stream + ": " + std::to_string(messages) + " of " +
                          std::to_string(kFrames) + " messages arrived");
     }
-    // A frame in a gap of the RTP sequence was lost between the sender and this test, so its
-    // message counts against the frames received, not against the app's timestamps.
+    // The report names the unpaired messages whose frame fell in a gap of the RTP sequence.
     VideoDrain& drain = *videos[static_cast<std::size_t>(index)];
     const auto gaps = sequence_gaps(drain.headers());
     const auto lost = std::count_if(unpaired.begin(), unpaired.end(), [&](std::int64_t timestamp) {
       return in_gap(timestamp, gaps);
     });
-    unpaired.erase(std::remove_if(unpaired.begin(), unpaired.end(),
-                                  [&](std::int64_t timestamp) { return in_gap(timestamp, gaps); }),
-                   unpaired.end());
     const std::string video =
         "video port " + std::to_string(video_port + index) + ": " +
         video_report(drain.headers(), timestamps_ms, fps) + ", " +
@@ -514,16 +528,17 @@ int main(int argc, char** argv) {
   }
   const MultiStreamSourceCase h264{"h264", rtsp_h264_urls_from_env()};
   const MultiStreamSourceCase h265{"h265", rtsp_h265_urls_from_env()};
-  // The bool: whether stream 0 must send tracks, as CI's first H.264 and H.265 URLs show objects
-  // the model tracks.
+  // The bool: whether the config sets input.width, input.height, and input.fps to the stream's
+  // values instead of 0, which skips the app's probe.
   const std::vector<std::tuple<MultiStreamSourceCase, int, double, bool, std::string>> cases = {
-      {h264, 2, kMinResultsPerS, true, "h264"},
-      {h265, 2, kMinResultsPerS, true, "h265"},
+      {h264, 2, kMinResultsPerS, false, "h264"},
+      {h265, 2, kMinResultsPerS, false, "h265"},
       // With one source, Core names the samples after the decoder instead of the stream.
       {h264, 1, kMinResultsPerS, false, "h264-one-stream"},
-      {h264, 4, kMinFourStreamResultsPerS, false, "h264-four-streams"}};
+      {h264, 4, kMinFourStreamResultsPerS, false, "h264-four-streams"},
+      {h264, 1, kMinResultsPerS, true, "h264-configured-size"}};
   int cases_run = 0;
-  for (const auto& [source_case, streams, min_results_per_s, first_stream_tracks, label] : cases) {
+  for (const auto& [source_case, streams, min_results_per_s, configured_size, label] : cases) {
     const int needed = streams == 4 ? 1 : streams;
     if (source_case.urls.size() < static_cast<std::size_t>(needed)) {
       record_unavailable_case("SIMANEAT_TEST_RTSP_" +
@@ -534,7 +549,7 @@ int main(int argc, char** argv) {
     }
     ++cases_run;
     if (run_case(binary, model_paths.front(), source_case, streams, min_results_per_s,
-                 first_stream_tracks, label) != 0) {
+                 configured_size, label) != 0) {
       rc = 1;
     }
   }
