@@ -23,6 +23,9 @@ else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
 from sima_examples.config import Config
+from sima_examples.detection_overlay import draw_detections
+from sima_examples.image_folder import image_paths
+from sima_examples.image_io import read_image
 from sima_examples.labels import load_labels
 from utils import annotate, images
 
@@ -84,10 +87,10 @@ def annotate_images(
 ) -> None:
     """Save each image with its boxes drawn to `output_dir`."""
     for index, path in enumerate(paths, start=1):
-        image = images.read_image(path)
+        image = read_image(path)
         boxes = detect(runner, image, max_detections)
         output_path = output_dir / annotate.output_name(path)
-        if not cv2.imwrite(str(output_path), annotate.draw_detections(image, boxes, labels)):
+        if not cv2.imwrite(str(output_path), draw_detections(image, boxes, labels)):
             raise OSError(f"cannot write {output_path}")
         print(f"[{index}/{len(paths)}] {path.name}: {len(boxes)} detections -> {output_path.name}")
 
@@ -99,14 +102,14 @@ def main(argv: list[str] | None = None) -> int:
     max_detections = config.integer("inference.max_detections")
     # DETR's class IDs index the labels directly.
     labels = load_labels(Path(config.string("model.labels")))
-    paths = images.image_paths(Path(config.string("input.source")))
+    paths = image_paths(Path(config.string("input.source")))
     max_width, max_height = images.largest_image_size(paths)
     model_path = args.config.absolute().parent / config.string("model.path")
     model = pyneat.Model(
         str(model_path), model_options(config, max_width, max_height, max_detections)
     )
     # The first image seeds the build, which plans the route for images like it.
-    runner = model.build([image_tensor(images.read_image(paths[0]))])
+    runner = model.build([image_tensor(read_image(paths[0]))])
     output_dir = Path(config.string("output.dir"))
     output_dir.mkdir(parents=True, exist_ok=True)
     try:

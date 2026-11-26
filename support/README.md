@@ -26,6 +26,8 @@ A module in both columns has the same file name, function names, and behavior in
 | --- | --- | --- | --- |
 | `config` | Reads `config.yaml` by dotted key, such as `input.rtsp.tcp`. A missing key or a value of the wrong type raises with the key's name. `choice(key, table)` returns the table entry the key's value names, and `lookup(key, value, table)` does the same for a value `main` derives; an unknown value raises with the key, the value, and the choices. Keys the example does not read are ignored | `config.py` | `config.h` |
 | `image_folder` | Lists the `.jpg`, `.jpeg`, `.png`, and `.bmp` files directly in a folder, in file-name order, for the examples that read a folder of images. A suffix matches in any case, such as `.PNG`, and subfolders are skipped. A missing folder, or one with no images, raises with the folder's path | `image_folder.py` | `image_folder.h` |
+| `image_io` | Reads an image file as a BGR image. A file OpenCV cannot read raises with the file's path | `image_io.py` | `image_io.h` |
+| `detection_overlay` | `draw_detections` returns a copy of an image with each detection box, its label, and its score drawn in a per-class color, for the examples that save annotated images | `detection_overlay.py` | `detection_overlay.h` |
 | `labels` | Reads a class-label file with one label per line | `labels.py` | `labels.h` |
 | `rtsp_probe` | Reads an RTSP stream's frame size and frame rate before the graph is built, for each value the config leaves at 0 or below | `rtsp_probe.py` | `rtsp_probe.h` |
 | `stop_signals` | Sets a stop flag on Ctrl-C, SIGTERM, or a dropped ssh session (SIGHUP), so the pull loop ends and the run closes | `stop_signals.py` | `stop_signals.h` |
