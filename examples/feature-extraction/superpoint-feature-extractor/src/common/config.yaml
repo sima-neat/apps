@@ -1,17 +1,22 @@
+# SuperPoint feature points of one H.264 RTSP stream, shown in Insight.
 model:
-  path: models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz
 
-source:
-  rtsp_url: <rtsp-url>  # e.g. rtsp://<insight-host-ip>:8554/src1
-  tcp: true
-  latency_ms: 100
+input:
+  source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # The H.264 RTSP URL.
+  width: 0                      # 0 reads the stream's frame size and rate with a probe.
+  height: 0                     # Set them only for a stream that does not report them.
+  fps: 0
+  rtsp:
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 100             # RTSP jitter buffer.
+
+inference:
+  frames: 0                     # Frames to process before stopping; 0 runs until stopped.
 
 output:
   insight:
-    host: <insight-host-ip>
-    video_port: 9000
-    channel: 0
-    bitrate_kbps: 1000
-
-runtime:
-  frames: 0
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Insight video port.
+    metadata_port_base: 9100    # Insight metadata port.

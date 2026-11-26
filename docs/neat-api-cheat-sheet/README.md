@@ -103,8 +103,7 @@ commit that `deps/manifest.json` names as `neat-core`:
 The examples in this repository show how the APIs are used. They do not show
 which options exist, because an example sets only the options it needs.
 
-Each page records the Core commit it was written against. When Core changes an
-API, update the page and its commit.
+When Core changes an API, update its page.
 
 ## Rules for a page
 

@@ -201,7 +201,7 @@ or `DropIncoming`, and the frame was not accepted.
 
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — the four-way `PullStatus` loop over many named outputs
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) — Python `pull(name, 0)` drain loop plus `pull(name, 50)`
-- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — `push(TensorList{tensor})` from a `cv::Mat`
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — pulls NV12 frames from a named `Output` and runs each one through a `Model::Runner`
 - [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — the Python `pull_result_has_sample` workaround
 - [rfdetr-detection-segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/) — `close_input()` at shutdown, both languages
 
@@ -213,4 +213,3 @@ or `DropIncoming`, and the frame was not accepted.
   (`PullStatus`, `PullError`)
 - Python binding: `python/src/module.cpp`, `nb::class_<Run>`,
   `nb::enum_<PullStatus>`, `nb::class_<PullError>`
-- Core commit: `c68a5241`

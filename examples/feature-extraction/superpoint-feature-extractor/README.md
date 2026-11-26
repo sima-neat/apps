@@ -6,7 +6,7 @@
 | --- | --- |
 | Category | feature-extraction |
 | Difficulty | Intermediate |
-| Tags | superpoint, feature-extraction, rtsp, boxdecode |
+| Tags | superpoint, feature-extraction, rtsp, insight |
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | superpoint-feature-extractor |
@@ -14,7 +14,48 @@
 
 ## Concept
 
-Finds SuperPoint feature points in an RTSP stream and sends the annotated video to Insight.
+Finds SuperPoint feature points in one H.264 RTSP stream and sends the video and the points to Insight.
+
+```text
+How does a frame move through superpoint-feature-extractor?
+
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                                ┆
+┆  ┌──────────────────────┐  H.264 as received  ┌──────────────────┐ ┆
+┆  │ RtspEncodedInput     │────────────────────►│ VideoSender      │─┼────┐
+┆  └──────────────────────┘                     └──────────────────┘ ┆    │
+┆             │ encoded frames                                       ┆    │ video
+┆             ▼                                                      ┆    │
+┆  ┌──────────────────────┐                                          ┆    │
+┆  │ SimaDecode           │                                          ┆    │
+┆  └──────────────────────┘                                          ┆    │
+┆             │ NV12 frames, latest                                  ┆    │
+┆             ▼                                                      ┆    │
+┆  ┌──────────────────────┐                                          ┆    │
+┆  │ Output "frames"      │                                          ┆    │
+┆  └──────────────────────┘                                          ┆    │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯    │
+              ▼ pull, Y plane as gray                                     │
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮                                          │
+┆ MODEL RUNNER                 ┆                                          │
+┆  ┌──────────────────────┐    ┆                                          │
+┆  │ SuperPoint Model     │    ┆                                          │
+┆  └──────────────────────┘    ┆                                          │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯                                          │
+              ▼ FEATURE_POINTS_V1 tensors                                 │
+   ┌──────────────────────┐                                               │
+   │ feature_points       │                                               │
+   └──────────────────────┘                                               │
+              │ source-frame points                                       │
+              ▼                                                           ▼
+   ┌──────────────────────┐   points as pose JSON                  ┌──────────────┐
+   │ MetadataSender       │───────────────────────────────────────►│ Insight      │
+   └──────────────────────┘                                        └──────────────┘
+```
+
+The H.264 stream goes to Insight as received. The decoder's NV12 frames go to the application. The model's preprocessing converts no YUV format to gray. So the application hands the model each frame's Y plane, which is the gray image SuperPoint reads. `feature_points` maps the keypoints from the model's 640x480 input back onto the stream's frame.
+
+Each frame's points go to Insight's pose-estimation overlay as the keypoints of one pose. Insight draws them as dots, with no skeleton or box, on the frame whose timestamp they carry. The `frames` output keeps only the newest frame. A slow loop then skips frames instead of holding back the video.
 
 ## Preview
 
@@ -22,10 +63,8 @@ Finds SuperPoint feature points in an RTSP stream and sends the annotated video 
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix
-  DevKit, or in a Neat SDK container paired with it.
-- Neat Library with SuperPoint BoxDecode support.
-- Insight serving an H.264 RTSP source and receiving the annotated output stream.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
+- An H.264 RTSP source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 - A SuperPoint model package you compiled, as Prepare the Model describes.
 
 ## Install Apps
@@ -44,25 +83,37 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-SuperPoint is licensed by Magic Leap under the [SuperPoint Software License Agreement](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE), which restricts the software to noncommercial research use and prohibits its distribution to third parties. Redistribution of a compiled SuperPoint model package is therefore prohibited, and the model browser does not offer one for download. To run this example, compile the model from its recipe in the [models repository](https://github.com/sima-neat/models/tree/main/models/superpoint) on a machine with the Model Compiler, such as the Neat SDK. Review the license terms to confirm that they permit your intended use.
+Magic Leap licenses SuperPoint under the [SuperPoint Software License Agreement](https://github.com/magicleap/SuperPointPretrainedNetwork/blob/master/LICENSE). It restricts the software to noncommercial research use and prohibits its distribution to third parties. Redistribution of a compiled SuperPoint model package is therefore prohibited, and the model browser does not offer one for download. To run this example, compile the model from its recipe in the [models repository](https://github.com/sima-neat/models/tree/main/models/superpoint). Use a machine with the Model Compiler, such as the Neat SDK. Review the license terms to confirm that they permit your intended use.
 
-Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/getting-started.md) in the models repository with model ID `superpoint` and build profile `w8a8`. That guide converts the checkpoint to ONNX and compiles it into a model package. Two inputs differ from its YOLO26n walkthrough:
+Follow [Getting started](https://github.com/sima-neat/models/blob/main/docs/getting-started.md) in the models repository with model ID `superpoint` and build profile `w8a8`. That guide converts the checkpoint to ONNX and compiles it into a model package. Two things differ from its YOLO26n walkthrough:
 
 - The `w8a8` build calibrates on HPatches images (`hpatches-cal` in [`model.yaml`](https://github.com/sima-neat/models/blob/main/models/superpoint/model.yaml)). The `w8a16` and `w16a16` build profiles need no calibration images.
 - The compile writes `build/superpoint/w8a8/model/superpoint_w8a8_mpk.tar.gz`.
 
-Copy that file to the DevKit, into `models/superpoint/w8a8/` under `prebuilt-apps/`. The packaged config already points `model.path` at `models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz`. For another build profile, set `model.path` to its package.
+If you compiled the model on another machine, copy it to the DevKit first, for example with `scp superpoint_w8a8_mpk.tar.gz <user>@<devkit-ip>:<path>/`.
+
+Then copy the file into `models/superpoint/w8a8/` under `prebuilt-apps/`. In the commands below, `<path>` is the folder on the DevKit that holds `superpoint_w8a8_mpk.tar.gz`. From `prebuilt-apps/`:
+
+```bash
+mkdir -p models/superpoint/w8a8
+cp <path>/superpoint_w8a8_mpk.tar.gz models/superpoint/w8a8/
+```
+
+The packaged `model.path` already points to it. A relative `model.path` starts at the config file. From `${APP_DIR}/src/common/`, `../../../../../models/` is `prebuilt-apps/models/`. For another build profile, set `model.path` to its package, or to the absolute path of the `.tar.gz` file.
+
+## Prepare Insight
+
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and show the video with the feature points. Install a video from the Insight catalog or through Insight's YouTube support, start it as an RTSP stream, and copy its URL into `input.source`. Use a host and published port that the target can reach, not `localhost`.
 
 ## Configure
 
-Upload `assets/datasets/tum-rgbd/freiburg1-desk.mp4` to Insight and start it under Media Sources. The clip loops at its native 30 FPS.
+Open `${APP_DIR}/src/common/config.yaml` and set:
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `source.rtsp_url` (for example, `rtsp://<insight-host-ip>:8554/src1`) and `output.insight.host`. `model.path` already points at the package you compiled; change it only if you saved it elsewhere or built another build profile.
+- `input.source`: the H.264 RTSP URL.
+- `input.width`, `input.height`, and `input.fps`: leave each at 0 to read it from the stream. Set a value only for a stream that does not report it.
+- `output.insight.host`, and the Insight ports `output.insight.video_port_base` and `output.insight.metadata_port_base`.
 
-Set `runtime.frames` to `0` to run until Ctrl-C. The RTSP source must keep the same resolution for the whole run.
-
-The TUM RGB-D clip's attribution and CC BY 4.0 license are in
-`assets/datasets/tum-rgbd/LICENSE.md`.
+Keep `inference.frames` at `0` to run until you stop the application.
 
 ## Run
 
@@ -82,42 +133,37 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Both implementations stream the overlay to Insight and print the number of processed frames,
-average feature count, descriptor dimension, and selected video endpoint.
-
 ## Expected Result
 
-This application writes nothing to disk; its output is the Insight stream plus a
-single summary line printed when the run ends:
+The application prints the source, the stream's size and frame rate, and the Insight host and ports on startup. When it stops, it prints the frames it processed, the average feature points per frame, the descriptor length, and the video endpoint:
 
 ```text
-frames=200 average_points=331.6 descriptor_dim=256 video_sender=<insight-host>:9000
+source=rtsp://<rtsp-source-ip>:<port>/<stream-name> stream=1280x720@30 insight=<insight-host-ip> video=9000 metadata=9100
+frames=200 average_points=600.0 descriptor_dim=256 video_sender=<insight-host-ip>:9000
 ```
 
-`frames` should match `runtime.frames`, or the number processed before Ctrl-C when it is `0`.
-`descriptor_dim` should be `256`. For the packaged TUM RGB-D sequence
-`average_points` runs in the low hundreds. An `average_points` near zero means
-the pipeline ran but the model returned almost no features, which is worth
-investigating even though the run exits successfully.
+The packaged config ships `inference.frames: 0`, which runs until Ctrl-C. The summary then prints when you stop it. For a run that ends by itself, set `inference.frames: 200`. `average_points` is at most 600, the decoder's limit per frame, and a textured scene reaches it. An `average_points` near zero means the model found almost no features. Investigate it, even though the run exits successfully. A line `<N> metadata messages dropped` follows the summary when the metadata sender's socket buffer was full and dropped some frames' points.
+
+Insight shows the video with a dot on every feature point.
 
 ## Troubleshooting
 
 - Confirm `model.path` points to the compiled `superpoint_w8a8_mpk.tar.gz`.
-- A missing or incompatible typed SuperPoint contract fails during model construction.
-- Confirm the H.264 RTSP source is running and keeps a stable resolution.
-- Confirm Insight is reachable at the configured host and UDP video port.
-- Set `runtime.frames: 30` for a short smoke run.
+- A missing or incompatible SuperPoint contract fails during model construction.
+- Verify the Insight host and UDP ports if the video or the points are absent.
+- `frame size <W>x<H> differs from the stream's <W>x<H>` appears when the stream changes resolution during the run. The stream must keep one size. Restart the application after a change.
+- `failed to probe RTSP frame size: <url>` or `failed to probe RTSP frame rate: <url>` appears when a value left at 0 cannot be read. Verify the URL from the board itself, since the source may be unreachable from it.
+- A reachable source that does not report its size or rate needs that value set. Set `input.width`, `input.height`, or `input.fps`, as the message names.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`
-- Python source: `src/python/main.py`
+- C++ reference source: `src/cpp/main.cpp` and `src/cpp/utils/feature_points.h`
+- Python source: `src/python/main.py` and `src/python/utils/feature_points.py`
 - Shared config: `src/common/config.yaml`
+- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself. Their C++ reference source is in `support/cpp/sima_examples/`.
 
-The packaged C++ source is an implementation reference. Run the executable under
-`src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`. The installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

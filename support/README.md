@@ -26,7 +26,7 @@ A module in both columns has the same file name, function names, and behavior in
 | --- | --- | --- | --- |
 | `config` | Reads `config.yaml` by dotted key, such as `input.rtsp.tcp`. A missing key or a value of the wrong type raises with the key's name. `choice(key, table)` returns the table entry the key's value names, and `lookup(key, value, table)` does the same for a value `main` derives; an unknown value raises with the key, the value, and the choices. Keys the example does not read are ignored | `config.py` | `config.h` |
 | `labels` | Reads a class-label file with one label per line | `labels.py` | `labels.h` |
-| `rtsp_probe` | Reads an RTSP stream's frame size and frame rate before the graph is built, for each value the config leaves at 0 or below | `rtsp_probe.py` | `rtsp_probe.h` |
+| `rtsp_probe` | Reads an RTSP stream's frame size and frame rate before the graph is built, for each value the config leaves at 0 or below. `probe_rtsp_streams` reads every stream that shares one model and fails unless all have the same frame size | `rtsp_probe.py` | `rtsp_probe.h` |
 | `stop_signals` | Sets a stop flag on Ctrl-C, SIGTERM, or a dropped ssh session (SIGHUP), so the pull loop ends and the run closes | `stop_signals.py` | `stop_signals.h` |
 | `detection_egress` | Builds the object-detection metadata message that Insight draws over the video, and `frame_metadata` copies a pulled sample's frame identity into it | `detection_egress.py` | `detection_egress.h` |
 | `pull_status` | Reads the status of one `Run::pull`: a sample arrived, or the pull timed out and the loop tries again. A closed output or a pull error throws with the reason | | `pull_status.h` |

@@ -7,9 +7,7 @@ description: Write or update a sima-neat/apps pull request description. Use when
 
 Write it executive-first: a reviewer who reads only the Summary and Risk sections knows what
 was done and what could break. Everything below them is evidence for those two sections. Write
-it plain and brief: short sentences, the project's own names, one fact per line, no adjectives
-that do not carry information. Detail a reviewer does not need to judge the change, such as
-history per commit, line counts, or before and after numbers, stays in the commit messages.
+it as [Writing](#writing) says, so the reviewer finds each point without reading the rest.
 
 ## Steps
 
@@ -102,3 +100,19 @@ Refs #<issue>, #<issue>
   does not count.
 - Omit AI attribution, internal hostnames, private links, board addresses, and customer
   information. The repository is public.
+
+## Writing
+
+- **Keep only what the reviewer needs to judge the change:** what changed, what it gives the
+  customer or the example, and what can break. History per commit, flakes on earlier commits,
+  investigations of other issues, Core file and line numbers, and line counts stay in commit
+  messages or issue comments.
+- **State each fact once.** A fact in the Summary does not come back in What Changed or
+  Validation.
+- **Use precise, plain words.** Use the project's name for each thing and keep it the same in
+  every section. Explain a term the first time when a reviewer outside the work may not know
+  it.
+- **Write short sentences with one fact each,** in active voice. Do not shorten a sentence so
+  far that the reader has to guess what it means.
+- **Before publishing, read it as the reviewer.** Delete each line whose removal would not
+  change the review.
