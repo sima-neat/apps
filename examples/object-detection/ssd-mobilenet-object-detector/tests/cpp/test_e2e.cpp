@@ -1,12 +1,16 @@
 // E2E test: run the binary and validate annotated images plus decoded detections.
-#include "sima_examples/testing/test_process.h"
+#include "sima_examples/config.h"
+#include "sima_examples/image_folder.h"
+#include "sima_examples/labels.h"
 #include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -28,6 +32,45 @@ nlohmann::json load_json(const fs::path& path, std::string& err) {
   }
 }
 
+// The shipped app.detections_json is empty: the run still saves one PNG per image and writes no
+// JSON file.
+bool test_shipped_config_writes_no_report(const std::string& binary, const std::string& model_path,
+                                          const std::string& input_dir, int timeout) {
+  const std::string out_dir =
+      create_test_output_dir("ssd-mobilenet-object-detector", "test_shipped_config_writes_no_report");
+  if (out_dir.empty()) {
+    return false;
+  }
+  const fs::path run_dir = fs::path(out_dir).parent_path();
+  const fs::path config_path = run_dir / "config.yaml";
+  write_e2e_config("ssd-mobilenet-object-detector", config_path,
+                   {{"model.path", model_path},
+                    {"input.source", input_dir},
+                    {"output.dir", out_dir}});
+  const auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
+  std::string problem;
+  if (r.exit_code != 0) {
+    problem = "exit code " + std::to_string(r.exit_code) + "\nstderr:\n" + r.stderr_text;
+  } else {
+    problem = saved_frames_problem(out_dir, supported_image_count(input_dir));
+  }
+  for (const auto& entry : fs::recursive_directory_iterator(run_dir)) {
+    if (problem.empty() && entry.path().extension() == ".json") {
+      problem = "the shipped config wrote " + entry.path().string();
+    }
+  }
+  if (problem.empty() && r.stdout_text.find("detections in") != std::string::npos) {
+    problem = "the shipped config still names a report:\n" + r.stdout_text;
+  }
+  remove_dir(out_dir);
+  if (!problem.empty()) {
+    std::cerr << "[FAIL] " << problem << "\n";
+    return false;
+  }
+  std::cout << "[OK] the shipped config wrote no report\n";
+  return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -38,7 +81,8 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
+  // The application reads a relative model.path from the config file's folder.
+  const std::string models_dir = fs::absolute(models_dir_raw ? models_dir_raw : "models").string();
 
   const std::string model_path = configured_model_path("ssd-mobilenet-object-detector", models_dir);
 
@@ -67,9 +111,9 @@ int main(int argc, char** argv) {
   const fs::path detections_path = run_dir / "detections.json";
   write_e2e_config("ssd-mobilenet-object-detector", config_path,
                    {{"model.path", model_path},
-                    {"io.input_dir", input_dir},
-                    {"io.output_dir", out_dir},
-                    {"io.detections_json", detections_path.string()}});
+                    {"input.source", input_dir},
+                    {"output.dir", out_dir},
+                    {"app.detections_json", detections_path.string()}});
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
   auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
@@ -82,7 +126,8 @@ int main(int argc, char** argv) {
   }
 
   const int output_files = count_output_files(out_dir);
-  const std::string output_problem = saved_frames_problem(out_dir, supported_image_count(input_dir));
+  const std::string output_problem =
+      saved_frames_problem(out_dir, supported_image_count(input_dir));
   if (!output_problem.empty()) {
     std::cerr << "[FAIL] " << output_problem << "\n";
     remove_dir(out_dir);
@@ -97,16 +142,26 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  const auto config = sima_examples::Config::load(config_path);
+  const auto labels = sima_examples::load_labels(config.string("model.labels"));
+  const double min_score = config.number("inference.min_score");
   int detection_count = 0;
   try {
-    const auto& images = reported.at("images");
-    if (!images.is_array() || static_cast<int>(images.size()) != output_files) {
-      throw std::runtime_error("report image count does not match annotated output count");
+    std::set<std::string> expected_images;
+    for (const auto& path : sima_examples::image_paths(input_dir)) {
+      expected_images.insert(path.filename().string());
     }
-    for (const auto& image : images) {
+    std::set<std::string> reported_images;
+    for (const auto& image : reported.at("images")) {
+      reported_images.insert(image.at("image").get<std::string>());
+    }
+    if (reported_images != expected_images) {
+      throw std::runtime_error("the report does not name exactly the input images");
+    }
+    for (const auto& image : reported.at("images")) {
       const int width = image.at("width").get<int>();
       const int height = image.at("height").get<int>();
-      if (width <= 0 || height <= 0 || image.at("image").get<std::string>().empty()) {
+      if (width <= 0 || height <= 0) {
         throw std::runtime_error("invalid image record");
       }
       for (const auto& detection : image.at("detections")) {
@@ -117,9 +172,11 @@ int main(int argc, char** argv) {
         const double y2 = box.at(3).get<double>();
         const double score = detection.at("score").get<double>();
         const int class_id = detection.at("class_id").get<int>();
+        // Class 0 is the background, which the SSD decoder never reports (labelled N/A).
         if (!(0.0 <= x1 && x1 < x2 && x2 <= width && 0.0 <= y1 && y1 < y2 && y2 <= height &&
-              0.0 <= score && score <= 1.0 && class_id > 0 && class_id < 91 &&
-              !detection.at("label").get<std::string>().empty())) {
+              min_score <= score && score <= 1.0 && class_id > 0 &&
+              class_id < static_cast<int>(labels.size()) &&
+              detection.at("label").get<std::string>() == labels[static_cast<size_t>(class_id)])) {
           throw std::runtime_error("invalid detection record");
         }
         ++detection_count;
@@ -140,5 +197,8 @@ int main(int argc, char** argv) {
   remove_dir(out_dir);
   std::cout << "[OK] ssd-mobilenet-object-detector produced " << output_files
             << " output files and " << detection_count << " valid detections\n";
-  return 0;
+
+  const bool report_off_ok =
+      test_shipped_config_writes_no_report(binary, model_path, input_dir, timeout);
+  return report_off_ok ? 0 : 1;
 }

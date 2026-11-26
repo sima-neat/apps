@@ -32,7 +32,7 @@ How does an image move through detr-object-detector?
 ╰┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
         ▼ BBOX tensor, decode_bbox_tensor
    ┌────────────────────────────────────────────┐
-   │ annotate.draw_detections (utils/)          │
+   │ draw_detections (support/image_folder)     │
    └────────────────────────────────────────────┘
         │ boxes drawn
         ▼
@@ -136,15 +136,15 @@ is too high for the content.
 
 ## Troubleshooting
 
-- `input.source has no .jpg, .jpeg, .png, or .bmp files`: point `input.source` at a folder that holds images directly, not in subfolders.
+- `no .jpg, .jpeg, .png, or .bmp files in <folder>`: point `input.source` at a folder that holds images directly, not in subfolders.
 - If the model fails to load, check that `model.path` points to the extracted `_mpk.tar.gz` file, not the ZIP; a relative path starts at the config file.
 - Lower `inference.min_score` if expected objects are missing.
 - Use a package from the table above. Neat's DETR decoder expects a class-logit output with a final no-object channel and a four-channel box-logit output, on a stretched input.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`, with `src/cpp/utils/images.h` for the image folder and `src/cpp/utils/annotate.h` for the annotated images
-- Python source: `src/python/main.py`, with `src/python/utils/images.py` and `src/python/utils/annotate.py`
+- C++ reference source: `src/cpp/main.cpp`, with `src/cpp/utils/images.h` for the largest image size
+- Python source: `src/python/main.py`, with `src/python/utils/images.py` for the largest image size
 - Shared config: `src/common/config.yaml`
 - Class labels: `support/labels/coco91.txt` in `prebuilt-apps/`, shared with the other examples that score the same classes
 - Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself, and their C++ reference source in `support/cpp/sima_examples/`

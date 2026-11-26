@@ -1,30 +1,34 @@
-/**
- * @example ssd-mobilenet-object-detector.cpp
- * SSD folder detection via the model-managed BoxDecodeType::Ssd pipeline. Runs TensorFlow
- * SSD-MobileNet v1/v2 (300x300) and TorchVision SSDlite-MobileNetV3 (320x320) with an explicit
- * preprocessing profile.
- *
- * Usage: ssd-mobilenet-object-detector [--config <path>]
- */
+// Copyright 2026 SiMa Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Detects objects in a folder of images with SSD-MobileNet, saved as annotated PNGs and JSON.
+// The model runs on one image at a time. Each image is saved with its boxes drawn, and every box
+// goes into one JSON report, unless app.detections_json is empty.
+
 #include "neat.h"
 #include "sima_examples/config.h"
-#include "sima_examples/example_utils.h"
+#include "sima_examples/image_folder.h"
+#include "sima_examples/labels.h"
+#include "utils/annotate.h"
 
 #include <nlohmann/json.hpp>
-
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cctype>
-#include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -32,349 +36,114 @@ namespace neat = simaai::neat;
 
 namespace {
 
-constexpr int kNumClasses = 91; // index 0 = background, 1..90 = COCO ids.
-constexpr const char* kDefaultLabelsPath =
-    "examples/object-detection/ssd-mobilenet-object-detector/src/common/"
-    "coco_labels.txt";
-
-struct Config {
-  std::string model;
-  fs::path labels;
-  fs::path input_dir;
-  fs::path output_dir;
-  fs::path detections_json;
-  std::string preprocessing_profile = "tensorflow_ssd";
-  float score_threshold = 0.55f;
-  float nms_iou = 0.60f;
-  int max_detections = 100;
-};
-
-bool is_image_file(const fs::path& path) {
-  std::string ext = path.extension().string();
-  std::transform(ext.begin(), ext.end(), ext.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
-}
-
-std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
-  std::vector<fs::path> images;
-  for (const auto& entry : fs::directory_iterator(input_dir)) {
-    if (entry.is_regular_file() && is_image_file(entry.path())) {
-      images.push_back(entry.path());
-    }
-  }
-  std::sort(images.begin(), images.end());
-  return images;
-}
-
-// Directory holding the running executable, or empty if it cannot be determined.
-fs::path executable_dir() {
-  std::error_code ec;
-  const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-  if (ec || exe.empty()) {
-    return {};
-  }
-  return exe.parent_path();
-}
-
-// Resolve a labels asset from the configured path or the packaged src/common copy.
-fs::path resolve_asset(const std::string& configured, const char* default_path,
-                       const char* default_name) {
-  if (!configured.empty() && fs::exists(configured)) {
-    return configured;
-  }
-  // Substitute the packaged copy only for the empty/default reference; a missing custom
-  // path is returned as-is so the caller fails instead of loading different labels.
-  if (!configured.empty() &&
-      fs::path(configured).lexically_normal() != fs::path(default_path).lexically_normal()) {
-    return configured;
-  }
-  std::vector<fs::path> candidates;
-  const fs::path exe_dir = executable_dir();
-  if (!exe_dir.empty()) {
-    candidates.push_back(exe_dir / ".." / ".." / "common" / default_name); // packaged pre-built/
-    candidates.push_back(exe_dir / ".." / "common" / default_name);        // same-dir binary
-  }
-  for (const fs::path& candidate : candidates) {
-    if (fs::exists(candidate)) {
-      return candidate;
-    }
-  }
-  return configured;
-}
-
-Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::Config::load(path);
-  Config cfg;
-  cfg.model = raw.string_or("model.path", "");
-  cfg.preprocessing_profile = raw.string_or("model.preprocessing_profile", "tensorflow_ssd");
-  cfg.labels =
-      resolve_asset(raw.string_or("model.labels", ""), kDefaultLabelsPath, "coco_labels.txt");
-  cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
-  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/ssd-mobilenet-object-detector");
-  cfg.detections_json = raw.string_or("io.detections_json", "");
-  cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.55));
-  cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", 0.60));
-  cfg.max_detections = raw.int_or("decode.max_detections", 100);
-  if (sima_examples::trim_copy(cfg.model).empty()) {
-    throw std::runtime_error("model.path must be a nonempty path");
-  }
-  if (!std::isfinite(cfg.score_threshold) || cfg.score_threshold < 0.0f ||
-      cfg.score_threshold > 1.0f) {
-    throw std::runtime_error("decode.score_threshold must be in [0.0, 1.0]");
-  }
-  if (!std::isfinite(cfg.nms_iou) || cfg.nms_iou < 0.0f || cfg.nms_iou > 1.0f) {
-    throw std::runtime_error("decode.nms_iou must be in [0.0, 1.0]");
-  }
-  if (cfg.max_detections < 1) {
-    throw std::runtime_error("decode.max_detections must be >= 1");
-  }
-  if (cfg.preprocessing_profile != "tensorflow_ssd" &&
-      cfg.preprocessing_profile != "torchvision_ssdlite") {
-    throw std::runtime_error(
-        "model.preprocessing_profile must be tensorflow_ssd or torchvision_ssdlite");
-  }
-  return cfg;
-}
-
-Config parse_config(int argc, char** argv) {
-  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+fs::path parse_args(int argc, char** argv) {
+  const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
+  fs::path config_path = fs::exists(adjacent_config)
+                             ? adjacent_config
+                             : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--config") {
-      if (i + 1 >= argc) {
-        throw std::runtime_error("--config requires a path");
-      }
+    if (arg == "--config" && i + 1 < argc) {
       config_path = argv[++i];
-    } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
-      std::exit(0);
     } else {
-      throw std::runtime_error("unknown argument: " + arg);
+      throw std::runtime_error("usage: " + std::string(argv[0]) + " [--config <path>]");
     }
   }
-  return load_config(config_path);
+  return config_path;
 }
 
-std::vector<std::string> load_labels(const fs::path& path) {
-  if (!fs::is_regular_file(path)) {
-    throw std::runtime_error("labels file does not exist: " + path.string());
-  }
-  std::ifstream in(path);
-  if (!in) {
-    throw std::runtime_error("failed to open labels file: " + path.string());
-  }
-  std::vector<std::string> labels;
-  std::string line;
-  while (std::getline(in, line)) {
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
-    labels.push_back(line);
-  }
-  if (labels.empty()) {
-    throw std::runtime_error("labels file is empty: " + path.string());
-  }
-  return labels;
+// OpenCV BGR images in, boxes out of Core's SSD decoder.
+neat::Model::Options model_options(const sima_examples::Config& config, int num_classes,
+                                   int max_detections) {
+  neat::Model::Options options;
+  options.preprocess.kind = neat::InputKind::Image;
+  options.preprocess.enable = neat::AutoFlag::On;
+  // The SSD decoder needs a Stretch resize; Core's default is Letterbox.
+  options.preprocess.resize.enable = neat::AutoFlag::On;
+  options.preprocess.resize.mode = neat::ResizeMode::Stretch;
+  // TensorFlow's SSD-MobileNet V1 and V2 were trained on pixels scaled to -1 to 1: mean 0.5 and
+  // stddev 0.5 per channel, on pixels scaled to 0-1.
+  options.preprocess.normalize.mean = {0.5f, 0.5f, 0.5f};
+  options.preprocess.normalize.stddev = {0.5f, 0.5f, 0.5f};
+  options.preprocess.normalize.has_explicit_stats = true;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
+  options.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;
+  options.decode_type = neat::BoxDecodeType::Ssd;
+  options.num_classes = num_classes;
+  options.score_threshold = static_cast<float>(config.number("inference.min_score"));
+  options.nms_iou_threshold = static_cast<float>(config.number("inference.nms_iou"));
+  options.top_k = max_detections;
+  return options;
 }
 
-std::string class_name(const std::vector<std::string>& labels, int class_id) {
-  if (class_id >= 0 && static_cast<size_t>(class_id) < labels.size()) {
-    const std::string& name = labels[static_cast<size_t>(class_id)];
-    if (!name.empty() && name != "N/A") {
-      return name;
-    }
-  }
-  return "class_" + std::to_string(class_id);
-}
-
-cv::Scalar class_color(int class_id) {
-  static const std::array<cv::Scalar, 8> kColors = {
-      cv::Scalar(0, 255, 0),   cv::Scalar(255, 0, 0),   cv::Scalar(0, 0, 255),
-      cv::Scalar(255, 255, 0), cv::Scalar(255, 0, 255), cv::Scalar(0, 255, 255),
-      cv::Scalar(128, 255, 0), cv::Scalar(255, 128, 0),
-  };
-  const size_t idx = static_cast<size_t>(class_id >= 0 ? class_id : -class_id) % kColors.size();
-  return kColors[idx];
-}
-
-std::vector<neat::Box> parse_detections(const neat::TensorList& outputs, int image_width,
-                                        int image_height, int max_detections) {
-  if (outputs.empty()) {
-    throw std::runtime_error("model returned no detection tensors");
-  }
-  if (outputs.size() != 1) {
-    throw std::runtime_error("expected one BBOX tensor from model-managed BoxDecode, got " +
-                             std::to_string(outputs.size()));
-  }
-  return neat::decode_bbox_tensor(outputs.front(), image_width, image_height, max_detections,
+// The boxes the model finds in one image, in the image's pixels.
+std::vector<neat::Box> detect(neat::Model::Runner& runner, const cv::Mat& image,
+                              int max_detections) {
+  const neat::TensorList outputs = runner.run(std::vector<cv::Mat>{image});
+  return neat::decode_bbox_tensor(outputs.front(), image.cols, image.rows, max_detections,
                                   /*strict=*/false)
       .boxes;
 }
 
-std::string output_stem(const fs::path& image_path) {
-  std::string extension = image_path.extension().string();
-  if (!extension.empty() && extension.front() == '.') {
-    extension.erase(extension.begin());
-  }
-  const std::string stem = image_path.stem().string();
-  return extension.empty() ? stem : stem + "_" + extension;
-}
-
-void draw_detections(cv::Mat& bgr, const std::vector<neat::Box>& boxes,
-                     const std::vector<std::string>& labels) {
-  for (const neat::Box& b : boxes) {
-    const int x1 = std::max(0, std::min(bgr.cols - 1, static_cast<int>(std::lround(b.x1))));
-    const int y1 = std::max(0, std::min(bgr.rows - 1, static_cast<int>(std::lround(b.y1))));
-    const int x2 = std::max(0, std::min(bgr.cols - 1, static_cast<int>(std::lround(b.x2))));
-    const int y2 = std::max(0, std::min(bgr.rows - 1, static_cast<int>(std::lround(b.y2))));
-    if (x2 <= x1 || y2 <= y1) {
-      continue;
+// Save each image with its boxes drawn to output_dir; return each image's record.
+nlohmann::json annotate_images(neat::Model::Runner& runner, const std::vector<fs::path>& paths,
+                               const std::vector<std::string>& labels, int max_detections,
+                               const fs::path& output_dir) {
+  nlohmann::json records = nlohmann::json::array();
+  for (size_t index = 0; index < paths.size(); ++index) {
+    const fs::path& path = paths[index];
+    const cv::Mat image = sima_examples::read_image(path);
+    const std::vector<neat::Box> boxes = detect(runner, image, max_detections);
+    const fs::path output_path = output_dir / annotate::output_name(path);
+    if (!cv::imwrite(output_path.string(), sima_examples::draw_detections(image, boxes, labels))) {
+      throw std::runtime_error("cannot write " + output_path.string());
     }
-    const cv::Scalar color = class_color(b.class_id);
-    const std::string text = class_name(labels, b.class_id) + " " + cv::format("%.2f", b.score);
-    cv::rectangle(bgr, cv::Point(x1, y1), cv::Point(x2, y2), color, 2);
-    cv::putText(bgr, text, cv::Point(x1, std::max(0, y1 - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.5, color,
-                2, cv::LINE_AA);
+    records.push_back(annotate::detections_record(path, image, boxes, labels));
+    std::cout << "[" << index + 1 << "/" << paths.size() << "] " << path.filename().string()
+              << " -> " << output_path.filename().string() << " (" << boxes.size()
+              << " detections)\n";
   }
+  return records;
 }
 
-// Machine-readable detection record, written when io.detections_json is set.
-nlohmann::json detections_record(const fs::path& image_path, const cv::Mat& bgr,
-                                 const std::vector<neat::Box>& boxes,
-                                 const std::vector<std::string>& labels) {
-  nlohmann::json entry;
-  entry["image"] = image_path.filename().string();
-  entry["width"] = bgr.cols;
-  entry["height"] = bgr.rows;
-  entry["detections"] = nlohmann::json::array();
-  for (const neat::Box& b : boxes) {
-    entry["detections"].push_back({{"class_id", b.class_id},
-                                   {"label", class_name(labels, b.class_id)},
-                                   {"score", b.score},
-                                   {"box", {b.x1, b.y1, b.x2, b.y2}}});
-  }
-  return entry;
-}
+int run_app(const fs::path& config_path) {
+  const auto config = sima_examples::Config::load(config_path);
+  // Used by both the model and the box decode.
+  const int max_detections = config.integer("inference.max_detections");
+  // One label per class ID the model scores, so they also give the class count.
+  const auto labels = sima_examples::load_labels(config.string("model.labels"));
+  const auto paths = sima_examples::image_paths(config.string("input.source"));
+  const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
+  neat::Model model(model_path.string(),
+                    model_options(config, static_cast<int>(labels.size()), max_detections));
+  // The first image seeds the build, which plans the route for images like it.
+  neat::Model::Runner runner =
+      model.build(std::vector<cv::Mat>{sima_examples::read_image(paths.front())});
+  const fs::path output_dir = config.string("output.dir");
+  fs::create_directories(output_dir);
+  // When annotate_images throws, the Run the Runner holds closes as it is destroyed.
+  const nlohmann::json records = annotate_images(runner, paths, labels, max_detections, output_dir);
+  runner.close();
 
-void write_detections_json(const fs::path& path, const nlohmann::json& images) {
-  if (path.has_parent_path()) {
-    fs::create_directories(path.parent_path());
+  // An empty app.detections_json turns the report off.
+  const std::string report_path = config.string("app.detections_json");
+  if (!report_path.empty()) {
+    annotate::write_report(report_path, records);
+    std::cout << "Done: " << records.size() << " images processed, detections in " << report_path
+              << std::endl;
+  } else {
+    std::cout << "Done: " << records.size() << " images processed" << std::endl;
   }
-  std::ofstream out(path);
-  if (!out) {
-    throw std::runtime_error("failed to write detections json: " + path.string());
-  }
-  out << nlohmann::json{{"images", images}}.dump(2) << "\n";
-  // Catch a failed write/flush (e.g. full disk) before reporting success on a truncated file.
-  out.flush();
-  if (!out) {
-    throw std::runtime_error("failed to write detections json: " + path.string());
-  }
+  return 0;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-  std::cout.setf(std::ios::unitbuf);
-  std::cerr.setf(std::ios::unitbuf);
-
   try {
-    const Config cfg = parse_config(argc, argv);
-    if (!fs::is_directory(cfg.input_dir)) {
-      throw std::runtime_error("input_dir does not exist: " + cfg.input_dir.string());
-    }
-    if (fs::weakly_canonical(cfg.output_dir) == fs::weakly_canonical(cfg.input_dir)) {
-      throw std::runtime_error("io.output_dir must differ from io.input_dir");
-    }
-    if (!fs::exists(cfg.model)) {
-      throw std::runtime_error("model does not exist: " + cfg.model);
-    }
-
-    const std::vector<std::string> labels = load_labels(cfg.labels);
-
-    const std::vector<fs::path> image_paths = image_paths_in_dir(cfg.input_dir);
-    if (image_paths.empty()) {
-      throw std::runtime_error("no images found in: " + cfg.input_dir.string());
-    }
-    cv::Mat seed_bgr = cv::imread(image_paths.front().string(), cv::IMREAD_COLOR);
-    if (seed_bgr.empty()) {
-      throw std::runtime_error("failed to read build seed image: " + image_paths.front().string());
-    }
-
-    // Core resolves the preprocess frame from the MPK and validates it against the SSD recipe.
-    neat::Model::Options options;
-    options.preprocess.kind = neat::InputKind::Image;
-    options.preprocess.enable = neat::AutoFlag::On;
-    options.preprocess.resize.enable = neat::AutoFlag::On;
-    options.preprocess.resize.mode = neat::ResizeMode::Stretch;
-    options.preprocess.normalize.enable = neat::AutoFlag::On;
-    if (cfg.preprocessing_profile == "torchvision_ssdlite") {
-      options.preprocess.normalize.mean = {0.485f, 0.456f, 0.406f};
-      options.preprocess.normalize.stddev = {0.229f, 0.224f, 0.225f};
-    } else {
-      options.preprocess.normalize.mean = {0.5f, 0.5f, 0.5f};
-      options.preprocess.normalize.stddev = {0.5f, 0.5f, 0.5f};
-    }
-    options.preprocess.normalize.has_explicit_stats = true;
-    options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
-    options.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;
-    options.decode_type = neat::BoxDecodeType::Ssd;
-    options.num_classes = kNumClasses;
-    options.score_threshold = cfg.score_threshold;
-    options.nms_iou_threshold = cfg.nms_iou;
-    options.top_k = cfg.max_detections;
-    neat::Model model(cfg.model, options);
-    neat::Model::Runner run = [&] {
-      try {
-        return model.build(std::vector<cv::Mat>{seed_bgr}, neat::Model::RouteOptions{});
-      } catch (const std::exception& e) {
-        throw std::runtime_error(std::string(e.what()) +
-                                 "\n  hint: verify model.path points to a supported SSD model "
-                                 "pack whose MLA input contract contains its model frame.");
-      }
-    }();
-    run.run(std::vector<cv::Mat>{seed_bgr});
-
-    fs::create_directories(cfg.output_dir);
-
-    nlohmann::json records = nlohmann::json::array();
-    int processed = 0;
-    for (const fs::path& image_path : image_paths) {
-      cv::Mat bgr_u8 = cv::imread(image_path.string(), cv::IMREAD_COLOR);
-      if (bgr_u8.empty()) {
-        throw std::runtime_error("failed to read image: " + image_path.string());
-      }
-
-      neat::TensorList out = run.run(std::vector<cv::Mat>{bgr_u8});
-      const std::vector<neat::Box> boxes =
-          parse_detections(out, bgr_u8.cols, bgr_u8.rows, cfg.max_detections);
-
-      cv::Mat annotated = bgr_u8.clone();
-      draw_detections(annotated, boxes, labels);
-      const fs::path output_path = cfg.output_dir / (output_stem(image_path) + ".png");
-      if (!cv::imwrite(output_path.string(), annotated)) {
-        throw std::runtime_error("failed to write: " + output_path.string());
-      }
-
-      if (!cfg.detections_json.empty()) {
-        records.push_back(detections_record(image_path, bgr_u8, boxes, labels));
-      }
-      ++processed;
-      std::cout << "[" << processed << "/" << image_paths.size() << "] "
-                << image_path.filename().string() << " -> " << output_path.filename().string()
-                << " (" << boxes.size() << " detections)\n";
-    }
-    if (!cfg.detections_json.empty()) {
-      write_detections_json(cfg.detections_json, records);
-      std::cout << "Wrote detections: " << cfg.detections_json.string() << "\n";
-    }
-    std::cout << "Done: " << processed << " images processed\n";
-
-    run.close();
-    return 0;
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n";
-    return 2;
+    return run_app(parse_args(argc, argv));
+  } catch (const std::exception& error) {
+    std::cerr << "[ERR] " << error.what() << "\n";
+    return 1;
   }
 }
