@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include "sima_examples/image_folder.h"
+
 #include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
 
@@ -21,7 +23,7 @@ namespace annotate {
 // The annotated PNG's file name. It keeps the source extension, so frame.jpg and frame.png do
 // not write the same file.
 inline std::string output_name(const std::filesystem::path& image_path) {
-  return image_path.stem().string() + "_" + image_path.extension().string().substr(1) + ".png";
+  return sima_examples::output_name(image_path, "_" + image_path.extension().string().substr(1));
 }
 
 // One image's entry in the report: its name, size, and every box with its label.

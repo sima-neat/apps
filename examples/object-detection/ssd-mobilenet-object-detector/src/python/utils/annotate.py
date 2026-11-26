@@ -9,12 +9,13 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from sima_examples import image_folder
 
 
 def output_name(image_path: Path) -> str:
     """The annotated PNG's file name. It keeps the source extension, so frame.jpg and frame.png
     do not write the same file."""
-    return f"{image_path.stem}_{image_path.suffix[1:]}.png"
+    return image_folder.output_name(image_path, f"_{image_path.suffix[1:]}")
 
 
 def detections_record(

@@ -23,9 +23,7 @@ else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
 from sima_examples.config import Config
-from sima_examples.detection_overlay import draw_detections
-from sima_examples.image_folder import image_paths
-from sima_examples.image_io import read_image
+from sima_examples.image_folder import draw_detections, image_paths, read_image
 from sima_examples.labels import load_labels
 from utils import annotate
 

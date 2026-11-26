@@ -18,9 +18,7 @@
 
 #include "neat.h"
 #include "sima_examples/config.h"
-#include "sima_examples/detection_overlay.h"
 #include "sima_examples/image_folder.h"
-#include "sima_examples/image_io.h"
 #include "sima_examples/labels.h"
 #include "utils/annotate.h"
 
