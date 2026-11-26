@@ -51,7 +51,7 @@ const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
 };
 // The model's one class.
 const std::vector<std::string> kLabels = {"drone"};
-// Frames all streams together may have in the shared model. More in flight gave no more results.
+// Frames all streams together may have in the shared model.
 constexpr int kMaxInflightTotal = 4;
 
 fs::path parse_args(int argc, char** argv) {
@@ -134,8 +134,7 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
   decode.dec_fps = stream.fps;
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
-  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, config.integer("input.fps"),
-                                 neat::CapsMemory::Any));
+  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, config.integer("input.fps")));
   graph.add(neat::nodes::Output("detector_frame"));
   return graph;
 }
@@ -185,42 +184,6 @@ drone_tracker::TrackerSettings tracker_settings(const sima_examples::Config& con
   return settings;
 }
 
-// Each stream's frame size and rate: the configured values, and a probe's for each 0. Every
-// stream has the same size, because the streams share one model input.
-std::vector<sima_examples::RtspStreamInfo> stream_info(const sima_examples::Config& config,
-                                                       const std::vector<std::string>& sources) {
-  // Same as #793's probe_rtsp_streams. Whichever of #785 and #793 merges second calls it.
-  const sima_examples::RtspStreamInfo configured{
-      config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")};
-  const bool tcp = config.boolean("input.rtsp.tcp");
-  std::vector<std::pair<std::string, sima_examples::RtspStreamInfo>> by_url;
-  for (const auto& url : sources) {
-    if (std::none_of(by_url.begin(), by_url.end(),
-                     [&](const auto& probed) { return probed.first == url; })) {
-      by_url.emplace_back(url, sima_examples::probe_rtsp_stream_info(url, tcp, configured));
-    }
-  }
-  // Core gap: a model shared by several streams accepts one input size, and a stream of another
-  // size fails the build with "input spec mismatch".
-  const auto& [first_url, first] = by_url.front();
-  for (const auto& [url, stream] : by_url) {
-    if (stream.width != first.width || stream.height != first.height) {
-      throw std::runtime_error(
-          "every input.source stream needs the same frame size, because the streams share one "
-          "model: " +
-          first_url + " is " + std::to_string(first.width) + "x" + std::to_string(first.height) +
-          ", " + url + " is " + std::to_string(stream.width) + "x" + std::to_string(stream.height));
-    }
-  }
-  std::vector<sima_examples::RtspStreamInfo> streams;
-  for (const auto& url : sources) {
-    streams.push_back(std::find_if(by_url.begin(), by_url.end(), [&](const auto& probed) {
-                        return probed.first == url;
-                      })->second);
-  }
-  return streams;
-}
-
 // The boxes in a detections sample, whose first tensor is the BBOX payload.
 std::vector<neat::Box> decode_boxes(const neat::Sample& sample,
                                     const sima_examples::RtspStreamInfo& stream,
@@ -255,7 +218,8 @@ std::vector<int> send_tracks(neat::Run& run, std::vector<neat::MetadataSender>& 
       continue;
     }
 
-    // With one source, Core names the sample after the decoder instead of the stream.
+    // Core candidate: with one source, the sample carries the decoder's name, not the link's
+    // stream_id.
     int index = 0;
     if (metadata_senders.size() > 1) {
       index = std::stoi(sample.stream_id.substr(std::string("stream").size()));
@@ -283,7 +247,10 @@ std::vector<int> send_tracks(neat::Run& run, std::vector<neat::MetadataSender>& 
 int run_app(const fs::path& config_path) {
   const auto config = sima_examples::Config::load(config_path);
   const auto sources = config.string_list("input.source");
-  const auto streams = stream_info(config, sources);
+  // Each stream's frame size and rate: the configured values, and a probe's for each 0.
+  const auto streams = sima_examples::probe_rtsp_streams(
+      sources, config.boolean("input.rtsp.tcp"),
+      {config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")});
   // Used by both the model and the box decode.
   const int max_detections = config.integer("inference.max_detections");
   const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");

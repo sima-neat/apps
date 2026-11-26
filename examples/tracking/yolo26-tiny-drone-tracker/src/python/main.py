@@ -22,7 +22,7 @@ else:
 
 from sima_examples import detection_egress
 from sima_examples.config import Config
-from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
+from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_streams
 from sima_examples.stop_signals import stop_on_signals
 from utils import tracker
 
@@ -32,7 +32,7 @@ RTSP_CODECS = {"h264": pyneat.RtspCodec.H264, "h265": pyneat.RtspCodec.H265}
 DECODE_TYPES = {"h264": pyneat.SimaDecodeType.H264, "h265": pyneat.SimaDecodeType.H265}
 # The model's one class.
 LABELS = ["drone"]
-# Frames all streams together may have in the shared model. More in flight gave no more results.
+# Frames all streams together may have in the shared model.
 MAX_INFLIGHT_TOTAL = 4
 PULL_TIMEOUT_MS = 100
 
@@ -106,9 +106,7 @@ def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
     graph = pyneat.Graph("decoder")
     graph.add(pyneat.nodes.sima_decode(decode))
     graph.add(
-        pyneat.nodes.caps_raw(
-            "NV12", stream.width, stream.height, config.integer("input.fps"), pyneat.CapsMemory.Any
-        )
+        pyneat.nodes.caps_raw("NV12", stream.width, stream.height, config.integer("input.fps"))
     )
     graph.add(pyneat.nodes.output("detector_frame"))
     return graph
@@ -159,32 +157,6 @@ def tracker_settings(config: Config) -> tracker.TrackerSettings:
     )
 
 
-def stream_info(config: Config, sources: list[str]) -> list[RtspStreamInfo]:
-    """Each stream's frame size and rate: the configured values, and a probe's for each 0.
-
-    Every stream has the same size, because the streams share one model input.
-    """
-    # Same as #793's probe_rtsp_streams. Whichever of #785 and #793 merges second calls it.
-    configured = RtspStreamInfo(
-        config.integer("input.width"),
-        config.integer("input.height"),
-        config.integer("input.fps"),
-    )
-    tcp = config.boolean("input.rtsp.tcp")
-    by_url = {url: probe_rtsp_stream_info(url, tcp, configured) for url in dict.fromkeys(sources)}
-    # Core gap: a model shared by several streams accepts one input size, and a stream of
-    # another size fails the build with "input spec mismatch".
-    (first_url, first), *others = by_url.items()
-    for url, stream in others:
-        if (stream.width, stream.height) != (first.width, first.height):
-            raise ValueError(
-                "every input.source stream needs the same frame size, because the streams "
-                f"share one model: {first_url} is {first.width}x{first.height}, "
-                f"{url} is {stream.width}x{stream.height}"
-            )
-    return [by_url[url] for url in sources]
-
-
 def decode_boxes(sample: pyneat.Sample, stream: RtspStreamInfo, max_detections: int) -> list:
     """The boxes in a detections sample, whose first tensor is the BBOX payload."""
     # Core candidate: decode_bbox_tensor takes a Tensor, so each example picks the BBOX tensor
@@ -223,16 +195,15 @@ def send_tracks(
                 )
             continue
 
-        # With one source, Core names the sample after the decoder instead of the stream.
+        # Core candidate: with one source, the sample carries the decoder's name, not the
+        # link's stream_id.
         index = 0
         if len(metadata_senders) > 1:
             index = int(sample.stream_id.removeprefix("stream"))
         if frames and processed[index] >= frames:
             continue
         stream = streams[index]
-        tracks = trackers[index].update(
-            decode_boxes(sample, stream, max_detections), sample.pts_ns
-        )
+        tracks = trackers[index].update(decode_boxes(sample, stream, max_detections), sample.pts_ns)
         payload = detection_egress.serialize_tracks(
             tracks,
             LABELS,
@@ -253,7 +224,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.load(args.config)
     sources = config.string_list("input.source")
-    streams = stream_info(config, sources)
+    # Each stream's frame size and rate: the configured values, and a probe's for each 0.
+    streams = probe_rtsp_streams(
+        sources,
+        config.boolean("input.rtsp.tcp"),
+        RtspStreamInfo(
+            config.integer("input.width"),
+            config.integer("input.height"),
+            config.integer("input.fps"),
+        ),
+    )
     # Used by both the model and the box decode.
     max_detections = config.integer("inference.max_detections")
     model_path = args.config.absolute().parent / config.string("model.path")
@@ -296,13 +276,18 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         run.close()
 
+    # Core gap: lines printed just before exit can be lost on a pipe. flush=True narrows the race.
     for index, sender in enumerate(metadata_senders):
         print(
             f"[stream {index}] processed={processed[index]} "
-            f"tracks_started={trackers[index].tracks_started()}"
+            f"tracks_started={trackers[index].tracks_started()}",
+            flush=True,
         )
         if sender.stats().send_failures:
-            print(f"[stream {index}] {sender.stats().send_failures} metadata messages dropped")
+            print(
+                f"[stream {index}] {sender.stats().send_failures} metadata messages dropped",
+                flush=True,
+            )
     return 0
 
 

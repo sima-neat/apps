@@ -103,9 +103,8 @@ def _clip(value: float, limit: int) -> float:
 
 
 def _entry(entry_id: str, box: Box, labels: list[str], frame_w: int, frame_h: int) -> dict:
-    """One box as Insight reads it: [x, y, width, height] in frame pixels. Both corners are
-    clipped to the frame before the size is measured, so a box past an edge gets its visible
-    width, and a box outside the frame gets zero size."""
+    """One box as Insight reads it: [x, y, width, height] in frame pixels. Clipping both corners
+    first gives a box past an edge its visible size."""
     x1 = int(_clip(box.x1, frame_w))
     y1 = int(_clip(box.y1, frame_h))
     width = max(0, int(_clip(box.x2, frame_w)) - x1)

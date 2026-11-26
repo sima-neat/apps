@@ -68,9 +68,8 @@ inline double clip(double value, int limit) {
   return std::max(0.0, std::min(value, static_cast<double>(limit)));
 }
 
-// One box as Insight reads it: [x, y, width, height] in frame pixels. Both corners are clipped to
-// the frame before the size is measured, so a box past an edge gets its visible width, and a box
-// outside the frame gets zero size.
+// One box as Insight reads it: [x, y, width, height] in frame pixels. Clipping both corners first
+// gives a box past an edge its visible size.
 template <typename BoxT>
 nlohmann::json entry(std::string entry_id, const BoxT& box, const std::vector<std::string>& labels,
                      int frame_w, int frame_h) {

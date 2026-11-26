@@ -164,6 +164,10 @@ When it stops, it prints the frames each stream processed and the tracks it star
 [stream 1] processed=<frames> tracks_started=<tracks>
 ```
 
+On a Modalix DevKit, the streams share about 50 results/s from the model.
+One stream runs at its source rate, such as 30 frames/s.
+Two 30 fps streams get about 25 results/s each, and four streams about 13 each.
+
 The packaged config runs until Ctrl-C, and the `processed=` lines print when you stop it.
 For a run that ends by itself, set `inference.frames` to a positive number, such as `200`.
 A full network buffer drops tracking messages.

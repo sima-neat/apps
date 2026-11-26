@@ -539,6 +539,7 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
     )
 
 
+# Until #789 converts this example, Core's send_metadata builds the envelope.
 def send_metadata(
     stream: StreamRuntime, sample, tracks: list[TrackedDetection], labels: tuple[str, ...]
 ) -> None:

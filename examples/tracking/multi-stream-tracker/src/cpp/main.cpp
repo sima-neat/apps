@@ -623,6 +623,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   return runtime;
 }
 
+// Until #789 converts this example, Core's send_metadata builds the envelope.
 void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
                    const std::vector<TrackedDetection>& tracks,
                    const std::vector<std::string>& labels) {
