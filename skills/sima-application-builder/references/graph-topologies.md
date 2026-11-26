@@ -176,7 +176,8 @@ run = graph.build(run_options)
 - `detector_link(index)` is a `GraphLinkOptions` with
   `policy = GraphLinkPolicy::RealtimeLatestByStream`, `stream_id = f"stream{index}"`,
   `max_inflight_per_stream`, and `max_inflight_total`. The pulled `Sample` carries the
-  `stream_id`, so one pull loop on `detections` routes each result to its stream.
+  `stream_id`, so one pull loop on `detections` routes each result to its stream. With one
+  source, the sample carries the decoder name instead, so route it to stream 0.
 - `RunOptions` sets `preset = RunPreset::Realtime`, `queue_depth`, and
   `output_memory = OutputMemory::ZeroCopy`.
 
