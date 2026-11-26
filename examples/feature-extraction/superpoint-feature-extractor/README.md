@@ -157,7 +157,7 @@ Insight shows the video with a dot on every feature point.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp` and `src/cpp/utils/feature_points.cpp`
+- C++ reference source: `src/cpp/main.cpp` and `src/cpp/utils/feature_points.h`
 - Python source: `src/python/main.py` and `src/python/utils/feature_points.py`
 - Shared config: `src/common/config.yaml`
 - Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself. Their C++ reference source is in `support/cpp/sima_examples/`.
