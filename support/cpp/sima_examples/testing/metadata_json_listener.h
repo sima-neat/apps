@@ -80,10 +80,8 @@ public:
   // and reads `result.success` and `result.error` afterwards.
   bool poll_messages(MetadataJsonListenerResult& result, int poll_ms);
 
-  // Reads, without waiting, every datagram already queued on every port into `result`, and
-  // returns how many it read. Chunk assemblies stay open for the next call. poll_messages()
-  // reads one datagram per port, so a test that reads during the run calls this after it to
-  // keep up with a message sent as several chunks.
+  // Reads every queued datagram without waiting, so a test keeps up with chunked messages that
+  // poll_messages(), one datagram per port, falls behind on. Chunk assemblies stay open.
   std::size_t read_ready(MetadataJsonListenerResult& result);
 
   // Drain and validate datagrams already queued on the sockets. Incomplete

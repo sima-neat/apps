@@ -28,9 +28,6 @@ using Entry = nlohmann::ordered_json;
 constexpr std::size_t kMetadataByteBudget = 32768;
 // A mask cell belongs to the object when its value is at least half of full scale (255).
 constexpr double kMaskThreshold = 0.5;
-// One mask cell spans four pixels of the model's letterboxed input: the BoxDecode masks are a
-// 160x160 grid, for a 640x640 model input.
-constexpr int kMaskStride = 4;
 // The order in which the BoxDecode pose payload emits the 17 COCO keypoints. Insight joins the
 // skeleton by these names.
 constexpr std::array<const char*, 17> kCocoKeypointNames = {

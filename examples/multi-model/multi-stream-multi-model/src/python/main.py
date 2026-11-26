@@ -165,9 +165,7 @@ def decoder_graph(config: Config, stream: RtspStreamInfo) -> pyneat.Graph:
     decode.num_buffers = DECODER_BUFFERS
     graph = pyneat.Graph("decoder")
     graph.add(pyneat.nodes.sima_decode(decode))
-    graph.add(
-        pyneat.nodes.caps_raw("NV12", stream.width, stream.height, config.integer("input.fps"))
-    )
+    graph.add(pyneat.nodes.caps_raw("NV12", stream.width, stream.height, stream.fps))
     graph.add(pyneat.nodes.output("model_frame"))
     return graph
 
@@ -206,8 +204,7 @@ def metadata_options(config: Config, index: int) -> pyneat.MetadataSenderOptions
 def run_options() -> pyneat.RunOptions:
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Realtime
-    # Auto copies a result that waits at an output while another one is queued there, unless it
-    # is DMA-BUF or framework memory.
+    # Each result is read and released before the next pull, so it stays in its runtime buffer.
     options.output_memory = pyneat.OutputMemory.ZeroCopy
     return options
 
@@ -322,7 +319,7 @@ def send_results(
                 DATA_KEYS[stream.metadata_type],
                 metadata_entries(sample, stream, max_detections),
             )
-            # A nonblocking send drops the message while the socket buffer is full; the run's
+            # A nonblocking send drops the message while the socket buffer is full, and the run's
             # end reports the drops. Any other failure raises.
             stream.metadata_sender.send_metadata(
                 stream.metadata_type,

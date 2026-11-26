@@ -28,10 +28,8 @@ const T& lookup(const std::string& key, const std::string& value,
   return it->second;
 }
 
-// The values of one config.yaml, read by dotted key such as "input.rtsp.tcp". Scalars, lists of
-// strings, and lists of mappings are read; string_list() rejects a list holding anything else.
-// An entry of mapping_list() is a Config too: its getters take a field, such as "path", and its
-// errors name the entry, such as "model[1].path".
+// The values of one config.yaml, read by dotted key such as "input.rtsp.tcp". A mapping_list()
+// entry is a Config too, whose getters take a field and whose errors name the entry.
 class Config {
 public:
   static Config load(const std::filesystem::path& path);

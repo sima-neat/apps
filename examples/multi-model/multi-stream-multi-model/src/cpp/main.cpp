@@ -196,7 +196,7 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
   decode.num_buffers = kDecoderBuffers;
   neat::Graph graph("decoder");
   graph.add(neat::nodes::SimaDecode(std::move(decode)));
-  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, config.integer("input.fps")));
+  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, stream.fps));
   graph.add(neat::nodes::Output("model_frame"));
   return graph;
 }
@@ -236,8 +236,7 @@ neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config
 neat::RunOptions run_options() {
   neat::RunOptions options;
   options.preset = neat::RunPreset::Realtime;
-  // Auto copies a result that waits at an output while another one is queued there, unless it is
-  // DMA-BUF or framework memory.
+  // Each result is read and released before the next pull, so it stays in its runtime buffer.
   options.output_memory = neat::OutputMemory::ZeroCopy;
   return options;
 }
@@ -364,7 +363,7 @@ void send_results(neat::Run& run, std::vector<Stream>& streams, int max_detectio
       pulled = true;
       const auto [data, left_out] = insight_metadata::data_json(
           kDataKeys.at(stream.metadata_type), metadata_entries(sample, stream, max_detections));
-      // A nonblocking send drops the message while the socket buffer is full; the run's end
+      // A nonblocking send drops the message while the socket buffer is full, and the run's end
       // reports the drops. Any other failure throws.
       std::string send_error;
       if (!stream.metadata_sender.send_metadata(

@@ -17,9 +17,6 @@ UNKNOWN_LABEL = "unknown"
 METADATA_BYTE_BUDGET = 32768
 # A mask cell belongs to the object when its value is at least half of full scale (255).
 MASK_THRESHOLD = 0.5
-# One mask cell spans four pixels of the model's letterboxed input: the BoxDecode masks are a
-# 160x160 grid, for a 640x640 model input.
-MASK_STRIDE = 4
 # The order in which the BoxDecode pose payload emits the 17 COCO keypoints. Insight joins the
 # skeleton by these names.
 COCO_KEYPOINT_NAMES = (
@@ -74,17 +71,17 @@ def mask_rect(
     rect: tuple[int, int, int, int], frame_w: int, frame_h: int, mask_w: int, mask_h: int
 ) -> tuple[int, int, int, int]:
     """The mask cells under the frame rectangle `rect`, through the model's letterbox."""
-    model_w = mask_w * MASK_STRIDE
-    model_h = mask_h * MASK_STRIDE
-    scale = min(model_w / frame_w, model_h / frame_h)
-    pad_x = (model_w - frame_w * scale) * 0.5
-    pad_y = (model_h - frame_h * scale) * 0.5
+    # The mask grid covers the model's letterboxed input, so a frame point maps to a cell through
+    # the same letterbox.
+    scale = min(mask_w / frame_w, mask_h / frame_h)
+    pad_x = (mask_w - frame_w * scale) * 0.5
+    pad_y = (mask_h - frame_h * scale) * 0.5
 
     def cell_x(x: float) -> float:
-        return (x * scale + pad_x) / MASK_STRIDE
+        return x * scale + pad_x
 
     def cell_y(y: float) -> float:
-        return (y * scale + pad_y) / MASK_STRIDE
+        return y * scale + pad_y
 
     x0 = max(0, min(mask_w - 1, math.floor(cell_x(rect[0]))))
     y0 = max(0, min(mask_h - 1, math.floor(cell_y(rect[1]))))

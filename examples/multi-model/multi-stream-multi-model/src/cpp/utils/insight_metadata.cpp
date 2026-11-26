@@ -54,13 +54,14 @@ cv::Rect frame_rect(const float* box, int frame_w, int frame_h) {
 }
 
 cv::Rect mask_rect(const cv::Rect& rect, int frame_w, int frame_h, int mask_w, int mask_h) {
-  const double model_w = mask_w * kMaskStride;
-  const double model_h = mask_h * kMaskStride;
-  const double scale = std::min(model_w / frame_w, model_h / frame_h);
-  const double pad_x = (model_w - frame_w * scale) * 0.5;
-  const double pad_y = (model_h - frame_h * scale) * 0.5;
-  const auto cell_x = [&](double x) { return (x * scale + pad_x) / kMaskStride; };
-  const auto cell_y = [&](double y) { return (y * scale + pad_y) / kMaskStride; };
+  // The mask grid covers the model's letterboxed input, so a frame point maps to a cell through
+  // the same letterbox.
+  const double scale = std::min(static_cast<double>(mask_w) / frame_w,
+                                static_cast<double>(mask_h) / frame_h);
+  const double pad_x = (mask_w - frame_w * scale) * 0.5;
+  const double pad_y = (mask_h - frame_h * scale) * 0.5;
+  const auto cell_x = [&](double x) { return x * scale + pad_x; };
+  const auto cell_y = [&](double y) { return y * scale + pad_y; };
 
   const int x0 = std::clamp(static_cast<int>(std::floor(cell_x(rect.x))), 0, mask_w - 1);
   const int y0 = std::clamp(static_cast<int>(std::floor(cell_y(rect.y))), 0, mask_h - 1);

@@ -1,5 +1,5 @@
 // tests/python/test_unit.py's tests, less those that need a Run or main.cpp's private tables: the
-// deadline is tested on PendingResults.observe(). Also tests support's Config::mapping_list.
+// deadline is tested on PendingResults.observe().
 
 #include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/insight_metadata.h"
 #include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/pending_results.h"

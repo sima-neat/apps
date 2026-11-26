@@ -41,8 +41,8 @@ constexpr const char* kExampleName = "multi-stream-multi-model";
 constexpr int kFrames = 150;
 // Above the shipped 0.30, so the results show that the example applies inference.min_score.
 constexpr double kMinScore = 0.35;
-// About 80% of the lowest results per second a CI DevKit gave. Whether the app keeps up with its
-// sources is measured on a board, not here.
+// A floor that catches a stream falling far behind, not a slow source. Whether the app keeps up
+// with its sources is measured on a board, not here.
 constexpr double kMinResultsPerS = 19.5;
 // A keyframe arrives as a burst of packets, and a full socket buffer drops the rest of it. Linux
 // caps the size at net.core.rmem_max, so the report prints what the socket got.

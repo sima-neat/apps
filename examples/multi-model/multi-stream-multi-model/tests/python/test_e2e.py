@@ -25,8 +25,8 @@ LABELS = (APPS_ROOT / "support" / "labels" / "coco80.txt").read_text().splitline
 FRAMES = 150
 # Above the shipped 0.30, so the results show that the example applies inference.min_score.
 MIN_SCORE = 0.35
-# About 80% of the lowest results per second a CI DevKit gave. Whether the app keeps up with its
-# sources is measured on a board, not here.
+# A floor that catches a stream falling far behind, not a slow source. Whether the app keeps up
+# with its sources is measured on a board, not here.
 MIN_RESULTS_PER_S = 19.5
 # RTP payload types: H.264 96, H.265 98.
 PAYLOAD_TYPES = {"h264": 96, "h265": 98}
