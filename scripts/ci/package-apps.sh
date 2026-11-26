@@ -2,8 +2,8 @@
 # Packages a finished build into the two CI archives:
 #   neat-apps-<branch>-<version>.tar.gz  the customer runtime (prebuilt-apps/)
 #   neat-apps-tests.tar.gz               the test overlay CI unpacks over it
-# Both land in the repository root. build.sh --all calls this after the
-# build; the Vulcan post-build step validates the archives.
+# Both land in the repository root. build.sh --all calls this after the build,
+# and the Vulcan post-build step validates the archives.
 #
 # Usage: scripts/ci/package-apps.sh [--build-dir <dir>]
 #   <dir> is absolute or relative to the repository root (default: build, or
@@ -19,7 +19,12 @@ BUILD_DIR="${BUILD_DIR:-build}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --build-dir) BUILD_DIR="$2"; shift 2 ;;
+    --build-dir)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --build-dir needs a directory" >&2
+        exit 1
+      fi
+      BUILD_DIR="$2"; shift 2 ;;
     -h|--help) sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -88,7 +93,7 @@ package_distribution() {
   if [[ "${BUILD_DIR}" = /* ]]; then
     build_path="${BUILD_DIR}"
   fi
-  local stage_root stage_dir test_stage_dir
+  local stage_dir test_stage_dir
   local branch_key version archive_name archive_path apps_ref apps_spec
   local test_archive_path="${ROOT_DIR}/neat-apps-tests.tar.gz"
 
@@ -102,6 +107,7 @@ package_distribution() {
   archive_name="neat-apps-${branch_key}-${version}.tar.gz"
   archive_path="${ROOT_DIR}/${archive_name}"
   stage_root="$(mktemp -d /tmp/neat-apps-package.XXXXXX)"
+  trap 'rm -rf "${stage_root:-}"' EXIT
   stage_dir="${stage_root}/prebuilt-apps"
   test_stage_dir="${stage_root}/neat-apps-tests"
 
@@ -113,7 +119,6 @@ package_distribution() {
 
   if [[ ! -f "${NEAT_CORE_METADATA}" ]]; then
     echo "ERROR: missing resolved Core metadata: ${NEAT_CORE_METADATA}" >&2
-    rm -rf "${stage_root}"
     return 1
   fi
   cp "${NEAT_CORE_METADATA}" "${stage_dir}/deps/neat-core.json"
@@ -123,7 +128,6 @@ package_distribution() {
   fi
   if [[ -z "${apps_ref}" ]]; then
     echo "ERROR: unable to determine the Apps source ref." >&2
-    rm -rf "${stage_root}"
     return 1
   fi
   apps_spec="${GITHUB_SHA:-}"
@@ -132,7 +136,6 @@ package_distribution() {
   fi
   if [[ -z "${apps_spec}" ]]; then
     echo "ERROR: unable to determine the Apps source commit." >&2
-    rm -rf "${stage_root}"
     return 1
   fi
   python3 - "${stage_dir}/deps/neat-apps.json" "${apps_ref}" "${apps_spec}" <<'PY'
@@ -208,9 +211,8 @@ PY
       \) 2>/dev/null | sort
   )
 
-  # Python examples import the helpers they share from support/python. The C++
-  # executables are built with support/cpp, shipped as reference source without
-  # its build and test files. Configs name the shared label files in support/labels.
+  # Python examples import support/python, configs name files in support/labels, and
+  # support/cpp ships as reference source without its build and test files.
   mkdir -p "${stage_dir}/support/cpp"
   cp -a "${ROOT_DIR}/support/README.md" "${stage_dir}/support/"
   cp -a "${ROOT_DIR}/support/labels" "${stage_dir}/support/"
@@ -282,7 +284,6 @@ PY
 
   tar -czf "${archive_path}" -C "${stage_root}" "$(basename "${stage_dir}")"
   tar -czf "${test_archive_path}" -C "${stage_root}" "$(basename "${test_stage_dir}")"
-  rm -rf "${stage_root}"
 
   echo ""
   echo "Distribution packages created:"
