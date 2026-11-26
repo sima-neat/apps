@@ -170,9 +170,13 @@ def send_feature_points(
     while not stop.is_set() and (frames == 0 or processed < frames):
         sample = run.pull("frames", PULL_TIMEOUT_MS)
         if sample is None:
-            # None is a timeout or a closed output. With one output, can_pull() tells which.
+            # Core candidate: Python pull() has no PullStatus, so None is a timeout or a closed
+            # output. With one output, can_pull() tells them apart on a Core with core#1431.
             if run.last_error() or not run.running() or not run.can_pull():
-                raise RuntimeError(f"frames output closed: {run.last_error()}")
+                detail = run.last_error()
+                raise RuntimeError(
+                    "frames output closed unexpectedly" + (f": {detail}" if detail else "")
+                )
             continue
         outputs = runner.run([luma(sample, stream)])
         features = pyneat.decode_superpoint(list(outputs))[0]

@@ -1,7 +1,8 @@
 """Unit tests for the SuperPoint feature extractor: the checks the application leaves to its config,
-the frames luma rejects, and the mapping of feature points onto the source frame.
-tests/cpp/test_unit.cpp runs the same checks in C++, except luma's: C++ luma is in main.cpp, which
-the C++ unit test does not compile.
+the frames luma rejects, the pull loop's stop at end of stream, and the mapping of feature points
+onto the source frame. tests/cpp/test_unit.cpp runs the same checks in C++, except luma's and the
+pull loop's: C++ luma is in main.cpp, which the C++ unit test does not compile, and C++ pull
+returns PullStatus::Closed at end of stream.
 """
 
 from __future__ import annotations
@@ -58,35 +59,6 @@ def test_luma_rejects_a_frame_without_a_tensor():
         main_module.luma(sample, main_module.RtspStreamInfo(*SOURCE_SIZE, 30))
 
 
-class _ClosedRun:
-    """A run whose only output closed cleanly: pull returns None, nothing reports an error."""
-
-    def pull(self, _name, _timeout_ms):
-        return None
-
-    def last_error(self):
-        return ""
-
-    def running(self):
-        return True
-
-    def can_pull(self):
-        return False
-
-
-def test_send_feature_points_stops_when_the_frames_output_closes():
-    with pytest.raises(RuntimeError, match="frames output closed"):
-        main_module.send_feature_points(
-            _ClosedRun(),
-            None,
-            None,
-            MODEL_SIZE,
-            main_module.RtspStreamInfo(*SOURCE_SIZE, 30),
-            0,
-            threading.Event(),
-        )
-
-
 def test_luma_rejects_a_frame_that_is_not_nv12():
     """luma checks the format, not the planes: an I420 frame has a Y plane too."""
     sample = pyneat.Sample()
@@ -99,6 +71,44 @@ def test_luma_rejects_a_frame_that_is_not_nv12():
 
     with pytest.raises(RuntimeError, match="decoded frame is not NV12"):
         main_module.luma(sample, main_module.RtspStreamInfo(*SOURCE_SIZE, 30))
+
+
+class _RunThatTimesOutThenCloses:
+    """A run whose only output times out once, then closes cleanly: pull returns None both times,
+    and only can_pull() tells them apart."""
+
+    def __init__(self):
+        self.pulls = 0
+
+    def pull(self, _name, _timeout_ms):
+        self.pulls += 1
+        if self.pulls > 2:
+            raise AssertionError("kept polling after the output closed")
+        return None
+
+    def last_error(self):
+        return ""
+
+    def running(self):
+        return True
+
+    def can_pull(self):
+        return self.pulls < 2
+
+
+def test_send_feature_points_waits_on_a_timeout_and_stops_when_the_frames_output_closes():
+    run = _RunThatTimesOutThenCloses()
+    with pytest.raises(RuntimeError, match="frames output closed unexpectedly$"):
+        main_module.send_feature_points(
+            run,
+            None,
+            None,
+            MODEL_SIZE,
+            main_module.RtspStreamInfo(*SOURCE_SIZE, 30),
+            0,
+            threading.Event(),
+        )
+    assert run.pulls == 2
 
 
 def test_source_points_scale_each_axis_onto_the_source_frame():
