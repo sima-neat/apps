@@ -1,7 +1,6 @@
 # shellcheck shell=bash
-# Branch key and release tag for artifact names. build.sh resolves Core with
-# them and scripts/ci/package-apps.sh versions the Apps archive with them, so
-# both source this one file. The caller sets ROOT_DIR to the repository root.
+# Branch key and release tag for artifact names, shared by build.sh and
+# scripts/ci/package-apps.sh. The caller sets ROOT_DIR to the repository root.
 
 sanitize_branch_key() {
   printf '%s' "$1" | tr '/ ' '--'

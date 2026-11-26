@@ -376,8 +376,8 @@ MJPEG URLs.
   every activated test passes.
 - Alongside both, an Ubuntu job runs the repository contract tests under
   `tests/scripts` against the source checkout, because they read `build.sh`, the
-  workflows and the portal sources, which the test bundle does not carry. It
-  also builds the portal on every ref. Publishing waits for it too.
+  workflows and the portal sources, which the test bundle does not carry. That
+  job also builds the portal on every ref. Publishing waits for it too.
 
 ## Nightly Integration
 
