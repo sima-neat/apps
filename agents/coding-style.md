@@ -8,10 +8,10 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
 - `main` reads top to bottom as the Neat flow: parse the command line, load the config,
   create the `Model`, build the graph, build the run, process the outputs, close the run.
-- Each step is one line or one call to a function named for what it does. A reader understands
-  the application from `main` without opening the functions.
-- The C++ and Python entrypoints have the same functions, with the same names, in the same
-  order. In C++, `main` only reports errors and calls `run_app`. `run_app` is the function
+- Each step outside the graph is one line or one call to a function named for what it does. A
+  reader understands the application from `main` without opening the functions.
+- The C++ and Python entrypoints have the same Neat-flow functions, with the same names, in the
+  same order. A helper only one language needs exists only there. In C++, `main` only reports errors and calls `run_app`. `run_app` is the function
   these rules call `main`.
 - Use the simplest implementation that meets the requirement. Each extra helper,
   abstraction, dependency, process, and compatibility path needs a reason a reader can see.
@@ -72,14 +72,19 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
   ```yaml
   input:
-    type: rtsp        # rtsp, http, or usb. For http, replace codec, tcp, and latency_ms with
-                      # ssl_strict. For usb, set source to a camera ID, and width, height, and
-                      # fps to one of its modes.
+    # rtsp, http, or usb. For http, delete codec and rtsp, set source to the MJPEG URL and
+    # width, height, and fps to the stream's, and add "app:" with "ssl_strict: true". For usb,
+    # delete codec and rtsp, set source to a camera ID, and set width, height, and fps to one
+    # of its modes.
+    type: rtsp
     source: rtsp://<host>:<port>/<stream>
     codec: h264       # h264, h265, or mjpeg.
-    width: 0          # 0 reads the stream's frame size and rate with a probe. Set them only
-    height: 0         # for a stream that does not report them.
+    width: 0          # 0 reads the stream's frame size and rate with a probe.
+    height: 0         # Set them only for a stream that does not report them.
     fps: 0
+    rtsp:
+      tcp: true       # Receive RTSP over TCP.
+      latency_ms: 100 # RTSP jitter buffer.
   ```
 
   The code reads only the keys of the configured type.
@@ -92,8 +97,10 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 
 ## Functions and state
 
-- Each function does one job. A function described with "and" becomes two functions.
-- Give a behavior that a boolean parameter would switch its own function.
+- Each function does one job. Split a function when a part is reused or tested on its own.
+- In the example's own functions, give a behavior that a boolean parameter would switch its
+  own function. A flag that mirrors a Core API, such as `strict` in `decode_bbox_tensor`,
+  stays a parameter.
 - Keep state in `main` and pass it down. Stop on Ctrl-C, SIGTERM, and SIGHUP with
   `stop_on_signals()` from the shared library: `main` passes its flag to every pull loop and
   closes the run when the loop ends.
@@ -110,5 +117,10 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 - Print only what the customer needs to see the run start, progress, and stop. The result
   the reader came for comes first, and every number names what it measures and its unit:
   `inference 3.0 ms`.
-- A comment explains a choice the code cannot show, with its evidence. It describes the code
-  as it is, not its history.
+- Comment only what the code cannot say: why it does something, a constraint the reader would
+  otherwise break, or a Core gap. Never restate what the code does or what a name says.
+- A comment is one line, and two at most. A function or file gets a comment only when its
+  name and signature leave something unclear.
+- Measurements, Core file and line numbers, and how the code got this way go in the pull
+  request description, the cheat sheet, or the skills. A comment may name the issue instead.
+  It describes the code as it is.

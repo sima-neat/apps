@@ -1,6 +1,7 @@
 // Unit tests for the single-stream object detector: the checks the application leaves to its
 // config. tests/python/test_unit.py runs the same checks against main.py's tables. This example
-// also holds the test of the shared C++ Config::choice, since support/ has no C++ test program.
+// also holds the tests of the shared C++ Config::choice and its type errors, since support/ has
+// no C++ test program.
 
 #include "sima_examples/config.h"
 #include "sima_examples/labels.h"
@@ -8,9 +9,12 @@
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -72,10 +76,47 @@ bool test_choice_names_the_key_and_the_value() {
   return ok;
 }
 
+// A value of the wrong type names the key and the value, as in Python, also when the standard
+// conversion rejects it outright.
+bool test_wrong_type_names_the_key_and_the_value() {
+  const fs::path path = fs::temp_directory_path() / "single-stream-type-test.yaml";
+  std::ofstream(path) << "input:\n  width: wide\n  height: 720x\n  fps: 99999999999\n"
+                         "inference:\n  min_score: high\n"
+                         "rtsp:\n  tcp: yes\n";
+  const auto config = sima_examples::Config::load(path);
+  const auto error = [&](const std::function<void()>& read) {
+    try {
+      read();
+    } catch (const std::runtime_error& thrown) {
+      return std::string(thrown.what());
+    }
+    return std::string("no error");
+  };
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {error([&] { (void)config.integer("input.width"); }),
+       "input.width must be an integer, got 'wide'"},
+      {error([&] { (void)config.integer("input.height"); }),
+       "input.height must be an integer, got '720x'"},
+      {error([&] { (void)config.integer("input.fps"); }),
+       "input.fps must be an integer, got '99999999999'"},
+      {error([&] { (void)config.number("inference.min_score"); }),
+       "inference.min_score must be a number, got 'high'"},
+      {error([&] { (void)config.boolean("rtsp.tcp"); }),
+       "rtsp.tcp must be true or false, got 'yes'"},
+  };
+  fs::remove(path);
+  bool ok = true;
+  for (const auto& [actual, expected] : cases) {
+    ok &= expect_true(actual == expected, "the error names the key and the value: " + actual);
+  }
+  return ok;
+}
+
 } // namespace
 
 int main() {
   bool ok = test_shipped_config_names_a_supported_input_model_and_labels();
   ok &= test_choice_names_the_key_and_the_value();
+  ok &= test_wrong_type_names_the_key_and_the_value();
   return ok ? 0 : 1;
 }

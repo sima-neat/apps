@@ -21,22 +21,35 @@ bool is_nullish(const std::string& value) {
   return lower_copy(trim_copy(value)) == "null";
 }
 
-int parse_int(const std::string& value, const std::string& key) {
+// Converts the whole value with `convert`, such as std::stoi, or throws "<key> must be <kind>, got
+// '<value>'", as Python's Config does. The std conversions throw std::invalid_argument or
+// std::out_of_range, which name only the function, for a value they cannot convert.
+template <typename T, typename Convert>
+T parse_number(const std::string& value, const std::string& key, const std::string& kind,
+               Convert convert) {
   std::size_t index = 0;
-  const int parsed = std::stoi(value, &index);
-  if (index != value.size()) {
-    throw std::runtime_error(key + " must be an integer");
+  T parsed{};
+  try {
+    parsed = convert(value, &index);
+  } catch (const std::logic_error&) {
+    index = 0;
+  }
+  if (index == 0 || index != value.size()) {
+    throw std::runtime_error(key + " must be " + kind + ", got '" + value + "'");
   }
   return parsed;
 }
 
+int parse_int(const std::string& value, const std::string& key) {
+  return parse_number<int>(value, key, "an integer", [](const std::string& text, std::size_t* end) {
+    return std::stoi(text, end);
+  });
+}
+
 double parse_double(const std::string& value, const std::string& key) {
-  std::size_t index = 0;
-  const double parsed = std::stod(value, &index);
-  if (index != value.size()) {
-    throw std::runtime_error(key + " must be numeric");
-  }
-  return parsed;
+  return parse_number<double>(
+      value, key, "a number",
+      [](const std::string& text, std::size_t* end) { return std::stod(text, end); });
 }
 
 bool parse_bool(const std::string& value, const std::string& key) {
@@ -47,7 +60,7 @@ bool parse_bool(const std::string& value, const std::string& key) {
   if (lowered == "false") {
     return false;
   }
-  throw std::runtime_error(key + " must be true or false");
+  throw std::runtime_error(key + " must be true or false, got '" + value + "'");
 }
 
 // A node as the errors of mapping_list() show it, the same as Python: null, a list, or 'text'.

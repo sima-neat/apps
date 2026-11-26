@@ -102,7 +102,7 @@ SPS and PPS are the H.264 headers that a decoder needs before the first frame.
 | H.264 width | `h264_width` | `h264_width` | `-1` | Width written into the H.264 caps. With width, height and a frame rate all set, these caps are used even when `auto_caps_from_stream` is on | You know the stream size |
 | H.264 height | `h264_height` | `h264_height` | `-1` | Height written into the H.264 caps | Same as width |
 | Auto caps | `auto_caps_from_stream` | `auto_caps_from_stream` | `true` | Reads the H.264 size and frame rate from the stream when any of them is not set. For MJPEG, reads the frame rate from the RTSP session description when `source_fps` is not set | Set `false` only with width, height and frame rate all set, see the pitfalls |
-| Fallback FPS | `fallback_h264_fps` | `fallback_h264_fps` | `-1` | H.264 frame rate used when the stream does not carry one | The camera does not announce its frame rate and a later node needs one, for example an encoder |
+| Fallback FPS | `fallback_h264_fps` | `fallback_h264_fps` | `-1` | H.264 frame rate used when the stream does not carry one. No effect when `source_fps` or `h264_fps` is above 0 | The camera does not announce its frame rate and a later node needs one, for example an encoder |
 | Fallback width | `fallback_h264_width` | `fallback_h264_width` | `-1` | H.264 width used when the stream does not carry one | The camera does not announce its size |
 | Fallback height | `fallback_h264_height` | `fallback_h264_height` | `-1` | H.264 height used when the stream does not carry one | Same as fallback width |
 | Source FPS | `source_fps` | `source_fps` | `-1` | The frame rate the camera sends. Written into the caps for every codec | The camera does not announce its frame rate. Set the real rate, it does not change the rate |
@@ -217,4 +217,4 @@ parser. The tables above describe what Core does.
 
 - C++ header: `include/nodes/groups/RtspDecodedInput.h` (`RtspDecodedInputOptions`, `RtspDecodedInput`), `include/nodes/groups/RtspEncodedInput.h` (`RtspEncodedInputOptions`, `RtspEncodedInput`), `include/nodes/groups/RtspCodec.h` (`RtspCodec`)
 - Python binding: `python/src/module.cpp`, `RtspCodec`, `RtspEncodedInputOptions`, `RtspDecodedInputOptions`, `RtspDecodedInputOutputCaps`, `groups.rtsp_encoded_input`, `groups.rtsp_decoded_input`
-- Core commit: `b1f9556c`
+- Core commit: `7e5317be`
