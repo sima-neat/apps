@@ -134,8 +134,9 @@ differences.
 **Python's `pull()` does not return a status.** The `PullStatus`-returning
 overload is not bound; Python's `pull()` returns `Sample | None` and `None`
 means both "nothing arrived yet" and "the pipeline has ended". On a graph
-with one output, call `run.can_pull()` after a `None` to tell them apart:
-`false` means end of stream, so stop reading that output. On a graph with more
+with one output, call `run.can_pull()` after a `None` to tell them apart on a
+Core with core#1431: `false` means end of stream, so stop reading that output.
+On Core 0.6.2, `can_pull()` stays `true` at end of stream. On a graph with more
 than one output, `can_pull()` is always `false`, and Python has no call that
 tells a timeout from end of stream for one output. `run.running()` does not
 fill that gap: it reports the pipeline state, which can still be playing while
@@ -176,8 +177,9 @@ consequence of a failure.
 **In Python, a `None` from `pull()` at shutdown looks like an ordinary
 timeout.** The same bug as above, but the type system does not help you.
 Symptom: a Python application that polls forever after the video ends. Fix:
-on a graph with one output, check `run.can_pull()` after every `None` and stop
-when it is `false`. On a graph with more than one output, `can_pull()` is
+on a graph with one output and a Core with core#1431, check `run.can_pull()`
+after every `None` and stop when it is `false`. On Core 0.6.2 it stays `true`.
+On a graph with more than one output, `can_pull()` is
 always `false`; see Language differences.
 
 **`pull()` with the default `timeout_ms = -1` blocks forever.** In a loop that
