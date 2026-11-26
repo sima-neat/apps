@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <iostream>
 #include <map>
@@ -713,8 +714,10 @@ enum class PortPairing { kNoPair, kContentMismatch, kNoPtsMatch, kMatched };
 
 // Every message carries its port's stream id and 33 valid keypoints per pose, every port
 // publishes a 2D/3D pair matched in content and video PTS, and one pair is non-empty.
+// has_video_pts(port offset, timestamp ms) says whether that port's video carried the PTS.
 bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_port_base,
-                       int num_ports, const RtpVideoListener& video, std::string& error) {
+                       int num_ports, const std::function<bool(int, int64_t)>& has_video_pts,
+                       std::string& error) {
   using FrameKey = std::tuple<int, int64_t, std::string>;
   std::map<FrameKey, nlohmann::json> pose_frames;
   std::map<FrameKey, nlohmann::json> world_pose_frames;
@@ -747,18 +750,25 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
     return false;
   }
   // Every accepted frame publishes a pair, even without people, so every port must match one.
+  // The listener binds only the configured ports, so every offset is in range.
   std::vector<PortPairing> pairing(static_cast<std::size_t>(num_ports), PortPairing::kNoPair);
+  std::vector<int> frames_2d(static_cast<std::size_t>(num_ports), 0);
+  std::vector<int> frames_3d(static_cast<std::size_t>(num_ports), 0);
+  for (const auto& entry : world_pose_frames) {
+    ++frames_3d[static_cast<std::size_t>(std::get<0>(entry.first) - metadata_port_base)];
+  }
   bool nonempty_pair = false;
   for (const auto& [frame, poses] : pose_frames) {
-    const auto world = world_pose_frames.find(frame);
     const int offset = std::get<0>(frame) - metadata_port_base;
-    if (world == world_pose_frames.end() || offset < 0 || offset >= num_ports) {
+    ++frames_2d[static_cast<std::size_t>(offset)];
+    const auto world = world_pose_frames.find(frame);
+    if (world == world_pose_frames.end()) {
       continue;
     }
     PortPairing found = PortPairing::kMatched;
     if (!paired_pose_content_matches(poses, world->second)) {
       found = PortPairing::kContentMismatch;
-    } else if (!video.has_correlated_timestamp(offset, std::get<1>(frame))) {
+    } else if (!has_video_pts(offset, std::get<1>(frame))) {
       found = PortPairing::kNoPtsMatch;
     } else {
       nonempty_pair = nonempty_pair || !poses.empty();
@@ -770,7 +780,9 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
     const std::string port = "metadata port " + std::to_string(metadata_port_base + offset);
     switch (pairing[static_cast<std::size_t>(offset)]) {
     case PortPairing::kNoPair:
-      error = port + " published no 2D/3D pair for one frame";
+      error = port + " published no 2D/3D pair for one frame (" +
+              std::to_string(frames_2d[static_cast<std::size_t>(offset)]) + " 2D and " +
+              std::to_string(frames_3d[static_cast<std::size_t>(offset)]) + " 3D frames)";
       return false;
     case PortPairing::kContentMismatch:
       error = port + " published 2D/3D pairs whose 2D and 3D poses differ";
@@ -786,6 +798,66 @@ bool validate_metadata(const MetadataJsonListenerResult& result, int metadata_po
     error = "no stream published a non-empty content-matched 2D/3D pair for one frame";
   }
   return nonempty_pair;
+}
+
+MetadataJsonMessage pose_message(int port, bool overlay, const nlohmann::json& pose) {
+  const std::string stream_id = "camera" + std::to_string(port - 9100);
+  nlohmann::json data = {{"stream_id", stream_id}};
+  if (overlay) {
+    data["poses"] = {pose};
+  } else {
+    data["id"] = "world-pose";
+    data["renderer"] = "blazepose-3d";
+    data["payload"] = {{"poses", {pose}}};
+  }
+  MetadataJsonMessage message;
+  message.port = port;
+  message.metadata_type = overlay ? "pose-estimation" : "auxiliary-visualization";
+  message.payload = nlohmann::json{{"data", data}}.dump();
+  message.frame_id = "1";
+  message.timestamp_ms = 1000;
+  return message;
+}
+
+// Two ports: port 9100 always publishes a matched pair, port 9101 each way of failing.
+bool test_metadata_validation_requires_every_port() {
+  const nlohmann::json overlay = {{"id", "pose_1"},
+                                  {"label", "person"},
+                                  {"presence", 0.9},
+                                  {"confidence", 0.8},
+                                  {"bbox", {1, 2, 3, 4}},
+                                  {"keypoints", body_points(false)},
+                                  {"world_keypoints", body_points(true)}};
+  const nlohmann::json auxiliary = {
+      {"id", "pose_1"}, {"presence", 0.9}, {"keypoints", body_points(true)}};
+  nlohmann::json other_auxiliary = auxiliary;
+  other_auxiliary["presence"] = 0.5;
+  const auto any_pts = [](int, int64_t) { return true; };
+  const auto pts_on_first_port = [](int offset, int64_t) { return offset == 0; };
+  const auto expect = [](const MetadataJsonListenerResult& result,
+                         const std::function<bool(int, int64_t)>& has_video_pts,
+                         const std::string& expected) {
+    std::string error;
+    const bool valid = validate_metadata(result, 9100, 2, has_video_pts, error);
+    return expected.empty() ? valid : !valid && error == expected;
+  };
+  MetadataJsonListenerResult result;
+  result.messages = {pose_message(9100, true, overlay), pose_message(9100, false, auxiliary)};
+  if (!expect(result, any_pts,
+              "metadata port 9101 published no 2D/3D pair for one frame (0 2D and 0 3D frames)")) {
+    return false;
+  }
+  result.messages.push_back(pose_message(9101, true, overlay));
+  result.messages.push_back(pose_message(9101, false, other_auxiliary));
+  if (!expect(result, any_pts,
+              "metadata port 9101 published 2D/3D pairs whose 2D and 3D poses differ")) {
+    return false;
+  }
+  result.messages.back() = pose_message(9101, false, auxiliary);
+  return expect(result, pts_on_first_port,
+                "metadata port 9101 published content-matched 2D/3D pairs with no video PTS "
+                "match") &&
+         expect(result, any_pts, "");
 }
 
 int run_case(const std::string& binary, const fs::path& detector, const fs::path& pose,
@@ -818,12 +890,28 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
     return 1;
   }
 
-  const ProcessResult process = spawn_and_wait(binary, {"--config", config.string()}, timeout_ms);
-  // The application has exited, so all its metadata is queued: read every port at once.
-  const MetadataJsonListenerResult metadata = listener.drain_pending();
-  std::string metadata_error = metadata.error;
+  // Read during the run, so no message waits long enough to overflow the socket buffer.
+  MetadataJsonListenerResult metadata;
+  const auto read_metadata = [&] {
+    // Once one port has a message, poll_messages returns after each datagram, so read until the
+    // sockets are empty.
+    (void)listener.poll_messages(metadata, 100);
+    while (listener.poll_messages(metadata, 0)) {
+    }
+    return false; // The application stops by itself after runtime.frames.
+  };
+  const ProcessResult process =
+      spawn_until(binary, {"--config", config.string()}, read_metadata, timeout_ms);
+  const MetadataJsonListenerResult rest = listener.drain_pending();
+  metadata.messages.insert(metadata.messages.end(), rest.messages.begin(), rest.messages.end());
+  std::string metadata_error = !metadata.error.empty() ? metadata.error : rest.error;
   if (metadata_error.empty()) {
-    validate_metadata(metadata, metadata_port_base, num_ports, video_listener, metadata_error);
+    (void)validate_metadata(
+        metadata, metadata_port_base, num_ports,
+        [&](int offset, int64_t timestamp_ms) {
+          return video_listener.has_correlated_timestamp(offset, timestamp_ms);
+        },
+        metadata_error);
   }
   const std::string exit_error = exit_problem(process);
   int result = 0;
@@ -865,6 +953,10 @@ int main(int argc, char** argv) {
   }
   if (!test_paired_pose_content_validation()) {
     std::cerr << "[FAIL] paired pose metadata content validation\n";
+    return 1;
+  }
+  if (!test_metadata_validation_requires_every_port()) {
+    std::cerr << "[FAIL] metadata validation of every configured port\n";
     return 1;
   }
   const auto env_path = [](const char* name, const fs::path& fallback) {
