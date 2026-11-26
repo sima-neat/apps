@@ -42,7 +42,7 @@ How does an image move through ssd-mobilenet-object-detector?
    └─────────────────┘   └──────────────────────┘
 ```
 
-The application reads the images one at a time with OpenCV and sends each through `runner.run`, the run that `model.build` creates from the first image. Neat stretches the image to the model's input size, normalizes it, runs the model, and decodes the boxes with `BoxDecodeType::Ssd`, which owns the SSD priors, class scoring, and non-maximum suppression. The application draws each image's boxes on a copy, saves it as a PNG under `output.dir`, and adds its boxes to the report at `app.detections_json`, unless that key is empty.
+The application reads the images one at a time with OpenCV and sends each through `runner.run`, the run that `model.build` creates from the first image. Neat stretches the image to the model's input size, normalizes it, runs the model, and decodes the boxes with `BoxDecodeType::Ssd`, which owns the SSD priors, class scoring, and non-maximum suppression. The application draws each image's boxes on a copy, saves it as a PNG under `output.dir`, and adds its boxes to the report at `app.detections_json` when that key names a path.
 
 The application supports TensorFlow's 300×300 SSD-MobileNet V1 and V2 models and normalizes each image as they were trained, to -1 to 1. A model trained with other statistics needs `normalize.mean` and `normalize.stddev` changed in `model_options`.
 
@@ -90,7 +90,7 @@ Open `${APP_DIR}/src/common/config.yaml`. It reads the downloaded model from `mo
 
 - `input.source`: the folder of images. The application processes every `.jpg`, `.jpeg`, `.png`, and `.bmp` file directly inside it, in file-name order, and does not search subfolders. The packaged `assets/datasets/coco` folder holds 21 images.
 - `output.dir`: the folder for the annotated PNGs, one per input image. Keep it apart from `input.source`.
-- `app.detections_json`: the JSON report with the class, label, score, and box of every detection. Set it to `""` to write no report.
+- `app.detections_json`: the path of a JSON report with the class, label, score, and box of every detection, such as `sandbox/ssd-mobilenet-object-detector.json`. The default `""` writes no report.
 
 ## Run
 
@@ -113,20 +113,20 @@ python3 ${APP_DIR}/src/python/main.py \
 ## Expected Result
 
 The application prints one line per image with the file it wrote and the number
-of objects found, then the report it wrote:
+of objects found, then how many images it processed:
 
 ```text
 [1/21] 000000081061.jpg -> 000000081061_jpg.png (3 detections)
 [2/21] 000000116439.jpg -> 000000116439_jpg.png (2 detections)
 [3/21] 000000129492.jpg -> 000000129492_jpg.png (3 detections)
 ...
-Done: 21 images processed, detections in sandbox/ssd-mobilenet-object-detector.json
+Done: 21 images processed
 ```
 
 `output.dir` then holds one annotated PNG per input image: 21 files for the
 packaged `assets/datasets/coco` folder. Both implementations print this format. With
-`app.detections_json: ""`, no report is written and the last line ends after
-`images processed`.
+`app.detections_json` set to a path, the report is written there and the last line ends with
+`, detections in <path>`.
 
 ## Troubleshooting
 
@@ -141,7 +141,7 @@ packaged `assets/datasets/coco` folder. Both implementations print this format. 
 - C++ reference source: `src/cpp/main.cpp`, and `src/cpp/utils/annotate.h` for the annotated images and the report
 - Python source: `src/python/main.py`, and `src/python/utils/annotate.py`
 - Shared config: `src/common/config.yaml`
-- Class labels: `src/common/coco_labels.txt`
+- Class labels: `support/labels/coco91.txt`, shared with the DETR examples
 - Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.

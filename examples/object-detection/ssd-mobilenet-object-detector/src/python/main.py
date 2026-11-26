@@ -23,7 +23,9 @@ else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
 from sima_examples.config import Config
+from sima_examples.detection_overlay import draw_detections
 from sima_examples.image_folder import image_paths
+from sima_examples.image_io import read_image
 from sima_examples.labels import load_labels
 from utils import annotate
 
@@ -59,13 +61,6 @@ def model_options(config: Config, num_classes: int, max_detections: int) -> pyne
     return options
 
 
-def read_image(path: Path) -> np.ndarray:
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError(f"cannot read image: {path}")
-    return image
-
-
 def image_tensor(image: np.ndarray) -> pyneat.Tensor:
     """An OpenCV image as a BGR tensor in EV74 memory, where the preprocessing reads it."""
     return pyneat.Tensor.from_numpy(
@@ -93,7 +88,7 @@ def annotate_images(
         image = read_image(path)
         boxes = detect(runner, image, max_detections)
         output_path = output_dir / annotate.output_name(path)
-        if not cv2.imwrite(str(output_path), annotate.draw_detections(image, boxes, labels)):
+        if not cv2.imwrite(str(output_path), draw_detections(image, boxes, labels)):
             raise OSError(f"cannot write {output_path}")
         records.append(annotate.detections_record(path, image, boxes, labels))
         print(f"[{index}/{len(paths)}] {path.name} -> {output_path.name} ({len(boxes)} detections)")
@@ -105,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     config = Config.load(args.config)
     # Used by both the model and the box decode.
     max_detections = config.integer("inference.max_detections")
-    # One label per class the model scores, background first, so they also give the class count.
+    # One label per class ID the model scores, so they also give the class count.
     labels = load_labels(Path(config.string("model.labels")))
     paths = image_paths(Path(config.string("input.source")))
     model_path = args.config.absolute().parent / config.string("model.path")

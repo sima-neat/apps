@@ -32,13 +32,12 @@ nlohmann::json load_json(const fs::path& path, std::string& err) {
   }
 }
 
-// An empty app.detections_json turns the report off: the run still saves one PNG per image and
-// writes no JSON file.
-bool test_empty_detections_json_writes_no_report(const std::string& binary,
-                                                 const std::string& model_path,
-                                                 const std::string& input_dir, int timeout) {
-  const std::string out_dir = create_test_output_dir("ssd-mobilenet-object-detector",
-                                                     "test_empty_detections_json_writes_no_report");
+// The shipped app.detections_json is empty: the run still saves one PNG per image and writes no
+// JSON file.
+bool test_shipped_config_writes_no_report(const std::string& binary, const std::string& model_path,
+                                          const std::string& input_dir, int timeout) {
+  const std::string out_dir =
+      create_test_output_dir("ssd-mobilenet-object-detector", "test_shipped_config_writes_no_report");
   if (out_dir.empty()) {
     return false;
   }
@@ -47,8 +46,7 @@ bool test_empty_detections_json_writes_no_report(const std::string& binary,
   write_e2e_config("ssd-mobilenet-object-detector", config_path,
                    {{"model.path", model_path},
                     {"input.source", input_dir},
-                    {"output.dir", out_dir},
-                    {"app.detections_json", ""}});
+                    {"output.dir", out_dir}});
   const auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
   std::string problem;
   if (r.exit_code != 0) {
@@ -58,18 +56,18 @@ bool test_empty_detections_json_writes_no_report(const std::string& binary,
   }
   for (const auto& entry : fs::recursive_directory_iterator(run_dir)) {
     if (problem.empty() && entry.path().extension() == ".json") {
-      problem = "an empty app.detections_json wrote " + entry.path().string();
+      problem = "the shipped config wrote " + entry.path().string();
     }
   }
   if (problem.empty() && r.stdout_text.find("detections in") != std::string::npos) {
-    problem = "an empty app.detections_json still names a report:\n" + r.stdout_text;
+    problem = "the shipped config still names a report:\n" + r.stdout_text;
   }
   remove_dir(out_dir);
   if (!problem.empty()) {
     std::cerr << "[FAIL] " << problem << "\n";
     return false;
   }
-  std::cout << "[OK] an empty app.detections_json wrote no report\n";
+  std::cout << "[OK] the shipped config wrote no report\n";
   return true;
 }
 
@@ -174,7 +172,7 @@ int main(int argc, char** argv) {
         const double y2 = box.at(3).get<double>();
         const double score = detection.at("score").get<double>();
         const int class_id = detection.at("class_id").get<int>();
-        // Class 0 is the background, which the SSD decoder never reports.
+        // Class 0 is the background, which the SSD decoder never reports (labelled N/A).
         if (!(0.0 <= x1 && x1 < x2 && x2 <= width && 0.0 <= y1 && y1 < y2 && y2 <= height &&
               min_score <= score && score <= 1.0 && class_id > 0 &&
               class_id < static_cast<int>(labels.size()) &&
@@ -201,6 +199,6 @@ int main(int argc, char** argv) {
             << " output files and " << detection_count << " valid detections\n";
 
   const bool report_off_ok =
-      test_empty_detections_json_writes_no_report(binary, model_path, input_dir, timeout);
+      test_shipped_config_writes_no_report(binary, model_path, input_dir, timeout);
   return report_off_ok ? 0 : 1;
 }

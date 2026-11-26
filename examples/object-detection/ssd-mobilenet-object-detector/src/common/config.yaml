@@ -2,9 +2,10 @@
 model:
   # Compiled model package; a relative path starts at this file.
   path: ../../../../../models/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
-  # Class labels, one per line, background first; a relative path starts at the working
+  # The 91 class IDs the SSD decoder scores, one label per line, N/A for the unused IDs (ID 0
+  # is the background, which the decoder never reports); a relative path starts at the working
   # directory.
-  labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt
+  labels: support/labels/coco91.txt
 
 input:
   source: assets/datasets/coco  # Folder of .jpg, .jpeg, .png, and .bmp images.
@@ -18,5 +19,5 @@ output:
   dir: sandbox/ssd-mobilenet-object-detector  # Folder for the annotated PNGs.
 
 app:
-  # JSON report of every image's boxes; "" writes no report.
-  detections_json: sandbox/ssd-mobilenet-object-detector.json
+  # Path of a JSON report of every image's boxes; "" writes no report.
+  detections_json: ""

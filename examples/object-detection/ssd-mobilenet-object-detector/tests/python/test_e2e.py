@@ -45,7 +45,7 @@ def _assert_valid_detections(report, expected_images, labels, min_score):
             assert 0 <= x1 < x2 <= width
             assert 0 <= y1 < y2 <= height
             assert min_score <= detection["score"] <= 1
-            # Class 0 is the background, which the SSD decoder never reports.
+            # Class 0 is the background, which the SSD decoder never reports (labelled N/A).
             assert 0 < detection["class_id"] < len(labels)
             assert detection["label"] == labels[detection["class_id"]]
     assert detection_count > 0, "expected at least one decoded detection"
@@ -92,7 +92,7 @@ class TestE2E:
             reported, expected_images, labels, config["inference"]["min_score"]
         )
 
-    def test_empty_detections_json_writes_no_report(
+    def test_shipped_config_writes_no_report(
         self,
         e2e_model_path,
         test_images_dir,
@@ -101,7 +101,7 @@ class TestE2E:
         skip_unless_e2e_ready,
         e2e_config_writer,
     ):
-        """An empty app.detections_json turns the report off; the annotated PNGs are still saved."""
+        """The shipped app.detections_json is empty, so no report is written; the PNGs are saved."""
         skip_unless_e2e_ready(
             test_images_dir.exists() and bool(supported_image_files(test_images_dir)),
             f"test_images_dir has no images to process: {test_images_dir}",
@@ -111,7 +111,6 @@ class TestE2E:
             {
                 "input": {"source": str(test_images_dir)},
                 "output": {"dir": str(tmp_output_dir)},
-                "app": {"detections_json": ""},
             }
         )
         result = run_example(config_path, test_timeout_ms)
@@ -122,5 +121,5 @@ class TestE2E:
         )
         assert_saved_frames_are_usable(tmp_output_dir, len(supported_image_files(test_images_dir)))
         written = sorted(tmp_output_dir.parent.rglob("*.json"))
-        assert not written, f"an empty app.detections_json wrote {written}"
+        assert not written, f"the shipped config wrote {written}"
         assert "detections in" not in result.stdout, result.stdout
