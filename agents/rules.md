@@ -115,6 +115,12 @@ Place each piece of code by the first question it answers yes to:
 - Repository files name no Core commit. Name the Core release, such as `Neat Core 0.6.0 or
   newer`, or the Core issue, such as `core#1081`, because a commit hash tells a reader nothing
   and goes stale.
+- Files, pull request text, and review comments name no specific machine: no board, host,
+  or Insight IP address or hostname, no lab or site name, and no home directory or local
+  path of one person's machine, such as `/Users/<name>` or `~/py-extra`. Code and configs
+  read these values from the config or the command line, and docs and logs write a
+  placeholder, such as `<board-ip>`, `<insight-host>`, or `<path>`, because each reader's
+  values differ and the repository is public.
 - The repository is public. It holds source, docs, and shipped assets only: credentials,
   customer information, internal material, agent plans, scratch notes, and build or runtime
   artifacts stay elsewhere.

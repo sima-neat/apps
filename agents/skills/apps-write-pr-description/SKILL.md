@@ -98,8 +98,9 @@ Refs #<issue>, #<issue>
 - The last line names every linked issue as `Refs #<issue>`, or `Closes #<issue>` for an issue
   the merge finishes. PR sanitization fails a description without one, and a bare `(#770)`
   does not count.
-- Omit AI attribution, internal hostnames, private links, board addresses, and customer
-  information. The repository is public.
+- Omit AI attribution, private links, and customer information, and name no specific
+  machine, as `agents/rules.md` "Documentation and publication" says. The repository is
+  public.
 
 ## Writing
 
