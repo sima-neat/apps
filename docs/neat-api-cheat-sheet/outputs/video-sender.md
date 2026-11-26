@@ -147,6 +147,15 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 
 ## Pitfalls
 
+- **MJPEG sides must be multiples of 8, up to 2040.** RTP/JPEG carries each
+  side in 8-pixel units. With MJPEG, `Passthrough` and `FromRaw` fail on other
+  sizes. When the size is known at build and the Scheduler provides
+  `neatjpegudpsink`, the build fails with `VideoSender MJPEG: RTP/JPEG carries
+  widths and heights in multiples of 8 up to 2040`. RTSP MJPEG passthrough
+  always fits, because the source sends RTP/JPEG too: on a DevKit with Core
+  0.6.2, a 1276 × 716 RTSP source arrived as 1280 × 720 and passed
+  the capsfilter `n<index>_rtp_jpeg_dimensions`. Fix: use a camera mode or a
+  frame size such as 1280 × 720 or 1920 × 1080.
 - **Encoder settings on MJPEG.** `FromRaw` throws `SimaEncode: MJPEG does not
   accept bitrate, rate control, profile, level, GOP or IDR settings` when one
   of them is set. Changing `encoder.*` after `FromRaw` with MJPEG throws
@@ -179,4 +188,6 @@ marked "not set" are `std::optional` in C++ and `None` in Python.
 
 - C++ headers: `include/nodes/groups/VideoSender.h`, `include/nodes/sima/SimaEncode.h`, `include/nodes/io/UdpOutput.h`, `include/nodes/groups/RtspCodec.h`
 - Python binding: `python/src/module.cpp`, `VideoSenderOptions`, `VideoSenderRtpOptions`, `VideoSenderEncoderOptions`, `SimaEncodeOptions`, `SimaEncodeType`, `RtspCodec`, `UdpOutputOptions`, `groups.video_sender`, `nodes.sima_encode`, `nodes.udp_output`
-- Core commit: `3f8b8d04`
+- The MJPEG size check: `src/nodes/io/internal/JpegRtpUdpSink.cpp` (the build
+  error only for a sized input, and the running caps filter), and
+  `src/nodes/groups/RtspEncodedInput.cpp` (the MJPEG path, which sets no size).

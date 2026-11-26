@@ -226,7 +226,8 @@ The nano detector's MJPEG figure was measured with the video sent to Insight as 
 
 - C++ reference source: `src/cpp/main.cpp`, with the postprocessing in `src/cpp/utils/postprocess.cpp`
 - Python implementation: `src/python/main.py`, with the postprocessing in `src/python/utils/postprocess.py`
-- Shared configuration and COCO labels: `src/common/`
+- Shared configuration: `src/common/config.yaml`
+- Class labels: `support/labels/coco91.txt` in `prebuilt-apps/`, shared with the other examples that score the same classes
 - Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.

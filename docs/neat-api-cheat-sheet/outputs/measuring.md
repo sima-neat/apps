@@ -299,4 +299,3 @@ Not used in Apps. No shipped example uses `MeasureOptions`, `MeasureScope`,
   `pyneat.MeasurePluginLatency`, `pyneat.advanced.MetricsTraceSource`,
   `pyneat.advanced.MeasureEdgeLatency`, `pyneat.advanced.MeasurePathTiming`,
   `pyneat.TelemetryMonitor`, `pyneat.Telemetry`, `pyneat.TelemetryStats`
-- Core commit: `3f8b8d04`

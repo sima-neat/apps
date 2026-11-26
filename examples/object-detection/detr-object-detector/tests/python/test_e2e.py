@@ -34,7 +34,7 @@ class TestE2E:
         )
 
         config_path = e2e_config_writer(
-            {"io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)}}
+            {"input": {"source": str(test_images_dir)}, "output": {"dir": str(tmp_output_dir)}}
         )
         result = subprocess.run(
             [
@@ -83,7 +83,7 @@ class TestE2E:
         assert cv2.imwrite(str(input_dir / "photo_4032x3024.jpg"), photo)
 
         config_path = e2e_config_writer(
-            {"io": {"input_dir": str(input_dir), "output_dir": str(tmp_output_dir)}}
+            {"input": {"source": str(input_dir)}, "output": {"dir": str(tmp_output_dir)}}
         )
         result = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", str(config_path)],

@@ -248,6 +248,7 @@ README validation, catalog generation, and affected CI workflows.
 | `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
 | `support/README.md` | What each shared helper does |
+| `support/labels/` | Class-label files two or more examples' configs name |
 | `support/python/` | Helpers the Python examples share |
 | `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
@@ -264,7 +265,7 @@ to compile source or run the Apps test suite.
 | --- | --- |
 | `examples/` | Application examples organized by category |
 | `examples/config-keys.yaml` | Config keys the examples share, checked by `tests/scripts/test_config_keys.py` |
-| `support/` | The shared library: code two or more examples need, under the same file and function names in each language. `support/README.md` lists the modules, and `agents/rules.md` says what goes there instead of an example's `utils/` |
+| `support/` | The shared library: code two or more examples need, under the same file and function names in each language, and in `support/labels/` the label files they share. `support/README.md` lists the modules and label files, and `agents/rules.md` says what goes there instead of an example's `utils/` or `src/common/` |
 | `skills/` | Customer skills that sima-cli installs |
 | `agents/` | Rules and skills for contributors' agents and the automatic review |
 | `assets/datasets/` | Runtime datasets shipped with Apps |

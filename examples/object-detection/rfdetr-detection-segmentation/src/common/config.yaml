@@ -2,7 +2,7 @@
 model:
   id: det-small                 # Variant in model.path: det-nano, det-small, det-medium, det-large, seg-nano, seg-small, or seg-medium.
   path: ../../../../../models/rf_detr_small/w8a8_mixed_w16a16/rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz  # Backbone package; its *_decoder_mpk.tar.gz must sit next to it. Relative paths start at this file.
-  labels: examples/object-detection/rfdetr-detection-segmentation/src/common/coco-labels.txt  # Relative to the working directory.
+  labels: support/labels/coco91.txt  # The 91 COCO class IDs, N/A for the unused IDs; relative to the working directory.
 
 input:
   source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # RTSP URL of the stream.
