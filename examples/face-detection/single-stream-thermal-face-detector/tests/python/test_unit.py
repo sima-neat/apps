@@ -1,7 +1,5 @@
-"""Unit tests for the thermal face detector: the checks the application leaves to its config,
-and the yolov5s-face decode in utils/yolov5_face.py. tests/cpp/test_unit.cpp runs the same
-checks in C++.
-"""
+"""The checks the application leaves to its config, and the yolov5s-face decode. Mirrored by
+tests/cpp/test_unit.cpp."""
 
 from __future__ import annotations
 

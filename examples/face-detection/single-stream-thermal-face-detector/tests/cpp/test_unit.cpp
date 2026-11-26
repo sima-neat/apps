@@ -1,6 +1,5 @@
-// Unit tests for the thermal face detector: the checks the application leaves to its config, and
-// the yolov5s-face decode in utils/yolov5_face.h. tests/python/test_unit.py runs the same checks
-// in Python.
+// The checks the application leaves to its config, and the yolov5s-face decode. Mirrored by
+// tests/python/test_unit.py.
 
 #include "../../src/cpp/utils/yolov5_face.h"
 #include "sima_examples/config.h"

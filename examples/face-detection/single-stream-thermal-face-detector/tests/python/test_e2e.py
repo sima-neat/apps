@@ -1,9 +1,5 @@
-"""End-to-end test: the RTSP stream's faces reach Insight as pose-estimation metadata, next to
-H.264 video that the metadata's timestamps pair with.
-
-Local UDP listeners stand in for Insight, so only an RTSP H.264 source
-(SIMANEAT_TEST_RTSP_H264_URL) and the model are needed.
-"""
+"""The stream's faces reach Insight as pose-estimation metadata that pairs with its H.264 video.
+Local UDP listeners stand in for Insight, so it needs only the RTSP H.264 URL and the model."""
 
 from __future__ import annotations
 

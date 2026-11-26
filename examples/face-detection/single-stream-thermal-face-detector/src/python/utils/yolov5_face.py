@@ -1,10 +1,5 @@
-"""The yolov5s-face decode: faces with five landmarks from the model's six raw split heads, and
-the Insight pose message that carries them. Mirrors src/cpp/utils/yolov5_face.h.
-
-The model emits, at three pyramid levels, a box head of 18 channels (3 anchors x box, object
-score, class score) and a landmark head of 30 channels (3 anchors x 5 landmarks x 2). Neat's
-BBOX format has no landmark slots, so the decode runs here instead of in a Neat box decode.
-"""
+"""Faces with five landmarks from yolov5s-face's six raw heads, and their Insight pose message.
+Neat's BBOX format has no landmark slots, so the decode runs here. Mirrors utils/yolov5_face.h."""
 
 from __future__ import annotations
 

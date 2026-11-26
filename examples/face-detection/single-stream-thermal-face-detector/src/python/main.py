@@ -1,9 +1,4 @@
-"""Detect faces and their five landmarks in one thermal RTSP stream with yolov5s-face, shown in
-Insight.
-
-The H.264 stream goes to Insight as received, and its decoded frames feed the model. The model's
-six raw heads are decoded on the host, and Insight receives every frame's faces as a pose overlay.
-"""
+"""Detect faces and five landmarks in a thermal RTSP stream with yolov5s-face, shown in Insight."""
 
 from __future__ import annotations
 
@@ -50,7 +45,6 @@ def model_options() -> pyneat.ModelOptions:
 
 
 def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedInputOptions:
-    """Receive the H.264 stream, encoded."""
     options = pyneat.RtspEncodedInputOptions()
     options.url = config.string("input.source")
     options.tcp = config.boolean("input.rtsp.tcp")
@@ -62,7 +56,6 @@ def rtsp_options(config: Config, stream: RtspStreamInfo) -> pyneat.RtspEncodedIn
 
 
 def decoder_graph(stream: RtspStreamInfo) -> pyneat.Graph:
-    """Hardware decode of the H.264 stream to NV12 frames of the stream's size and rate."""
     decode = pyneat.SimaDecodeOptions()
     decode.dec_width = stream.width
     decode.dec_height = stream.height
@@ -73,7 +66,6 @@ def decoder_graph(stream: RtspStreamInfo) -> pyneat.Graph:
 
 
 def detector_graph(model: pyneat.Model) -> pyneat.Graph:
-    """Decoded frames -> model -> "detections" output."""
     graph = pyneat.Graph("detector")
     graph.add(model.graph())
     graph.add(pyneat.nodes.output("detections"))
@@ -81,7 +73,6 @@ def detector_graph(model: pyneat.Model) -> pyneat.Graph:
 
 
 def video_options(config: Config) -> pyneat.VideoSenderOptions:
-    """The H.264 stream goes to Insight as received."""
     options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.H264)
     options.host = config.string("output.insight.host")
     options.video_port_base = config.integer("output.insight.video_port_base")
@@ -103,7 +94,6 @@ def run_options() -> pyneat.RunOptions:
 
 
 def split_heads(sample: pyneat.Sample) -> list:
-    """The model's output tensors as numpy views, from a Tensor, TensorSet, or Bundle sample."""
     # Core candidate: tensors_from_sample is not bound in Python, so the example walks the
     # sample itself.
     if sample.kind == pyneat.SampleKind.Tensor:

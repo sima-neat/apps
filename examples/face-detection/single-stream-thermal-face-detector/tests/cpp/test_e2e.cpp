@@ -1,7 +1,5 @@
-// End-to-end test: the RTSP stream's faces reach Insight as pose-estimation metadata, next to
-// H.264 video that the metadata's timestamps pair with, and the application stops cleanly when
-// interrupted. Local UDP listeners stand in for Insight, so only an RTSP H.264 source
-// (SIMANEAT_TEST_RTSP_H264_URL) and the model are needed.
+// The stream's faces reach Insight as pose-estimation metadata that pairs with its H.264 video,
+// and the application stops cleanly when interrupted. Local UDP listeners stand in for Insight.
 #include "sima_examples/labels.h"
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/test_config.h"
@@ -160,10 +158,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // The application runs until stopped (frames = 0). Once the listener has a verdict,
-  // the metadata it asked for or a datagram that was not valid metadata, the harness
-  // interrupts the application and the result carries how it shut down; the shipped
-  // config's finite run is the Python suite's.
+  // The application runs until stopped (frames = 0): once the listener has a verdict, the harness
+  // interrupts it and checks how it shut down. The Python suite covers a finite run.
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   MetadataJsonListenerResult metadata;
   std::atomic<bool> stop{false};

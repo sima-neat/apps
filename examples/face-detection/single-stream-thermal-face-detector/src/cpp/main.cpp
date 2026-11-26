@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Detects faces and their five landmarks in one thermal RTSP stream with yolov5s-face, shown in
-// Insight. The H.264 stream goes to Insight as received, and its decoded frames feed the model.
-// The model's six raw heads are decoded on the host, and Insight receives every frame's faces as
-// a pose overlay.
+// Detects faces and five landmarks in a thermal RTSP stream with yolov5s-face, shown in Insight.
 
 #include "neat.h"
 #include "sima_examples/config.h"
@@ -71,7 +68,6 @@ neat::Model::Options model_options() {
   return options;
 }
 
-// Receive the H.264 stream, encoded.
 groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config,
                                              const sima_examples::RtspStreamInfo& stream) {
   groups::RtspEncodedInputOptions options;
@@ -84,7 +80,6 @@ groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config
   return options;
 }
 
-// Hardware decode of the H.264 stream to NV12 frames of the stream's size and rate.
 neat::Graph decoder_graph(const sima_examples::RtspStreamInfo& stream) {
   neat::SimaDecodeOptions decode;
   decode.dec_width = stream.width;
@@ -95,7 +90,6 @@ neat::Graph decoder_graph(const sima_examples::RtspStreamInfo& stream) {
   return graph;
 }
 
-// Decoded frames -> model -> "detections" output.
 neat::Graph detector_graph(neat::Model& model) {
   neat::Graph graph("detector");
   graph.add(model.graph());
@@ -103,7 +97,6 @@ neat::Graph detector_graph(neat::Model& model) {
   return graph;
 }
 
-// The H.264 stream goes to Insight as received.
 groups::VideoSenderOptions video_options(const sima_examples::Config& config) {
   auto options = groups::VideoSenderOptions::Passthrough(groups::RtspCodec::H264);
   options.host = config.string("output.insight.host");
@@ -125,7 +118,6 @@ neat::RunOptions run_options() {
   return options;
 }
 
-// The model's output tensors as float split heads, from a Tensor, TensorSet, or Bundle sample.
 std::vector<yolov5_face::SplitHead> split_heads(const neat::Sample& sample) {
   std::vector<yolov5_face::SplitHead> heads;
   for (const neat::Tensor& tensor : neat::tensors_from_sample(sample)) {
@@ -220,7 +212,7 @@ int run_app(const fs::path& config_path) {
                                    config.integer("inference.frames"), stop);
   run.close();
 
-  // std::endl flushes: single-stream-object-detector found these lines lost on a pipe without it.
+  // Core candidate: the process exits without flushing stdout after an RTSP run, so std::endl does.
   std::cout << "processed=" << processed << " video_sender=" << host << ":" << video_port
             << std::endl;
   const auto failures = metadata_sender.stats().send_failures;
