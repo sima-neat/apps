@@ -141,7 +141,7 @@ source=rtsp://<host>:<port>/<stream> codec=h264 stream=720x720@30 map=256x256 in
 processed=1080 flagged=474 video_sender=<insight-host-ip>:9000
 ```
 
-In the Insight viewer, defective discs show a red outline labelled `anomaly` and good discs show none. The closing line counts the frames processed and the frames with a defect, and prints after Ctrl-C too. When the nonblocking metadata sender dropped messages because the socket buffer was full, a further line counts them.
+In the Insight viewer, each defect is outlined and labelled `anomaly` with its highest probability, such as `anomaly (81%)` on a scratch. The closing line counts the frames processed and the frames with a defect, and prints after Ctrl-C too. When the nonblocking metadata sender dropped messages because the socket buffer was full, a further line counts them.
 
 ## Troubleshooting
 
