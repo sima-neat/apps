@@ -58,7 +58,8 @@ Python
 ```python
 sample = run.pull("detections", 50)
 if sample is None:
-    # None means timed out or closed. With one output, can_pull() tells which.
+    # None means timed out or closed. With one output, can_pull() tells which on a Core
+    # with core#1431. On Core 0.6.2 it stays true, so a clean end of stream is not seen.
     if not run.can_pull():
         raise RuntimeError(f"output closed: {run.last_error()}")
     return
