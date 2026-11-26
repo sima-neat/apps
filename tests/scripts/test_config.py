@@ -100,7 +100,7 @@ def test_mapping_list_errors_name_the_entry_and_field(tmp_path):
     assert str(error.value) == f"{tmp_path / 'config.yaml'} is missing model[1].labels"
     with pytest.raises(ValueError) as error:
         entries[1].string("id")
-    assert str(error.value) == "model[1].id must be a string, got 5"
+    assert str(error.value) == "model[1].id must be a string, got '5'"
     with pytest.raises(ValueError) as error:
         entries[0].choice("id", {"yolo26": 26})
     assert str(error.value) == "model[0].id: unknown value 'yolov8' (expected yolo26)"
