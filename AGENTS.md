@@ -45,6 +45,7 @@ with `sima-`, because Claude Code lets a personal skill of the same name hide a 
 |---|---|
 | write or review example code | [agents/coding-style.md](agents/coding-style.md) |
 | place code, name config keys, register tests, package, or publish | [agents/rules.md](agents/rules.md) |
+| write or check the wording of any text a person or agent reads | [agents/references/writing.md](agents/references/writing.md) |
 | draw or review an example's graph topology | [agents/references/flowgraph.md](agents/references/flowgraph.md) |
 | use, set, or change a Core API in an example | its page in the [cheat sheet](docs/neat-api-cheat-sheet/README.md), checked as [Skills and cheat sheet](agents/rules.md#skills-and-cheat-sheet) says |
 | change `skills/` or the cheat sheet, or judge whether a change should | [Skills and cheat sheet](agents/rules.md#skills-and-cheat-sheet) |
