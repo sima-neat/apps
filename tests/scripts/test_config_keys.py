@@ -46,7 +46,6 @@ PENDING_EXAMPLES = {
     "single-stream-instance-segmenter",
     "single-stream-thermal-face-detector",
     "ssd-mobilenet-object-detector",
-    "yolo26-object-detector",
 }
 
 

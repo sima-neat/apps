@@ -1,19 +1,18 @@
-model:                       # Detector model selection.
-  path: <model-path>         # Example: models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
-  labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
+# YOLO26 object detection of a folder of images, saved as annotated PNGs.
+model:
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
+  # The 80 COCO classes YOLO26 scores, one label per line in class ID order; a relative path
+  # starts at the working directory.
+  labels: support/labels/coco80.txt
 
-io:                          # Input and output paths.
-  input_dir: assets/datasets/coco                 # Folder containing input images.
-  output_dir: sandbox/yolo26-object-detector    # Folder for annotated images.
+input:
+  source: assets/datasets/coco  # Folder of .jpg, .jpeg, .png, and .bmp images.
 
-decode:                      # YOLO decode settings.
-  score_threshold: 0.40      # Minimum object confidence.
-  nms_iou: 0.60              # Overlap threshold for NMS.
-  max_detections: 50         # Max detections to keep per image.
+inference:
+  min_score: 0.40               # Lowest score a detection needs.
+  nms_iou: 0.60                 # Overlap above which the weaker of two same-class boxes is dropped.
+  max_detections: 50            # Boxes kept per image.
 
-runtime:                     # Runtime settings.
-  num_runs: 1                # Number of repeated runs.
-  profile: false             # Print profiling summaries.
-
-output:                      # Output rendering settings.
-  overlay: true              # Draw boxes and labels on output images.
+output:
+  dir: sandbox/yolo26-object-detector  # Folder for the annotated PNGs.
