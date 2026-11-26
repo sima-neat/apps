@@ -193,8 +193,8 @@ YAML_CPP_SOURCE_URL=/absolute/path/0.8.0.tar.gz ./build.sh --clean
 ```
 
 `FETCHCONTENT_SOURCE_DIR_YAML_CPP` takes the unpacked folder (absolute path)
-instead. Set both as environment variables, because `build.sh` rejects `-D`
-options.
+instead. Set either one as an environment variable, because `build.sh` rejects
+`-D` options.
 
 `build.sh` does not run tests. To fetch one example without cloning the
 repository:
