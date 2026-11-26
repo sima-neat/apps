@@ -36,7 +36,6 @@ PENDING_EXAMPLES = {
     "mipi-multi-model",
     "multi-stream-blazepose3d",
     "multi-stream-multi-model",
-    "multi-stream-obb-detector",
     "multi-stream-object-detector",
     "multi-stream-pose-estimator",
     "multi-stream-tracker",
@@ -46,7 +45,6 @@ PENDING_EXAMPLES = {
     "pcie-high-density-multi-stream-object-detector",
     "single-stream-instance-segmenter",
     "single-stream-thermal-face-detector",
-    "superpoint-feature-extractor",
     "yolo26-object-detector",
     "yolo26-tiny-drone-tracker",
 }

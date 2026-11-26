@@ -86,4 +86,3 @@ Complete flow: [pcie-high-density-multi-stream-object-detector](../../../example
 
 - C++ header: `include/nodes/sima/PCIeSrc.h` (`PCIeSrcOptions`, `PCIeSrc`), `include/pipeline/Graph.h` (`Graph::connect` with an output name)
 - Python binding: `python/src/module.cpp`, `PCIeSrcOptions`, `nodes.pcie_src`
-- Core commit: `b1f9556c`

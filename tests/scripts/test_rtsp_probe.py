@@ -14,7 +14,7 @@ sys.path.insert(0, str(APPS_ROOT / "support" / "python"))
 sys.modules.setdefault("cv2", types.ModuleType("cv2"))
 
 from sima_examples import rtsp_probe
-from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
+from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info, probe_rtsp_streams
 
 URL = "rtsp://source/stream"
 
@@ -59,3 +59,37 @@ def test_unknown_value_names_the_key_to_set(monkeypatch, reported, message):
     monkeypatch.setattr(rtsp_probe, "_read_stream_info", lambda url, tcp: reported)
     with pytest.raises(RuntimeError, match=message):
         probe_rtsp_stream_info(URL, True)
+
+
+def test_streams_keep_their_order_and_each_url_is_probed_once(monkeypatch):
+    other = "rtsp://source/other"
+    rates = {URL: 30, other: 25}
+    calls = []
+
+    def read_stream_info(url, tcp):
+        calls.append(url)
+        return RtspStreamInfo(640, 512, rates[url])
+
+    monkeypatch.setattr(rtsp_probe, "_read_stream_info", read_stream_info)
+    streams = probe_rtsp_streams([other, URL, other], True)
+    assert [stream.fps for stream in streams] == [25, 30, 25]
+    assert calls == [other, URL]
+
+
+def test_streams_of_another_frame_size_name_both_urls(monkeypatch):
+    small = "rtsp://source/small"
+    sizes = {URL: RtspStreamInfo(1280, 720, 30), small: RtspStreamInfo(640, 512, 30)}
+    calls = []
+
+    def read_stream_info(url, tcp):
+        calls.append(url)
+        return sizes[url]
+
+    monkeypatch.setattr(rtsp_probe, "_read_stream_info", read_stream_info)
+    with pytest.raises(
+        ValueError,
+        match=f"same frame size.*{URL} is 1280x720, {small} is 640x512",
+    ):
+        probe_rtsp_streams([URL, small, "rtsp://source/unprobed"], True)
+    # The C++ probe stops at the first stream of another size too.
+    assert calls == [URL, small]

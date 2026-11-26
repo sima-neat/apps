@@ -12,6 +12,12 @@ setup belongs to the Insight documentation or the installed Insight skill.
 - `VideoSenderOptions::Passthrough(codec)` forwards encoded H.264, H.265, or MJPEG without
   re-encoding. Pass the `RtspCodec` the source uses, the same one as
   `RtspEncodedInputOptions::codec`. Insight plays MJPEG in releases after v0.0.8.
+- MJPEG goes out as RTP/JPEG, so each side must be a multiple of 8, at most 2040 pixels, such
+  as 1280x720. Another size fails the sender, with `Passthrough` and `FromRaw` alike. When the
+  sender's input has a size at build, as decoded frames do, the build throws
+  `VideoSender MJPEG: RTP/JPEG carries widths and heights in multiples of 8 up to 2040`. RTSP
+  MJPEG input always fits, because the source sends RTP/JPEG too: a 1276x716 RTSP source
+  reaches the application as 1280x720.
 - `VideoSenderOptions::FromRaw(SimaEncodeOptions{...})` encodes decoded frames at their input
   resolution, as H.264 by default. It replaces the deprecated `H264RtpUdpFromRaw`.
 - Set `host`, `channel`, and `video_port_base`. The sender uses port `video_port_base + channel`,
@@ -47,6 +53,9 @@ setup belongs to the Insight documentation or the installed Insight skill.
   - Report the drop count when the run ends, as both reference examples do.
 - A message larger than 1200 bytes is split into chunks that the receiving Insight version
   must reassemble. One message holds at most 65507 bytes.
+- **Loose points,** such as feature points: send them as the keypoints of one `pose-estimation`
+  pose, `{"poses": [{"keypoints": [{"x": 120, "y": 80}, ...]}]}`. Without joint names and
+  confidences, Insight draws only dots, with no skeleton and no box.
 
 ### Box overlay payload
 
@@ -73,6 +82,15 @@ setup belongs to the Insight documentation or the installed Insight skill.
 
 Oriented-box decoders emit `BBOX_OBB_V1`, which the axis-aligned `SimaRender` rejects. Draw
 oriented boxes in application code or send them as metadata.
+
+## Result lines on stdout
+
+- Once Core starts GStreamer, it forwards stdout and stderr through a detached thread, unless
+  `SIMA_GST_SUPPRESS_DEVICE_LOGS=0` is set. When stdout is a pipe or a file, a line still in the
+  stdout buffer at exit can be lost, and the exit code is still 0.
+- Flush each result line when you print it: `std::endl` in C++, `print(..., flush=True)` in
+  Python. This narrows the race but does not close it, so a test that reads the last lines can
+  still miss them. `src/gst/GstInit.cpp` (`start_stdio_filter`) holds the forwarding.
 
 ## Local display
 

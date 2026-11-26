@@ -35,8 +35,10 @@ each finding cites the owning file and section.
   language, one config, and at most one controller or UI.
 - **Simplest form:** every helper, abstraction, dependency, graph, process, and compatibility
   path has a stated reason. Ask whether the same behavior needs fewer parts.
-- **Code:** the entrypoints follow `agents/coding-style.md`, and every piece of code sits where
-  `agents/rules.md` "Where code goes" places it.
+- **Code:** the entrypoints, `utils/`, and tests follow `agents/coding-style.md`, and every
+  piece of code sits where `agents/rules.md` "Where code goes" places it. Report each comment
+  that restates the code, runs past two lines, or carries evidence that belongs in the pull
+  request or the cheat sheet.
 - **Behavior:** the example meets `agents/rules.md` "Behavior": matched languages, Insight for
   real-time visualization, and measured performance changes.
 - **Config:** keys follow `agents/rules.md` "Config keys". Compare each key the change adds

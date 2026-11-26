@@ -311,4 +311,3 @@ change them.
   `Model.fragment`, `Model.backend_fragment`, `Model.build_with_route_options`,
   `Model.execution_plan`, `groups.mla`, `QuantTessOptions`,
   `DetessDequantOptions`, `nodes.quant_tess` and `nodes.detess_dequant`
-- Core commit: `6ed16525`
