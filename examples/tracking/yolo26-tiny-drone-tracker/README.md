@@ -23,7 +23,7 @@ How does a frame move through yolo26-tiny-drone-tracker?
 ┆ RUN                                                                       ┆
 ┆  ┌──────────────────────────┐  encoded frames     ┌──────────────────┐    ┆
 ┆  │ RtspEncodedInput × N     │────────────────────►│ VideoSender × N  │────┼─────┐
-┆  └──────────────────────────┘  latest/stream      └──────────────────┘    ┆     │
+┆  └──────────────────────────┘                     └──────────────────┘    ┆     │
 ┆             │ encoded frames                                              ┆     │ video
 ┆             ▼                                                             ┆     │
 ┆  ┌──────────────────────────┐                                             ┆     │
@@ -54,7 +54,8 @@ How does a frame move through yolo26-tiny-drone-tracker?
 Each stream's encoded video goes to Insight as received, on its own channel, while its decoder feeds the shared model.
 The link to the model keeps the latest frames of each stream.
 When the model falls behind, a stream drops frames instead of slowing the others.
-When a video sender falls behind, its stream drops encoded frames, and the video in Insight may break up until the next keyframe.
+The link to the video sender sends every encoded frame, so each tracking message has its frame in Insight.
+A video sender that falls behind can hold back its stream's decoder and slow that stream's results.
 The application pulls each frame's boxes, and the stream's `ObjectTracker` gives every drone an ID that lasts across frames.
 Each tracking message carries the frame's timestamp, so Insight draws the tracks on the frame they came from.
 Insight colors each track by its ID and draws its trail.

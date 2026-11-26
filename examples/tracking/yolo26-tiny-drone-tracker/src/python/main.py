@@ -133,13 +133,6 @@ def detector_link(index: int) -> pyneat.GraphLinkOptions:
     return link
 
 
-def video_link() -> pyneat.GraphLinkOptions:
-    """Send the newest encoded frame, so a slow video sender cannot hold back the decoder."""
-    link = pyneat.GraphLinkOptions()
-    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    return link
-
-
 def video_options(config: Config, index: int) -> pyneat.VideoSenderOptions:
     """Send the encoded stream to Insight unchanged, on video port base + index."""
     options = pyneat.VideoSenderOptions.passthrough(config.choice("input.codec", RTSP_CODECS))
@@ -286,7 +279,8 @@ def main(argv: list[str] | None = None) -> int:
         # after it until the next keyframe.
         graph.connect(rtsp, decoder)
         graph.connect(decoder, detector, detector_link(index))
-        graph.connect(rtsp, pyneat.groups.video_sender(video_options(config, index)), video_link())
+        # A plain link sends Insight every encoded frame, so each tracking message has its frame.
+        graph.connect(rtsp, pyneat.groups.video_sender(video_options(config, index)))
         metadata_senders.append(pyneat.MetadataSender(metadata_options(config, index)))
         trackers.append(tracker.ObjectTracker(tracker_settings(config), stream.fps))
         print(

@@ -159,13 +159,6 @@ neat::GraphLinkOptions detector_link(int index) {
   return link;
 }
 
-// Send the newest encoded frame, so a slow video sender cannot hold back the decoder.
-neat::GraphLinkOptions video_link() {
-  neat::GraphLinkOptions link;
-  link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
-  return link;
-}
-
 // Send the encoded stream to Insight unchanged, on video port base + index.
 groups::VideoSenderOptions video_options(const sima_examples::Config& config, int index) {
   auto options = groups::VideoSenderOptions::Passthrough(config.choice("input.codec", kRtspCodecs));
@@ -318,7 +311,8 @@ int run_app(const fs::path& config_path) {
     // until the next keyframe.
     graph.connect(rtsp, decoder);
     graph.connect(decoder, detector, detector_link(index));
-    graph.connect(rtsp, groups::VideoSender(video_options(config, index)), video_link());
+    // A plain link sends Insight every encoded frame, so each tracking message has its frame.
+    graph.connect(rtsp, groups::VideoSender(video_options(config, index)));
     std::string error;
     metadata_senders.emplace_back(metadata_options(config, index), &error);
     sima_examples::require(metadata_senders.back().ok(), error);

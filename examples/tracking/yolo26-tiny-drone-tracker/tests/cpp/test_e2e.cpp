@@ -473,7 +473,8 @@ int run_case(const std::string& binary, const std::string& model_path,
         " bytes from getsockopt for " + std::to_string(kVideoReceiveBuffer) + " asked, " +
         std::to_string(lost) +
         " messages in a sequence gap. Host UDP: " + (udp_change.empty() ? "not read" : udp_change);
-    // A frame the video link dropped leaves its message unpaired, so allow 5%, as for the count.
+    // The video link sends every frame, so a message stays unpaired only when its frame was lost
+    // after the sender. Allow 5%, as for the count.
     if (static_cast<int>(unpaired.size()) > messages * 5 / 100) {
       problems.push_back(stream + ": " + std::to_string(unpaired.size()) +
                          " timestamps with no video frame, first " +

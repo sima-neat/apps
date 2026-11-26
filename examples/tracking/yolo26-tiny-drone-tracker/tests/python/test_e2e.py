@@ -344,8 +344,8 @@ def test_streams_reach_their_insight_channels_as_video_and_tracks(
             f"{VIDEO_RECEIVE_BUFFER} asked, {len(lost)} messages in a sequence gap. "
             f"Host UDP: {udp_change or 'not read'}"
         )
-        # A frame the video link dropped leaves its message unpaired, so allow 5%, as for the
-        # count.
+        # The video link sends every frame, so a message stays unpaired only when its frame was
+        # lost after the sender. Allow 5%, as for the count.
         assert len(unpaired) <= len(stream_messages) * 5 // 100, (
             f"stream {index}: {len(unpaired)} timestamps with no video frame: {unpaired[:5]}. "
             f"{video}"
