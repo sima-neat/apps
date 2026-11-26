@@ -1,5 +1,6 @@
 // End-to-end tests: four RTSP streams, each with its own model, reach Insight as video and as that
 // model's metadata, each on its own channel. tests/python/test_e2e.py runs the same checks.
+#include "sima_examples/rtsp_probe.h"
 #include "sima_examples/testing/metadata_json_listener.h"
 #include "sima_examples/testing/source_cases.h"
 #include "sima_examples/testing/test_config.h"
@@ -274,9 +275,10 @@ std::string entry_problem(const std::string& metadata_type, const nlohmann::json
   return "";
 }
 
+// With `size_set`, input.width, input.height, and input.fps take the source's own values.
 int run_case(const std::string& binary, const std::string& models_dir,
-             const MultiStreamSourceCase& source_case) {
-  const std::string label = source_case.codec;
+             const MultiStreamSourceCase& source_case, bool size_set) {
+  const std::string label = source_case.codec + (size_set ? "_size_set" : "");
   const std::string output_dir = create_test_output_dir(
       kExampleName,
       "test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results_" + label);
@@ -305,7 +307,9 @@ int run_case(const std::string& binary, const std::string& models_dir,
                 << model_paths.back() << "\n";
       return 1;
     }
-    sources.push_back(source_case.urls[static_cast<std::size_t>(index) % source_case.urls.size()]);
+    sources.push_back(
+        size_set ? source_case.urls.front()
+                 : source_case.urls[static_cast<std::size_t>(index) % source_case.urls.size()]);
     const auto& entry = shipped.at(static_cast<std::size_t>(index));
     models.push_back({{"id", entry.string("id")}, {"path", model_paths.back()}});
     if (const auto labels = entry.string_value("labels")) {
@@ -319,15 +323,31 @@ int run_case(const std::string& binary, const std::string& models_dir,
       models.back()["labels"] = *labels;
     }
   }
-  write_e2e_config(kExampleName, config_path,
-                   {{"input.codec", source_case.codec},
-                    {"inference.frames", std::to_string(kFrames)},
-                    {"inference.min_score", std::to_string(kMinScore)},
-                    // This test is the Insight receiver, so the example sends to loopback.
-                    {"output.insight.host", "127.0.0.1"},
-                    {"output.insight.video_port_base", std::to_string(video_port)},
-                    {"output.insight.metadata_port_base", std::to_string(metadata_port)}},
-                   {{"input.source", sources}}, {{"model", models}});
+  ConfigScalars scalars = {{"input.codec", source_case.codec},
+                           {"inference.frames", std::to_string(kFrames)},
+                           {"inference.min_score", std::to_string(kMinScore)},
+                           // This test is the Insight receiver, so the example sends to loopback.
+                           {"output.insight.host", "127.0.0.1"},
+                           {"output.insight.video_port_base", std::to_string(video_port)},
+                           {"output.insight.metadata_port_base", std::to_string(metadata_port)}};
+  // A set size and rate are the ones the app runs with. A 0 runs with the probe's.
+  std::string stream_size = "\\d+x\\d+@(\\d+)";
+  if (size_set) {
+    sima_examples::RtspStreamInfo source;
+    try {
+      source = sima_examples::probe_rtsp_stream_info(sources.front(), true);
+    } catch (const std::exception& error) {
+      std::cerr << "[FAIL] " << label << " " << error.what() << "\n";
+      return 1;
+    }
+    scalars["input.width"] = std::to_string(source.width);
+    scalars["input.height"] = std::to_string(source.height);
+    scalars["input.fps"] = std::to_string(source.fps);
+    stream_size = std::to_string(source.width) + "x" + std::to_string(source.height) + "@(" +
+                  std::to_string(source.fps) + ")";
+  }
+  write_e2e_config(kExampleName, config_path, scalars, {{"input.source", sources}},
+                   {{"model", models}});
 
   MetadataJsonListenerOptions metadata_options;
   metadata_options.host = "127.0.0.1";
@@ -394,7 +414,7 @@ int run_case(const std::string& binary, const std::string& models_dir,
     const std::regex start_line("(^|\n)\\[" + stream + "\\] [a-z0-9-]+ model=" +
                                 regex_escape(model_paths[static_cast<std::size_t>(index)]) +
                                 " rtsp=" + regex_escape(sources[static_cast<std::size_t>(index)]) +
-                                " stream=\\d+x\\d+@(\\d+) insight=127\\.0\\.0\\.1 video=" +
+                                " stream=" + stream_size + " insight=127\\.0\\.0\\.1 video=" +
                                 std::to_string(video_port + index) +
                                 " metadata=" + std::to_string(metadata_port + index) + "\n");
     std::smatch start_match;
@@ -476,11 +496,15 @@ int run_case(const std::string& binary, const std::string& models_dir,
       problems.push_back(stream + " sent no poses while stream 0 saw a person");
     }
     // A frame in a gap of the RTP sequence was lost between the sender and this test, so its
-    // message counts against the frames received, not against the app's timestamps.
+    // message counts against the frames received, up to 5%, not against the app's timestamps.
     const auto gaps = sequence_gaps(headers);
     const auto lost = std::count_if(unpaired.begin(), unpaired.end(), [&](std::int64_t timestamp) {
       return in_gap(timestamp, gaps);
     });
+    if (lost > messages * 5 / 100) {
+      problems.push_back(stream + ": " + std::to_string(lost) +
+                         " messages whose frame was in a sequence gap\n" + video);
+    }
     unpaired.erase(std::remove_if(unpaired.begin(), unpaired.end(),
                                   [&](std::int64_t timestamp) { return in_gap(timestamp, gaps); }),
                    unpaired.end());
@@ -546,7 +570,10 @@ int main(int argc, char** argv) {
       continue;
     }
     ++cases_run;
-    if (run_case(binary, models_dir, source_case) != 0) {
+    if (run_case(binary, models_dir, source_case, false) != 0) {
+      rc = 1;
+    }
+    if (source_case.codec == "h264" && run_case(binary, models_dir, source_case, true) != 0) {
       rc = 1;
     }
   }

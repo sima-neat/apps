@@ -20,6 +20,8 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 APPS_ROOT = EXAMPLE_DIR.parents[2]
+sys.path.insert(0, str(APPS_ROOT / "support" / "python"))
+from sima_examples.rtsp_probe import probe_rtsp_stream_info  # noqa: E402
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 LABELS = (APPS_ROOT / "support" / "labels" / "coco80.txt").read_text().splitlines()
 FRAMES = 150
@@ -149,10 +151,19 @@ def _entry_problem(metadata_type: str, entry: dict) -> str:
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize("codec", ["h264", "h265"])
+@pytest.mark.parametrize(
+    ("codec", "size_set"),
+    [
+        pytest.param("h264", False, id="h264"),
+        pytest.param("h265", False, id="h265"),
+        # input.width, input.height, and input.fps set to the source's own values.
+        pytest.param("h264", True, id="h264-size-set"),
+    ],
+)
 def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results(
     request,
     codec,
+    size_set,
     models_dir,
     tmp_output_dir,
     test_timeout_ms,
@@ -170,7 +181,11 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
     model_paths = [os.path.relpath(path.resolve(), config_dir.resolve()) for path in model_files]
     # The app runs from the Apps root, so only a path joined to the config file finds a model.
     assert not any((APPS_ROOT / path).exists() for path in model_paths), model_paths
-    sources = [urls[index % len(urls)] for index in range(len(STREAMS))]
+    sources = [urls[0] if size_set else urls[index % len(urls)] for index in range(len(STREAMS))]
+    inputs = {"source": sources, "codec": codec}
+    if size_set:
+        source = probe_rtsp_stream_info(sources[0], tcp=True)
+        inputs.update(width=source.width, height=source.height, fps=source.fps)
     # The shipped entries, each with its path relative to the generated config, so the test runs
     # the app's path join. The labels path starts at the working directory, as shipped.
     shipped = yaml.safe_load((EXAMPLE_DIR / "src" / "common" / "config.yaml").read_text())["model"]
@@ -179,7 +194,7 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
     assert all((APPS_ROOT / entry["labels"]).is_file() for entry in models if "labels" in entry)
     config_path = e2e_config_writer(
         {
-            "input": {"source": sources, "codec": codec},
+            "input": inputs,
             "inference": {"frames": FRAMES, "min_score": MIN_SCORE},
             # This test is the Insight receiver, so the example sends to loopback.
             "output": {
@@ -269,10 +284,14 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
     assert not errors, errors
     video_report = _video_report(headers, rcvbufs, drops_before)
     entries_by_stream = {}
+    # A set size and rate are the ones the app runs with. A 0 runs with the probe's.
+    stream_size = (
+        rf"{inputs['width']}x{inputs['height']}@({inputs['fps']})" if size_set else r"\d+x\d+@(\d+)"
+    )
     for index, (_, metadata_type, key) in enumerate(STREAMS):
         start_line = re.search(
             rf"^\[stream {index}\] [a-z0-9-]+ model={re.escape(model_paths[index])} "
-            rf"rtsp={re.escape(sources[index])} stream=\d+x\d+@(\d+) insight=127\.0\.0\.1 "
+            rf"rtsp={re.escape(sources[index])} stream={stream_size} insight=127\.0\.0\.1 "
             rf"video={video_port + index} metadata={metadata_port + index}$",
             stdout,
             re.MULTILINE,
@@ -317,10 +336,14 @@ def test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results
             m.timestamp_ms for m in stream_messages if not _pairs(m.timestamp_ms, rtp_timestamps)
         ]
         # A frame in a gap of the RTP sequence was lost between the sender and this test, so its
-        # message counts against the frames received, not against the app's timestamps.
+        # message counts against the frames received, up to 5%, not against the app's timestamps.
         gaps = _sequence_gaps(headers[index])
         lost = [timestamp for timestamp in unpaired if _in_gap(timestamp, gaps)]
         unpaired = [timestamp for timestamp in unpaired if not _in_gap(timestamp, gaps)]
+        assert len(lost) <= len(stream_messages) * 5 // 100, (
+            f"stream {index}: {len(lost)} messages whose frame was in a sequence gap\n"
+            f"{video_report}"
+        )
         # The video link sends every frame, so a message stays unpaired only when its frame was
         # lost after the sender. Allow 5%, as for the count.
         assert len(unpaired) <= len(stream_messages) * 5 // 100, (
