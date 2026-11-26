@@ -46,7 +46,6 @@ PENDING_EXAMPLES = {
     "pcie-high-density-multi-stream-object-detector",
     "single-stream-instance-segmenter",
     "ssd-mobilenet-object-detector",
-    "superpoint-feature-extractor",
     "yolo26-object-detector",
     "yolo26-tiny-drone-tracker",
 }

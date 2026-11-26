@@ -131,7 +131,7 @@ close but not right.
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `Latest()` with `CombinePolicy::ByFrame`
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/): two named outputs joined with `graphs::Combine`
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/): `drop = true` on a frame output
-- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `max_buffers` set by hand
+- [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `Latest()` on decoded frames the application pulls
 
 ## Source
 
