@@ -1,6 +1,6 @@
 """Receive an example's Insight video as RTP and check that its metadata pairs with the frames.
 
-Mirrors support/cpp/sima_examples/testing/rtp_video.h, so the C++ and Python end-to-end tests
+Mirrors tests/cpp/rtp_video.h, so the C++ and Python end-to-end tests
 check video the same way.
 """
 

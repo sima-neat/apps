@@ -1,8 +1,8 @@
 // End-to-end test: an H.264 RTSP stream reaches Insight as video and feature-point metadata.
 // tests/python/test_e2e.py runs the same checks against main.py.
 
+#include "rtp_video.h"
 #include "sima_examples/testing/metadata_json_listener.h"
-#include "sima_examples/testing/rtp_video.h"
 #include "sima_examples/testing/test_config.h"
 #include "sima_examples/testing/test_process.h"
 
@@ -26,6 +26,7 @@
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
+using namespace superpoint::testing;
 
 namespace {
 

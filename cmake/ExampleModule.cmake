@@ -118,7 +118,6 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   add_library(sima_neat_apps_support_testing STATIC
     "${apps_root}/support/cpp/sima_examples/config.cpp"
     "${apps_root}/support/cpp/sima_examples/testing/metadata_json_listener.cpp"
-    "${apps_root}/support/cpp/sima_examples/testing/rtp_video.cpp"
     "${apps_root}/support/cpp/sima_examples/testing/source_cases.cpp"
     "${apps_root}/support/cpp/sima_examples/testing/test_checks.cpp"
     "${apps_root}/support/cpp/sima_examples/testing/test_config.cpp"

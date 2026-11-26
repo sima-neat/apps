@@ -14,7 +14,9 @@ from pathlib import Path
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener, MetadataJsonResult
-from tests.utils.rtp_video import drain_video, pairs, rtp_timestamps
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rtp_video import drain_video, pairs, rtp_timestamps
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"

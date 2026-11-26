@@ -35,11 +35,9 @@ A module in both columns has the same file name, function names, and behavior in
 | `asset_utils` | Downloads sample files | | `asset_utils.h` |
 
 Test helpers live in `support/cpp/sima_examples/testing/` for C++ and `tests/utils/` for
-Python. `rtp_video` receives an example's Insight video as RTP and checks that each metadata
-timestamp pairs with a video frame, the way Insight pairs them, in `rtp_video.h` and
-`tests/utils/rtp_video.py`. `validate_config_body` runs an example with
-`--validate-config-only`, so only the examples that still read their config into an
-`AppConfig` use it. It goes away with the last of them.
+Python. `validate_config_body` runs an example with `--validate-config-only`, so only the
+examples that still read their config into an `AppConfig` use it. It goes away with the last
+of them.
 
 ## Label files
 

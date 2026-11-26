@@ -42,7 +42,6 @@ if (BUILD_TESTING)
   add_library(sima_neat_apps_support_testing STATIC
     sima_examples/config.cpp
     sima_examples/testing/metadata_json_listener.cpp
-    sima_examples/testing/rtp_video.cpp
     sima_examples/testing/source_cases.cpp
     sima_examples/testing/test_checks.cpp
     sima_examples/testing/test_config.cpp
