@@ -25,7 +25,7 @@ RtspDecodedInput (H.264 to NV12) --> Branch --> "video": VideoSender (H.264 RTP/
 ```
 
 Both branch links keep only the newest frame, so a slow branch drops frames instead of holding
-back the stream. The model's postprocessing adapters run on the EV74 vision processor.
+back the stream.
 
 Each frame sends one `pose-estimation` message with the left eye, right eye, nose tip, and both mouth corners. Insight draws them as labeled dots. The application sends one metadata type because Insight shows only one type per channel at a time.
 

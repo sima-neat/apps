@@ -113,14 +113,6 @@ neat::Graph detections_graph() {
   return graph;
 }
 
-// Run the model's postprocessing adapters, such as dequantize, on the EV74 vision processor,
-// which leaves the host CPU to the face decode.
-neat::GraphOptions graph_options() {
-  neat::GraphOptions options;
-  options.advanced_execution.postprocess_target = "EV74";
-  return options;
-}
-
 // Pass on only the newest frame, so a slow branch cannot hold back the stream.
 neat::GraphLinkOptions live_link() {
   neat::GraphLinkOptions link;
@@ -138,8 +130,6 @@ neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config
 neat::RunOptions run_options() {
   neat::RunOptions options;
   options.preset = neat::RunPreset::Realtime;
-  // One more queued frame than the Realtime preset's 2.
-  options.queue_depth = 3;
   options.output_memory = neat::OutputMemory::ZeroCopy;
   return options;
 }
@@ -218,7 +208,7 @@ int run_app(const fs::path& config_path) {
   const neat::Graph video = video_graph(config, stream);
   const neat::Graph detector = model_graph(model);
 
-  neat::Graph graph(graph_options());
+  neat::Graph graph;
   graph.connect(source, branch);
   graph.connect(branch, video, live_link());
   graph.connect(branch, detector, live_link());

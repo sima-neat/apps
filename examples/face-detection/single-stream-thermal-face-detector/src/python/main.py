@@ -91,14 +91,6 @@ def detections_graph() -> pyneat.Graph:
     return graph
 
 
-def graph_options() -> pyneat.GraphOptions:
-    """Run the model's postprocessing adapters, such as dequantize, on the EV74 vision
-    processor, which leaves the host CPU to the face decode."""
-    options = pyneat.GraphOptions()
-    options.advanced_execution.postprocess_target = "EV74"
-    return options
-
-
 def live_link() -> pyneat.GraphLinkOptions:
     """Pass on only the newest frame, so a slow branch cannot hold back the stream."""
     link = pyneat.GraphLinkOptions()
@@ -116,8 +108,6 @@ def metadata_options(config: Config) -> pyneat.MetadataSenderOptions:
 def run_options() -> pyneat.RunOptions:
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Realtime
-    # One more queued frame than the Realtime preset's 2.
-    options.queue_depth = 3
     options.output_memory = pyneat.OutputMemory.ZeroCopy
     return options
 
@@ -191,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     video = video_graph(config, stream)
     detector = model_graph(model)
 
-    graph = pyneat.Graph(graph_options())
+    graph = pyneat.Graph()
     graph.connect(source, branch)
     graph.connect(branch, video, live_link())
     graph.connect(branch, detector, live_link())
