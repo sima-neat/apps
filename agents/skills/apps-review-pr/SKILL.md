@@ -65,15 +65,18 @@ each finding cites the owning file and section.
 - **Machine-specific values:** report a hardcoded address, hostname, lab name, or user path
   in any changed file or in the description, as `agents/rules.md` "Documentation and
   publication" says.
-- **Code owners:** flag changes to dependency pins, `build.sh`, `scripts/artifact-refs.sh`,
-  `scripts/ci/package-apps.sh`, or `.github/workflows/vulcan-ci.yml` for code owner review.
+- **Code owners:** flag changes to dependency pins, `build.sh`, `scripts/install-neat-core.sh`,
+  `scripts/artifact-refs.sh`, `scripts/ci/package-apps.sh`, or
+  `.github/workflows/vulcan-ci.yml` for code owner review.
 
 ## Evidence
 
 - **Package:** one customer workflow works from the package: install with
   `sima-cli neat install apps@<branch>`, configure, run, and inspect the result, and the
   description records it. Report source-only paths, missing packaged files, and customer
-  options spread across config, CLI arguments, and environment variables.
+  options spread across config, CLI arguments, and environment variables. When sima-cli runs
+  without a terminal, set `SIMA_CLI_CHECK_FOR_UPDATE=0`, because its update question aborts
+  the call.
 - **Commands:** README commands, including every model download, ran exactly as written. A
   matching test entry or a file downloaded another way leaves the command unverified.
 - **CI:** read the latest Vulcan CI run for the branch. A skipped test proves nothing, and a

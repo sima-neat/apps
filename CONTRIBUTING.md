@@ -284,6 +284,17 @@ the `snap` policy, while a release-preparation branch can select an exact Core
 artifact. Vulcan records the resolved Core target under package metadata and
 the Apps installer uses that same target. Insight is not pinned in the Apps
 manifest.
+
+`./build.sh --all` and `./build.sh --only-install-neat-core` install that Core
+through `scripts/install-neat-core.sh`, which runs
+`sima-cli neat install core@<ref>:<spec>`. Under `snap`, an Apps tag takes the
+Core release of the same name. An Apps branch takes the Core branch of the same
+name, or `develop` when Core publishes no such branch. The script records the
+exact revision in `deps/neat-core.json`. `./build.sh --only-resolve-neat-core`
+writes only that record and prints it as `<ref>-<spec>`, the form
+`--neat-core-version` takes. `NEAT_VULCAN_ENV` selects the artifact environment,
+and `SIMA_NEAT_BASE_URL` replaces its base URL.
+
 `cmake/YamlCpp.cmake` pins the yaml-cpp 0.8.0 source by SHA-256, for the
 headers of the `libyaml-cpp.so.0.8` that Core links.
 
