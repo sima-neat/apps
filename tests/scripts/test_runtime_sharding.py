@@ -85,7 +85,8 @@ def test_does_not_count_offline_or_wrong_firmware():
 
 
 def test_planner_keeps_resolver_firmware(tmp_path, monkeypatch):
-    fleet = [runner(f"{version}-{pool}", rtsp=pool == "rtsp", firmware=version)
+    fleet = [runner(f"{version}-{pool}", rtsp=pool == "rtsp", firmware=version,
+                    extra=(SOM_16,))
              for version in ("3.0.0_master_B2499", "3.0.0_master_B2501")
              for pool in ("rtsp", "regular")]
     monkeypatch.setattr(planner, "discover_runners", lambda *args: fleet)
@@ -950,3 +951,7 @@ def test_plan_rejects_a_constrained_suite_on_a_shard_without_its_labels(constrai
     with pytest.raises(ValueError, match=f"lacks the runner labels {HIGH_DENSITY_E2E[0]}"):
         planner.validate_plan(plan, constrained)
 
+
+def test_repository_scope_asks_for_16_gib_devkits_for_high_density_e2e(scope):
+    for language in ("cpp", "python"):
+        assert scope["examples"][HIGH_DENSITY]["e2e"][language]["runner_labels"] == [SOM_16]
