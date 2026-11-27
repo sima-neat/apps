@@ -8,8 +8,12 @@
 
 #include <opencv2/core.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <functional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -85,11 +89,17 @@ bool test_anomaly_map_covers_the_frame_and_keeps_the_peak_in_place() {
                      "the anomaly map is 224x224 with the peak in its corner");
 }
 
-bool test_identical_patches_score_zero_and_a_far_one_scores_high() {
-  patchcore::PatchEmbeddings normal{2, 2, 4, std::vector<float>(16, 0.0F)};
+// A 2x2 grid of 4-channel patches, each a different unit vector.
+patchcore::PatchEmbeddings one_hot_patches() {
+  patchcore::PatchEmbeddings patches{2, 2, 4, std::vector<float>(16, 0.0F)};
   for (int patch = 0; patch < 4; ++patch) {
-    normal.values[patch * 4 + patch] = 1.0F;
+    patches.values[patch * 4 + patch] = 1.0F;
   }
+  return patches;
+}
+
+bool test_identical_patches_score_zero_and_a_far_one_scores_high() {
+  const auto normal = one_hot_patches();
   const auto bank = patchcore::MemoryBank::build({normal}, 1.0, 0);
   bool ok = expect_true(bank.size() == 4U, "a ratio of 1 keeps every patch");
   const auto same = bank.score(normal, 1);
@@ -102,19 +112,104 @@ bool test_identical_patches_score_zero_and_a_far_one_scores_high() {
   return ok;
 }
 
+bool test_reweighting_never_raises_the_plain_max_score() {
+  const auto normal = one_hot_patches();
+  const auto bank = patchcore::MemoryBank::build({normal}, 1.0, 0);
+  auto defect = normal;
+  defect.values[0] = 5.0F;
+  const float reweighted = bank.score(defect, 4).image_score;
+  return expect_true(reweighted > 0.0F && reweighted < bank.score(defect, 1).image_score,
+                     "the reweighted score lies between 0 and the plain max");
+}
+
+// Ten points on a line: the coreset starts at patch seed % n, then takes the farthest.
+bool test_coreset_keeps_the_ratio_starting_at_the_seed_patch() {
+  std::vector<float> line(10);
+  for (std::size_t i = 0; i < line.size(); ++i) {
+    line[i] = static_cast<float>(i);
+  }
+  const auto some = patchcore::greedy_coreset_indices(line, 1, 0.3, 13);
+  auto all = patchcore::greedy_coreset_indices(line, 1, 1.0, 0);
+  std::sort(all.begin(), all.end());
+  const std::vector<std::size_t> every = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  return expect_true(some == std::vector<std::size_t>{3, 9, 0} && all == every,
+                     "the coreset keeps the ratio, starting at patch seed % n");
+}
+
+bool test_percentile_threshold_interpolates_like_numpy() {
+  std::vector<float> scores;
+  for (int value = 1; value <= 100; ++value) {
+    scores.push_back(static_cast<float>(value));
+  }
+  return expect_true(std::abs(patchcore::percentile_threshold(scores, 99.0) - 99.01F) < 1e-4F,
+                     "the 99th percentile of 1..100 is 99.01");
+}
+
+bool test_extract_hwc_transposes_channel_first_output() {
+  std::vector<float> chw(12);
+  for (std::size_t i = 0; i < chw.size(); ++i) {
+    chw[i] = static_cast<float>(i);
+  }
+  const auto hwc = patchcore::extract_hwc({1, 3, 2, 2}, chw, 3);
+  const std::vector<float> first(hwc.values.begin(), hwc.values.begin() + 3);
+  const std::vector<float> right(hwc.values.begin() + 3, hwc.values.begin() + 6);
+  return expect_true(hwc.height == 2 && hwc.width == 2 && hwc.channels == 3 &&
+                         first == std::vector<float>{0, 4, 8} &&
+                         right == std::vector<float>{1, 5, 9},
+                     "a channel-first output is transposed to (H, W, C)");
+}
+
+void write_file(const fs::path& path, const std::string& text) {
+  std::ofstream(path, std::ios::binary) << text;
+}
+
 bool test_bank_meta_round_trips() {
+  const fs::path dir = fs::temp_directory_path() / "patchcore_unit_bank_meta";
+  fs::create_directories(dir);
+  write_file(dir / "model.tar.gz", "model.tar.gz");
   patchcore::BankMeta meta;
-  meta.model_sha256 = std::string(64, 'a');
+  meta.model_sha256 = patchcore::sha256_file(dir / "model.tar.gz");
   meta.threshold_value = 12.5;
   meta.has_patch_threshold = true;
   meta.patch_threshold_value = 8.25;
-  const fs::path path = fs::temp_directory_path() / "patchcore_unit_bank_meta.json";
-  patchcore::save_bank_meta(path, meta);
-  const auto loaded = patchcore::load_bank_meta(path);
-  fs::remove(path);
+  patchcore::save_bank_meta(dir / "bank_meta.json", meta);
+  const auto loaded = patchcore::load_bank_meta(dir / "bank_meta.json");
+  fs::remove_all(dir);
   return expect_true(loaded.model_sha256 == meta.model_sha256 && loaded.threshold_value == 12.5 &&
                          loaded.has_patch_threshold && loaded.patch_threshold_value == 8.25,
-                     "bank_meta.json keeps both thresholds");
+                     "bank_meta.json keeps the model hash and both thresholds");
+}
+
+bool throws(const std::function<void()>& call) {
+  try {
+    call();
+  } catch (const std::runtime_error&) {
+    return true;
+  }
+  return false;
+}
+
+bool test_a_bank_for_another_model_or_bank_file_is_rejected() {
+  const fs::path dir = fs::temp_directory_path() / "patchcore_unit_bank_check";
+  fs::create_directories(dir);
+  const fs::path model = dir / "model.tar.gz";
+  const fs::path bank = dir / "memory_bank.npy";
+  write_file(model, "model");
+  write_file(bank, "bank");
+  patchcore::BankMeta meta;
+  meta.model_sha256 = patchcore::sha256_file(model);
+  meta.bank_sha256 = patchcore::sha256_file(bank);
+  bool ok = expect_true(!throws([&] { patchcore::verify_bank_matches_model(meta, model); }) &&
+                            !throws([&] { patchcore::verify_bank_hash(meta, bank); }),
+                        "the bank's own model and bank file pass");
+  ok &= expect_true(throws([&] { patchcore::verify_bank_matches_model(meta, bank); }) &&
+                        throws([&] { patchcore::verify_bank_hash(meta, model); }),
+                    "another model or bank file is rejected");
+  // A bank_meta.json without bank_sha256 skips the bank check.
+  ok &= expect_true(!throws([&] { patchcore::verify_bank_hash({}, dir / "missing.npy"); }),
+                    "a meta without bank_sha256 skips the bank check");
+  fs::remove_all(dir);
+  return ok;
 }
 
 } // namespace
@@ -124,6 +219,11 @@ int main() {
   ok &= test_shipped_calibration_settings_are_in_range();
   ok &= test_anomaly_map_covers_the_frame_and_keeps_the_peak_in_place();
   ok &= test_identical_patches_score_zero_and_a_far_one_scores_high();
+  ok &= test_reweighting_never_raises_the_plain_max_score();
+  ok &= test_coreset_keeps_the_ratio_starting_at_the_seed_patch();
+  ok &= test_percentile_threshold_interpolates_like_numpy();
+  ok &= test_extract_hwc_transposes_channel_first_output();
   ok &= test_bank_meta_round_trips();
+  ok &= test_a_bank_for_another_model_or_bank_file_is_rejected();
   return ok ? 0 : 1;
 }
