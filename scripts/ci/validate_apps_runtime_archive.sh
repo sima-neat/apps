@@ -28,6 +28,7 @@ def fail(message: str) -> None:
 with tarfile.open(archive, "r:gz") as bundle:
     members = bundle.getmembers()
     core_metadata_name = f"{root}/deps/neat-core.json"
+    get_example_name = f"{root}/scripts/get-example.sh"
     apps_metadata_name = f"{root}/deps/neat-apps.json"
     text_suffixes = {
         ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
@@ -53,6 +54,11 @@ with tarfile.open(archive, "r:gz") as bundle:
             fail(f"Core metadata is outside {core_metadata_name}: {member.name}")
         if path.name == "neat-apps.json" and member.name != apps_metadata_name:
             fail(f"Apps metadata is outside {apps_metadata_name}: {member.name}")
+        # A link could point an install outside its folder. get-example.sh also refuses symlinks.
+        if member.issym() or member.islnk():
+            fail(f"runtime archive contains a link: {member.name}")
+        if path.parts[1:2] == ("scripts",) and member.name not in (f"{root}/scripts", get_example_name):
+            fail(f"runtime archive scripts/ holds more than get-example.sh: {member.name}")
         if member.isfile() and member.name.endswith(model_suffixes):
             fail(f"runtime archive contains a packaged model: {member.name}")
         if (
@@ -75,6 +81,13 @@ with tarfile.open(archive, "r:gz") as bundle:
             content = source.read() if source is not None else b""
             if any(reference in content for reference in obsolete_references):
                 fail(f"runtime archive contains an obsolete path reference: {member.name}")
+
+    try:
+        get_example = bundle.getmember(get_example_name)
+    except KeyError:
+        fail(f"runtime archive is missing {get_example_name}")
+    if not get_example.isfile() or not get_example.mode & 0o100:
+        fail(f"runtime archive {get_example_name} is not an executable file")
 
     try:
         core_metadata = bundle.getmember(core_metadata_name)

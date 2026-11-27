@@ -74,8 +74,9 @@ behavior in `Concept`, and list error messages with their fixes in
 
 The installed workflow must:
 
-- install the latest Apps runtime with `sima-cli neat install apps`
-- run subsequent commands from `prebuilt-apps/`
+- install the latest Apps runtime with `sima-cli neat install apps`, or fetch the
+  example with `scripts/get-example.sh`
+- run subsequent commands from `prebuilt-apps/`, or from the fetched folder
 - use `src/cpp/pre-built/<binary>` for C++
 - use packaged `src/python/` entrypoints or supported wrappers for Python
 - keep clone, CMake, build, and test commands out of the primary workflow
@@ -149,7 +150,10 @@ and it ignores keys it does not read.
 
 Bundle instructions run from `prebuilt-apps/`. Define
 `APP_DIR=examples/<category>/<example>` once and reuse it so commands remain
-readable without changing relative model, asset, label, or output paths.
+readable without changing relative model, asset, label, or output paths. An
+install of one example with `scripts/get-example.sh` runs `cd <example>` and
+defines the same `APP_DIR`, because the fetched folder has the `prebuilt-apps/`
+layout.
 Pretty-print structured output examples.
 
 ## Test Scope
@@ -235,7 +239,8 @@ When adding C++:
 - keep C++ test filenames aligned with `cmake/ExampleModule.cmake`
 
 When changing layout, commands, models, or tests, inspect `build.sh`,
-`scripts/ci/package-apps.sh`, `tests/test.sh`, `tests/utils/test_scope.py`,
+`scripts/ci/package-apps.sh`, `scripts/get-example.sh`, `tests/test.sh`,
+`tests/utils/test_scope.py`,
 README validation, catalog generation, and affected CI workflows.
 
 ## Installed Layout
@@ -252,6 +257,7 @@ README validation, catalog generation, and affected CI workflows.
 | `support/python/` | Helpers the Python examples share |
 | `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
+| `scripts/get-example.sh` | Fetches one example of a published bundle, and neat-genai-studio's `run.sh update` runs it |
 | `models/` | User-managed model packages |
 | `deps/neat-apps.json` | Installed Apps ref and exact commit |
 | `deps/neat-core.json` | Core artifact selected for this Apps build |

@@ -219,6 +219,10 @@ PY
   cp -a "${ROOT_DIR}/support/python" "${stage_dir}/support/"
   cp -a "${ROOT_DIR}/support/cpp/sima_examples" "${stage_dir}/support/cpp/"
   rm -rf "${stage_dir}/support/cpp/sima_examples/testing"
+  # neat-genai-studio's run.sh update runs this copy, so it fetches with the script of its
+  # own version.
+  mkdir -p "${stage_dir}/scripts"
+  cp -a "${ROOT_DIR}/scripts/get-example.sh" "${stage_dir}/scripts/"
 
   while IFS= read -r tests_dir; do
     local rel target_dir

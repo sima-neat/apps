@@ -40,9 +40,20 @@ def _write_runtime_archive(
     member_contents: dict[str, str] | None = None,
     include_core_metadata: bool = True,
     include_apps_metadata: bool = True,
+    include_get_example: bool = True,
+    get_example_mode: int = 0o755,
+    get_example_dir: bool = False,
 ) -> Path:
     archive_root = tmp_path / "archive-root" / root_name
     archive_root.mkdir(parents=True)
+    if include_get_example:
+        get_example = archive_root / "scripts/get-example.sh"
+        get_example.parent.mkdir(parents=True)
+        if get_example_dir:
+            get_example.mkdir(mode=get_example_mode)
+        else:
+            get_example.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            get_example.chmod(get_example_mode)
     if include_core_metadata:
         core_metadata = archive_root / "deps/neat-core.json"
         core_metadata.parent.mkdir(parents=True)
@@ -97,6 +108,56 @@ def test_runtime_archive_validator_rejects_missing_core_metadata(tmp_path):
     proc = _validate_runtime_archive(archive)
 
     assert proc.returncode != 0
+
+
+@pytest.mark.parametrize("extra", ["scripts/download_models.sh", "scripts/README", "scripts/empty/"])
+def test_runtime_archive_validator_requires_get_example_alone_in_scripts(tmp_path, extra):
+    missing = _write_runtime_archive(tmp_path / "missing", include_get_example=False)
+    if extra.endswith("/"):
+        with_extra = _write_runtime_archive(tmp_path / "extra")
+        with tarfile.open(with_extra, "r:gz") as bundle:
+            members = [(m, bundle.extractfile(m).read() if m.isfile() else None) for m in bundle.getmembers()]
+        folder = tarfile.TarInfo(f"prebuilt-apps/{extra.rstrip('/')}")
+        folder.type = tarfile.DIRTYPE
+        with tarfile.open(with_extra, "w:gz") as bundle:
+            for member, data in members:
+                bundle.addfile(member, io.BytesIO(data) if data is not None else None)
+            bundle.addfile(folder)
+    else:
+        with_extra = _write_runtime_archive(tmp_path / "extra", extra)
+
+    assert "missing prebuilt-apps/scripts/get-example.sh" in _validate_runtime_archive(missing).stderr
+    assert "holds more than get-example.sh" in _validate_runtime_archive(with_extra).stderr
+
+
+# The owner runs the installed script, so only the owner execute bit counts.
+@pytest.mark.parametrize(("mode", "ok"), [(0o700, True), (0o755, True), (0o644, False), (0o645, False)])
+def test_runtime_archive_validator_requires_an_owner_executable_get_example(tmp_path, mode, ok):
+    proc = _validate_runtime_archive(_write_runtime_archive(tmp_path, get_example_mode=mode))
+
+    assert (proc.returncode == 0) is ok, proc.stderr
+    assert ok or "get-example.sh is not an executable file" in proc.stderr
+
+
+@pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE])
+def test_runtime_archive_validator_rejects_a_link(tmp_path, kind):
+    archive = _write_runtime_archive(tmp_path)
+    with tarfile.open(archive, "r:gz") as bundle:
+        members = [(m, bundle.extractfile(m).read() if m.isfile() else None) for m in bundle.getmembers()]
+    link = tarfile.TarInfo("prebuilt-apps/examples/demo/etc")
+    link.type, link.linkname = kind, "/etc" if kind == tarfile.SYMTYPE else "prebuilt-apps/deps/neat-apps.json"
+    with tarfile.open(archive, "w:gz") as bundle:
+        for member, data in members:
+            bundle.addfile(member, io.BytesIO(data) if data is not None else None)
+        bundle.addfile(link)
+
+    assert "runtime archive contains a link: prebuilt-apps/examples/demo/etc" in _validate_runtime_archive(archive).stderr
+
+
+def test_runtime_archive_validator_rejects_a_get_example_folder(tmp_path):
+    archive = _write_runtime_archive(tmp_path, get_example_dir=True)
+
+    assert "get-example.sh is not an executable file" in _validate_runtime_archive(archive).stderr
 
 
 def test_runtime_archive_validator_rejects_missing_apps_metadata(tmp_path):

@@ -46,7 +46,7 @@ of them.
 `support/labels/` holds the class-label files that more than one example's config names, one
 label per line in the model's class-ID order. A config names one as
 `model.labels: support/labels/coco80.txt`, a path that starts at the working directory: the
-root of `prebuilt-apps/` or of the repository. An example whose model has its own classes keeps
+root of `prebuilt-apps/`, of the repository, or of a folder `scripts/get-example.sh` fetched. An example whose model has its own classes keeps
 its label file in its `src/common/`.
 
 | File | Classes | Used by |

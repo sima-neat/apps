@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PYTHON_DIR="${EXAMPLE_DIR}/src/python"
 DEFAULT_APP_VENV="${EXAMPLE_DIR}/.venv"
 DEFAULT_LOCAL_CONFIG="${EXAMPLE_DIR}/config.local.yaml"
@@ -263,14 +263,24 @@ Usage:
                       Runs ./setup.sh automatically on the first launch.
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
-  ./run.sh update     Update to the latest version (preserves models, config,
-                      venvs and RAG db). Dependency refresh is opt-in.
+  ./run.sh update     Update to the latest build of the installed branch or tag
+                      (preserves models, config, venvs and RAG db). Dependency
+                      refresh is opt-in.
   ./run.sh --clean    Remove app-generated data (venvs, config, RAG db, TTS
                       voices, caches, logs). Add -y to skip the prompt.
 
 Environment:
   AUTO_SETUP=0        Do not auto-run ./setup.sh on first launch (error instead).
-  NEAT_APPS_BRANCH    Branch to pull for `update` (default: main).
+  NEAT_APPS_BRANCH    Branch or tag whose published bundle `update` fetches
+                      (default: the one deps/neat-apps.json names, else main).
+                      <ref>:<commit> pins a build.
+  NEAT_APPS_GET_EXAMPLE
+                      get-example.sh path or URL `update` runs (default: the
+                      install's scripts/get-example.sh, else the one on that
+                      ref on GitHub).
+  NEAT_APPS_RAW_URL   Base URL of the raw files that GitHub copy comes from,
+                      for a fork (default:
+                      https://raw.githubusercontent.com/sima-neat/apps).
   UPDATE_DEPS=1       Run full setup.sh dependency refresh during `update`.
   BACKEND_CORS_ORIGINS
                       Origins (comma-separated, or *) whose browser pages may
@@ -482,12 +492,6 @@ do_clean() {
   ok "Clean complete. Re-run ./setup.sh to reinstall."
 }
 
-# Update the example's source to the latest published version. User data — venvs,
-# config.local.yaml, RAG db, and downloaded models (which live outside this dir) —
-# is preserved. In a git checkout this is `git pull`; standalone (fetched via
-# get-example.sh) it re-fetches the release archive and mirrors the source. Set
-# NEAT_APPS_BRANCH chooses a branch (default main); UPDATE_DEPS=1 refreshes only
-# the Python dependencies.
 # src/python/ui/ became src/python/api/. An update keeps the install's own files
 # (voices, RAG database, uploads, logs) where they were, so the first start
 # after it moves them into api/. A file api/ already has is dropped from ui/
@@ -556,8 +560,81 @@ migrate_piper_voices() {
   "${py}" "${PYTHON_DIR}/api/tts/split_voices.py" "${assets}"
 }
 
+# The folder that holds examples/, deps/ and scripts/ of this install. Empty for a Studio
+# outside examples/genai/neat-genai-studio, such as one an earlier get-example.sh fetched alone.
+apps_root() {
+  [[ "${EXAMPLE_DIR}" == */examples/genai/neat-genai-studio ]] || return 0
+  printf '%s\n' "${EXAMPLE_DIR%/examples/genai/neat-genai-studio}"
+}
+
+installed_apps_ref() {
+  local root file
+  root="$(apps_root)"
+  file="${root}/deps/neat-apps.json"
+  [[ -n "${root}" && -f "${file}" ]] || return 0
+  sed -n 's/.*"ref": *"\([^"]*\)".*/\1/p' "${file}" | head -n 1
+}
+
+update_ref() {
+  local ref="${NEAT_APPS_BRANCH:-}"
+  [[ -n "${ref}" ]] || ref="$(installed_apps_ref)"
+  printf '%s\n' "${ref:-main}"
+}
+
+# The update with another ref: main, unless main is the ref that failed.
+other_ref_hint() {
+  if [[ "${1%%:*}" != main ]]; then
+    printf '%s' "NEAT_APPS_BRANCH=main ./run.sh update"
+  else
+    printf '%s' "NEAT_APPS_BRANCH=<branch or tag> ./run.sh update with a ref whose get-example.sh takes --ref"
+  fi
+}
+
+# Copy the get-example.sh `update` runs to $2 and print its source. A script without --ref
+# is the source-archive version, which cannot fetch a tag, so it is refused.
+select_get_example() {
+  local target="${1%%:*}" out="$2" from root
+  root="$(apps_root)"
+  if [[ -n "${NEAT_APPS_GET_EXAMPLE:-}" ]]; then
+    from="${NEAT_APPS_GET_EXAMPLE}"
+  elif [[ -n "${root}" && -f "${root}/scripts/get-example.sh" ]]; then
+    from="$(cd "${root}/scripts" && pwd -P)/get-example.sh"
+  else
+    from="${NEAT_APPS_RAW_URL:-https://raw.githubusercontent.com/sima-neat/apps}/${target}/scripts/get-example.sh"
+  fi
+  if [[ -f "${from}" ]]; then
+    cp "${from}" "${out}"
+  elif [[ "${from}" != *://* ]]; then
+    errln "Not found: ${from}"; return 1
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${from}" -o "${out}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "${out}" "${from}"
+  else
+    errln "curl or wget is required to update."; return 1
+  fi || { errln "Download failed: ${from}"; return 1; }
+  if ! child_env bash "${out}" --help 2>&1 | grep -- '--ref' >/dev/null; then
+    errln "${from} does not fetch the published bundle."
+    if [[ -n "${root}" ]]; then
+      errln "Update the install with sima-cli neat install apps, or run $(other_ref_hint "${target}")."
+    else
+      errln "Move this folder away and fetch the Studio again with get-example.sh, or run $(other_ref_hint "${target}")."
+    fi
+    return 1
+  fi
+  printf '%s\n' "${from}"
+}
+
+# get-example.sh would read these, and update picks the bundle and the folder itself.
+child_env() {
+  env -u NEAT_APPS_ARCHIVE_URL -u NEAT_APPS_REPO_URL -u NEAT_APPS_EXAMPLE_DEST_DIR "$@"
+}
+
+# Update the Studio's source and keep its venvs, config.local.yaml, RAG db and models. A git
+# checkout runs git pull, and an install mirrors the Studio of its published bundle.
 do_update() {
-  local branch="${NEAT_APPS_BRANCH:-main}"
+  local ref
+  ref="$(update_ref)"
   local supertonic_before
   supertonic_before="$(supertonic_fingerprint)"
   if do_status >/dev/null 2>&1; then
@@ -575,38 +652,29 @@ do_update() {
       errln "git pull failed (local changes or a diverged branch). Resolve it manually."
       return 1
     fi
+  elif [[ -n "$(apps_root)" && -e "$(apps_root)/.git" ]]; then
+    # A checkout git cannot read (git missing, or "dubious ownership"): the
+    # standalone path would mirror the bundle over the working tree.
+    errln "This Studio is in a git checkout, but git cannot read it (is git installed, and does it trust the folder?)."
+    errln "Fix that and run ./run.sh update again, or update with git pull yourself."
+    return 1
   else
-    # Standalone (fetched via get-example.sh): re-download and mirror the source.
-    command -v tar >/dev/null 2>&1 || { errln "tar is required to update."; return 1; }
     command -v rsync >/dev/null 2>&1 || { errln "rsync is required to update a standalone install."; return 1; }
-    local repo repo_url archive_url tmp root ex_path
-    repo_url="${NEAT_APPS_REPO_URL:-https://github.com/sima-neat/apps.git}"
-    repo="${repo_url%.git}"; repo="${repo#https://github.com/}"; repo="${repo#git@github.com:}"
-    archive_url="${NEAT_APPS_ARCHIVE_URL:-https://github.com/${repo}/archive/refs/heads/${branch}.tar.gz}"
+    local script tmp src
     tmp="$(mktemp -d)" || { errln "mktemp failed."; return 1; }
-    step "Fetching the latest source (${branch})…"
-    if [[ -f "${archive_url}" ]]; then
-      cp "${archive_url}" "${tmp}/src.tar.gz" \
-        || { errln "Cannot read archive: ${archive_url}"; rm -rf "${tmp}"; return 1; }
-    elif command -v curl >/dev/null 2>&1; then
-      curl -fsSL "${archive_url}" -o "${tmp}/src.tar.gz" \
-        || { errln "Download failed: ${archive_url}"; rm -rf "${tmp}"; return 1; }
-    elif command -v wget >/dev/null 2>&1; then
-      wget -qO "${tmp}/src.tar.gz" "${archive_url}" \
-        || { errln "Download failed: ${archive_url}"; rm -rf "${tmp}"; return 1; }
-    else
-      errln "curl or wget is required to update."; rm -rf "${tmp}"; return 1
-    fi
-    # Read the whole listing (awk, not head/grep -q): under pipefail, a reader
-    # that exits early kills tar with SIGPIPE and the update aborts with 141.
-    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | awk -F/ 'NR == 1 { print $1 }')"
-    ex_path="${root}/examples/genai/neat-genai-studio"
-    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -xF "${ex_path}/" >/dev/null; then
-      errln "neat-genai-studio not found in the archive (branch ${branch})."
-      rm -rf "${tmp}"; return 1
-    fi
-    tar -xzf "${tmp}/src.tar.gz" -C "${tmp}" "${ex_path}" \
-      || { errln "Extract failed."; rm -rf "${tmp}"; return 1; }
+    # Bash runs the EXIT trap on Ctrl-C, SIGTERM and SIGHUP too, so no download stays behind.
+    UPDATE_TMP="${tmp}"
+    trap 'rm -rf "${UPDATE_TMP}"' EXIT
+    step "Fetching the latest published version (${ref})…"
+    script="$(select_get_example "${ref}" "${tmp}/get-example.sh")" \
+      || { rm -rf "${tmp}"; return 1; }
+    info "Using ${script}"
+    # get-example.sh reports its own errors.
+    child_env bash "${tmp}/get-example.sh" --ref "${ref}" --dest "${tmp}/out" neat-genai-studio >/dev/null \
+      || { errln "Cannot fetch neat-genai-studio for ${ref}."
+           errln "Pick another ref with $(other_ref_hint "${ref}"), or another script with NEAT_APPS_GET_EXAMPLE=<path or URL>."
+           rm -rf "${tmp}"; return 1; }
+    src="${tmp}/out/examples/genai/neat-genai-studio"
     step "Applying update (keeping your models, venvs, config and RAG db)…"
     # The Supertonic venv and models root are configurable and may be pointed at
     # a non-default directory INSIDE the example, where --delete-delay would
@@ -673,11 +741,11 @@ do_update() {
       --exclude='/src/python/ui/assets/*.onnx.json' \
       --exclude='/src/python/ui/assets/piper-plus/' \
       --exclude='/src/python/ui/assets/mms-tts-kor/' \
-      "${tmp}/${ex_path}/" "${EXAMPLE_DIR}/" \
+      "${src}/" "${EXAMPLE_DIR}/" \
       || { errln "Source replacement failed."; rm -rf "${tmp}"; return 1; }
     rm -rf "${tmp}"
     chmod +x "${EXAMPLE_DIR}/run.sh" "${EXAMPLE_DIR}/setup.sh" 2>/dev/null || true
-    ok "Source updated from ${branch}."
+    ok "Source updated from ${ref}."
   fi
 
   # Dependency refresh is opt-in and deliberately avoids setup's data-writing

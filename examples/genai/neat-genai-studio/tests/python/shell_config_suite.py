@@ -3,10 +3,16 @@ Supertonic paths (src/common/config_value.sh), exercised through bash."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import shutil
 import subprocess
+import tarfile
 import tempfile
+import threading
 import unittest
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HELPER = Path(__file__).resolve().parents[2] / "src" / "common" / "config_value.sh"
@@ -273,6 +279,398 @@ class LegacyUiDirMigrationTests(unittest.TestCase):
             (Path(tmp) / "api").mkdir()
             out = self._migrate(Path(tmp))
             self.assertEqual((out.stdout, out.stderr), ("", ""))
+
+
+# The usage of get-example.sh before it fetched the published bundle, as its --help printed it.
+SOURCE_ARCHIVE_SCRIPT = '''#!/usr/bin/env bash
+usage() {
+  cat <<'USAGE'
+Usage:
+  get-example.sh [--branch <branch>] [--dest <dir>] [--force] <example>
+
+Examples:
+  get-example.sh neat-genai-studio
+  get-example.sh genai/neat-genai-studio
+  get-example.sh examples/genai/neat-genai-studio
+
+Environment:
+  NEAT_APPS_REPO_URL          Apps Git repository URL
+                              default: https://github.com/sima-neat/apps.git
+  NEAT_APPS_ARCHIVE_URL       Prebuilt source archive URL or local .tar.gz path
+                              default: derived from NEAT_APPS_REPO_URL and branch
+  NEAT_APPS_BRANCH            Git branch to fetch
+                              default: main
+  NEAT_APPS_EXAMPLE_DEST_DIR  Destination directory
+                              default: ./<example-name>
+USAGE
+}
+case "$1" in -h|--help) usage; exit 0 ;; esac
+exit 1
+'''
+
+
+class RawTreeServer:
+    """Serves a raw tree over HTTP, 404 for a missing file, as raw.githubusercontent.com does."""
+
+    def __init__(self, root: Path) -> None:
+        directory = str(root)
+
+        class Handler(SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=directory, **kwargs)
+
+            def log_message(self, *args) -> None:
+                pass
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def __enter__(self) -> "RawTreeServer":
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.httpd.shutdown()
+
+
+class StandaloneUpdateTests(unittest.TestCase):
+    """run.sh update outside a checkout: which ref it fetches and which
+    get-example.sh it runs, against a local install, raw tree and index."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+    GET_EXAMPLE = EXAMPLE.parents[2] / "scripts" / "get-example.sh"
+
+    def _functions(self) -> str:
+        run_sh = (self.EXAMPLE / "run.sh").read_text(encoding="utf-8")
+        start = run_sh.index("apps_root() {")
+        end = run_sh.index("\ndo_update() {", start)
+        return 'errln() { echo "ERR $*" >&2; }\n' + run_sh[start:end] + "\n"
+
+    def _install(self, root: Path, installed_ref: str | None, local_copy: bool) -> Path:
+        """A Studio in root/out laid out as get-example.sh and sima-cli leave it."""
+        apps = root / "out"
+        studio = apps / "examples" / "genai" / "neat-genai-studio"
+        studio.mkdir(parents=True)
+        if installed_ref:
+            (apps / "deps").mkdir()
+            (apps / "deps" / "neat-apps.json").write_text(json.dumps(
+                {"neat-apps": {"ref": installed_ref, "spec": "0" * 40}}, indent=2))
+        if local_copy:
+            (apps / "scripts").mkdir()
+            (apps / "scripts" / "get-example.sh").write_text(self.GET_EXAMPLE.read_text())
+        return studio
+
+    def _raw(self, root: Path, scripts: dict[str, str]) -> Path:
+        for ref, text in scripts.items():
+            path = root / "raw" / ref / "scripts" / "get-example.sh"
+            path.parent.mkdir(parents=True)
+            path.write_text(text)
+        return root / "raw"
+
+    def _select(self, root: Path, studio: Path, raw: Path | str, **env: str):
+        script = (self._functions() + 'EXAMPLE_DIR="$1"\nref="$(update_ref)"\necho "ref=${ref}"\n'
+                  'select_get_example "${ref}" "$2/get-example.sh"\n')
+        run_env = {"PATH": os.environ["PATH"], "NEAT_APPS_RAW_URL": str(raw), **env}
+        return subprocess.run(["bash", "-c", script, "_", str(studio), str(root)],
+                              capture_output=True, text=True, env=run_env)
+
+    def test_the_installed_copy_fetches_the_installed_ref(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._install(root, "team/demo", local_copy=True)
+            raw = self._raw(root, {"team/demo": SOURCE_ARCHIVE_SCRIPT})
+
+            out = self._select(root, studio, raw)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.splitlines(),
+                             ["ref=team/demo", str(root / "out" / "scripts" / "get-example.sh")])
+
+    def test_a_named_script_wins_over_the_installed_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._install(root, "team/demo", local_copy=True)
+            mine = root / "mine.sh"
+            mine.write_text(self.GET_EXAMPLE.read_text())
+
+            out = self._select(root, studio, root / "raw", NEAT_APPS_GET_EXAMPLE=str(mine))
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.splitlines(), ["ref=team/demo", str(mine)])
+
+    def test_the_installed_copy_fetches_a_tag_from_its_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._install(root, "develop", local_copy=True)
+            tree = root / "tree" / "prebuilt-apps"
+            (tree / "examples" / "genai" / "neat-genai-studio").mkdir(parents=True)
+            (tree / "examples" / "genai" / "neat-genai-studio" / "run.sh").write_text("new")
+            (tree / "scripts").mkdir()
+            (tree / "scripts" / "get-example.sh").write_text(self.GET_EXAMPLE.read_text())
+            build = root / "index" / "apps" / "v1.0" / "abc1234def56"
+            build.mkdir(parents=True)
+            bundle = build / "neat-apps-v1.0-1.0.tar.gz"
+            with tarfile.open(bundle, "w:gz") as tar:
+                tar.add(tree, arcname="prebuilt-apps")
+            digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+            (build / "metadata.json").write_text(json.dumps(
+                {"resources-checksum": {bundle.name: digest}}, indent=4))
+            (build.parent / "latest.tag").write_text("abc1234def56\n")
+
+            out = self._select(root, studio, root / "raw", NEAT_APPS_BRANCH="v1.0")
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.splitlines()[0], "ref=v1.0")
+            fetched = subprocess.run(
+                ["bash", str(root / "get-example.sh"), "--ref", "v1.0", "--dest", "update", "neat-genai-studio"],
+                cwd=root, capture_output=True, text=True,
+                env={"PATH": os.environ["PATH"], "HOME": str(root / "home"),
+                     "NEAT_APPS_ARTIFACTS_URL": str(root / "index")})
+            self.assertEqual(fetched.returncode, 0, fetched.stderr)
+            update = root / "update"
+            self.assertEqual((update / "examples" / "genai" / "neat-genai-studio" / "run.sh").read_text(), "new")
+            self.assertTrue((update / "scripts" / "get-example.sh").is_file())
+
+    def test_without_a_copy_the_target_refs_script_is_downloaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._install(root, "team/demo", local_copy=False)
+            raw = self._raw(root, {"v1.0": self.GET_EXAMPLE.read_text(), "team/demo": SOURCE_ARCHIVE_SCRIPT})
+
+            for branch in ("v1.0", "v1.0:" + "a" * 40):
+                with self.subTest(branch=branch), RawTreeServer(raw) as server:
+                    out = self._select(root, studio, server.url, NEAT_APPS_BRANCH=branch)
+                    self.assertEqual(out.returncode, 0, out.stderr)
+                    self.assertEqual(out.stdout.splitlines(),
+                                     [f"ref={branch}", f"{server.url}/v1.0/scripts/get-example.sh"])
+
+    def test_a_missing_named_script_is_not_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._install(root, "team/demo", local_copy=True)
+
+            out = self._select(root, studio, root / "raw", NEAT_APPS_GET_EXAMPLE=str(root / "none.sh"))
+            self.assertEqual(out.returncode, 1)
+            self.assertIn(f"ERR Not found: {root / 'none.sh'}", out.stderr)
+
+    def test_without_curl_the_script_is_downloaded_with_wget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._install(root, None, local_copy=False)
+            raw = self._raw(root, {"v1.0": self.GET_EXAMPLE.read_text()})
+            no_curl = root / "bin"
+            no_curl.mkdir()
+            for folder in ("/usr/bin", "/bin"):
+                for tool in Path(folder).iterdir():
+                    if tool.name != "curl" and not (no_curl / tool.name).exists():
+                        (no_curl / tool.name).symlink_to(tool)
+
+            with RawTreeServer(raw) as server:
+                out = self._select(root, studio, server.url, NEAT_APPS_BRANCH="v1.0", PATH=str(no_curl))
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.splitlines()[-1], f"{server.url}/v1.0/scripts/get-example.sh")
+
+    def test_a_missing_download_fails_as_a_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._install(root, None, local_copy=False)
+            raw = self._raw(root, {"v1.0": self.GET_EXAMPLE.read_text()})
+            no_curl = root / "bin"
+            no_curl.mkdir()
+            for folder in ("/usr/bin", "/bin"):
+                for tool in Path(folder).iterdir():
+                    if tool.name != "curl" and not (no_curl / tool.name).exists():
+                        (no_curl / tool.name).symlink_to(tool)
+
+            for path in (os.environ["PATH"], str(no_curl)):
+                with self.subTest(curl=path != str(no_curl)), RawTreeServer(raw) as server:
+                    out = self._select(root, studio, server.url, NEAT_APPS_BRANCH="gone", PATH=path)
+                    self.assertEqual(out.returncode, 1)
+                    self.assertIn(f"ERR Download failed: {server.url}/gone/scripts/get-example.sh", out.stderr)
+
+    def test_an_old_layout_ignores_folders_above_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            # A Studio fetched on its own into <dest>/, inside a user folder that
+            # happens to have scripts/ and deps/ three levels up.
+            studio = root / "user" / "a" / "b" / "neat-genai-studio"
+            studio.mkdir(parents=True)
+            (root / "user" / "scripts").mkdir()
+            (root / "user" / "scripts" / "get-example.sh").write_text(self.GET_EXAMPLE.read_text())
+            (root / "user" / "deps").mkdir()
+            (root / "user" / "deps" / "neat-apps.json").write_text('{"neat-apps": {"ref": "decoy"}}')
+            raw = self._raw(root, {"main": self.GET_EXAMPLE.read_text()})
+
+            out = self._select(root, studio, raw)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(out.stdout.splitlines(), ["ref=main", f"{raw}/main/scripts/get-example.sh"])
+
+    def test_a_source_archive_script_stops_with_the_way_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            installed = self._install(root / "installed", None, local_copy=False)
+            alone = root / "alone" / "neat-genai-studio"
+            alone.mkdir(parents=True)
+            raw = self._raw(root, {"main": SOURCE_ARCHIVE_SCRIPT, "develop": self.GET_EXAMPLE.read_text()})
+
+            for studio, hint in ((installed, "sima-cli neat install apps"),
+                                 (alone, "Move this folder away and fetch the Studio again with get-example.sh")):
+                with self.subTest(studio=studio.parent.name):
+                    out = self._select(root, studio, raw)
+                    self.assertEqual(out.returncode, 1)
+                    self.assertEqual(out.stdout.splitlines(), ["ref=main"])
+                    self.assertIn("does not fetch the published bundle", out.stderr)
+                    self.assertIn(hint, out.stderr)
+                    # main is the ref that failed, so the hint names another one.
+                    self.assertIn("NEAT_APPS_BRANCH=<branch or tag> ./run.sh update", out.stderr)
+                    self.assertNotIn("NEAT_APPS_BRANCH=main", out.stderr)
+
+
+class StandaloneUpdateRunTests(unittest.TestCase):
+    """The whole `run.sh update` on a Studio laid out as sima-cli and
+    get-example.sh leave it, against a local artifacts index."""
+
+    EXAMPLE = Path(__file__).resolve().parents[2]
+    GET_EXAMPLE = EXAMPLE.parents[2] / "scripts" / "get-example.sh"
+    # The Studio's source, without tests or anything an install creates.
+    IGNORE = staticmethod(shutil.ignore_patterns("tests", "__pycache__", ".venv*", "config.local.yaml*", "*.log",
+                                    "*.onnx", "*.onnx.json", "milvus.*", "uploads", "piper-plus",
+                                    "mms-tts-kor", ".local-certs", ".neat-genai-studio.*"))
+
+    def _setup(self, root: Path) -> Path:
+        apps = root / "apps"
+        studio = apps / "examples" / "genai" / "neat-genai-studio"
+        shutil.copytree(self.EXAMPLE, studio, ignore=self.IGNORE)
+        (studio / "config.local.yaml").write_text("app: {}\n")
+        (studio / "src" / "python" / "stale.py").write_text("")
+        (apps / "scripts").mkdir()
+        shutil.copy2(self.GET_EXAMPLE, apps / "scripts" / "get-example.sh")
+        (apps / "deps").mkdir()
+        (apps / "deps" / "neat-apps.json").write_text(json.dumps(
+            {"neat-apps": {"ref": "team/demo", "spec": "0" * 40}}))
+        # The published bundle for team/demo: the same Studio with a marker.
+        tree = root / "tree" / "prebuilt-apps"
+        shutil.copytree(self.EXAMPLE, tree / "examples" / "genai" / "neat-genai-studio", ignore=self.IGNORE)
+        (tree / "examples" / "genai" / "neat-genai-studio" / "MARKER").write_text("new")
+        build = root / "index" / "apps" / "team%252Fdemo" / "abc1234def56"
+        build.mkdir(parents=True)
+        bundle = build / "neat-apps-team-demo-abc1234.tar.gz"
+        with tarfile.open(bundle, "w:gz") as tar:
+            tar.add(tree, arcname="prebuilt-apps")
+        (build / "metadata.json").write_text(json.dumps(
+            {"resources-checksum": {bundle.name: hashlib.sha256(bundle.read_bytes()).hexdigest()}}))
+        (build.parent / "latest.tag").write_text("abc1234def56\n")
+        return studio
+
+    def _update(self, root: Path, studio: Path, path: str = "", **env: str):
+        run_env = {"PATH": path + os.environ["PATH"], "HOME": str(root / "home"),
+                   "NEAT_APPS_ARTIFACTS_URL": str(root / "index"), **env}
+        return subprocess.run(["bash", str(studio / "run.sh"), "update"], cwd=studio,
+                              capture_output=True, text=True, env=run_env)
+
+    @unittest.skipUnless(shutil.which("rsync"), "rsync is not installed")
+    def test_update_mirrors_the_bundle_and_keeps_the_install_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._setup(root)
+
+            out = self._update(root, studio)
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+            self.assertIn("Source updated from team/demo.", out.stdout)
+            self.assertEqual((studio / "MARKER").read_text(), "new")
+            self.assertEqual((studio / "config.local.yaml").read_text(), "app: {}\n")
+            self.assertFalse((studio / "src" / "python" / "stale.py").exists())
+
+    @unittest.skipUnless(shutil.which("rsync"), "rsync is not installed")
+    def test_update_through_a_symlink_finds_the_install_and_ignores_fetch_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "link").symlink_to(self._setup(root))
+            studio = root / "link"
+
+            out = self._update(root, studio, NEAT_APPS_ARCHIVE_URL=str(root / "missing.tar.gz"),
+                               NEAT_APPS_EXAMPLE_DEST_DIR=str(root / "elsewhere"),
+                               NEAT_APPS_REPO_URL="https://github.com/sima-neat/apps.git")
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+            self.assertIn("Source updated from team/demo.", out.stdout)
+            self.assertEqual((studio / "MARKER").read_text(), "new")
+
+    @unittest.skipUnless(shutil.which("rsync"), "rsync is not installed")
+    def test_a_failed_fetch_leaves_the_studio_and_names_the_way_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._setup(root)
+
+            (root / "t").mkdir()
+
+            out = self._update(root, studio, NEAT_APPS_BRANCH="gone", TMPDIR=str(root / "t"))
+            self.assertEqual(out.returncode, 1)
+            self.assertIn("Cannot fetch neat-genai-studio for gone.", out.stderr)
+            self.assertIn("Pick another ref with NEAT_APPS_BRANCH=main ./run.sh update", out.stderr)
+            self.assertIn("NEAT_APPS_BRANCH=main", out.stderr)
+            self.assertIn("NEAT_APPS_GET_EXAMPLE", out.stderr)
+            self.assertFalse((studio / "MARKER").exists())
+            self.assertTrue((studio / "src" / "python" / "stale.py").exists())
+            self.assertEqual(list((root / "t").iterdir()), [])
+
+    @unittest.skipUnless(shutil.which("rsync"), "rsync is not installed")
+    def test_a_failed_script_choice_leaves_no_temporary_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._setup(root)
+            (root / "t").mkdir()
+
+            out = self._update(root, studio, NEAT_APPS_GET_EXAMPLE=str(root / "none.sh"), TMPDIR=str(root / "t"))
+            self.assertEqual(out.returncode, 1)
+            self.assertIn("Not found:", out.stderr)
+            self.assertEqual(list((root / "t").iterdir()), [])
+
+    def test_a_stopped_update_leaves_no_temporary_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = self._setup(root)
+            (root / "t").mkdir()
+            # A get-example.sh that stops run.sh with SIGTERM while it fetches.
+            stop = root / "stop.sh"
+            stop.write_text('#!/bin/bash\ncase "$1" in --help) echo "--ref"; exit 0 ;; esac\nkill -TERM $PPID\nexit 1\n')
+
+            out = self._update(root, studio, NEAT_APPS_GET_EXAMPLE=str(stop), TMPDIR=str(root / "t"))
+            self.assertNotEqual(out.returncode, 0)
+            self.assertEqual(list((root / "t").iterdir()), [])
+
+    def test_a_studio_fetched_alone_ignores_a_git_folder_above_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            studio = root / "user" / "a" / "b" / "neat-genai-studio"
+            shutil.copytree(self.EXAMPLE, studio, ignore=self.IGNORE)
+            (root / "user" / ".git").mkdir()
+            fail = root / "fail.sh"
+            fail.write_text('#!/bin/bash\ncase "$1" in --help) echo "--ref"; exit 0 ;; esac\nexit 1\n')
+
+            out = self._update(root, studio, NEAT_APPS_GET_EXAMPLE=str(fail))
+            self.assertEqual(out.returncode, 1)
+            self.assertNotIn("git cannot read it", out.stderr)
+            self.assertIn("Cannot fetch neat-genai-studio for main.", out.stderr)
+
+    def test_a_checkout_git_cannot_read_is_never_mirrored(self):
+        for git_entry in ("folder", "file"):
+            with self.subTest(git=git_entry), tempfile.TemporaryDirectory() as tmp:
+                self._check_unreadable_checkout(Path(tmp).resolve(), git_entry)
+
+    def _check_unreadable_checkout(self, root: Path, git_entry: str):
+        studio = self._setup(root)
+        if git_entry == "folder":
+            (root / "apps" / ".git").mkdir()
+        else:
+            # A worktree's .git is a file that names the real repository.
+            (root / "apps" / ".git").write_text("gitdir: /elsewhere\n")
+        fake = root / "fakebin"
+        fake.mkdir()
+        (fake / "git").write_text("#!/bin/sh\necho 'fatal: detected dubious ownership' >&2\nexit 128\n")
+        (fake / "git").chmod(0o755)
+
+        out = self._update(root, studio, path=f"{fake}:")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("git cannot read it", out.stderr)
+        self.assertFalse((studio / "MARKER").exists())
+        self.assertTrue((studio / "src" / "python" / "stale.py").exists())
 
 
 class HfDownloadRetryTests(unittest.TestCase):
