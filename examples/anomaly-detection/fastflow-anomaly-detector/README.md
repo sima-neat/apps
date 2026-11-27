@@ -101,7 +101,7 @@ The packaged config already points `model.path` at `models/fastflow_demo_mpk.tar
 
 ## Prepare an RTSP source
 
-1. In Insight, open **Media Sources** and import a clip of blue discs, such as `TODO(clip): name the catalog clip`, or a clip of your own parts.
+1. In Insight, open **Media Sources** and import a clip of your own parts. The packaged `fastflow_demo` model knows only the blue discs it was trained on, so on other parts it flags most frames (300 of 300 on the test streams). A meaningful result on your parts needs a model from [Use Your Own Model](#use-your-own-model).
 2. Assign the video under **Streaming Sources** and start the source.
 3. Copy its RTSP URL into `input.source` and set `input.codec` to match the video. Use a host and published port reachable from the target, not `localhost`.
 
@@ -134,11 +134,11 @@ python3 "$APP_DIR/src/python/main.py" --config "$APP_DIR/src/common/config.yaml"
 
 ## Expected Result
 
-This application writes nothing to disk; its output is the Insight stream plus a startup line and a closing line, the same from C++ and Python. With `inference.frames: 1080` on the blue-disc clip from its first frame:
+This application writes nothing to disk; its output is the Insight stream plus a startup line and a closing line, the same from C++ and Python. The lines have this format; the stream size and the counts depend on your clip and model:
 
 ```text
-source=rtsp://<host>:<port>/<stream> codec=h264 stream=720x720@30 map=256x256 insight=<insight-host-ip> video=9000 metadata=9100
-processed=1080 flagged=474 video_sender=<insight-host-ip>:9000
+source=rtsp://<host>:<port>/<stream> codec=h264 stream=<width>x<height>@<fps> map=256x256 insight=<insight-host-ip> video=9000 metadata=9100
+processed=<frames> flagged=<frames-with-a-defect> video_sender=<insight-host-ip>:9000
 ```
 
 In the Insight viewer, each defect is outlined and labelled `anomaly` with its highest probability, such as `anomaly (81%)` on a scratch. The closing line counts the frames processed and the frames with a defect, and prints after Ctrl-C too. When the nonblocking metadata sender dropped messages because the socket buffer was full, a further line counts them.

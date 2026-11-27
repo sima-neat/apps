@@ -212,7 +212,8 @@ def main(argv: list[str] | None = None) -> int:
         f"source={config.string('input.source')} codec={config.string('input.codec')} "
         f"stream={stream.width}x{stream.height}@{stream.fps} map={map_side}x{map_side} "
         f"insight={host} video={video_port} "
-        f"metadata={config.integer('output.insight.metadata_port_base')}"
+        f"metadata={config.integer('output.insight.metadata_port_base')}",
+        flush=True,
     )
     try:
         processed, flagged = send_regions(
@@ -226,9 +227,9 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         run.close()
 
-    print(f"processed={processed} flagged={flagged} video_sender={host}:{video_port}")
+    print(f"processed={processed} flagged={flagged} video_sender={host}:{video_port}", flush=True)
     if metadata_sender.stats().send_failures:
-        print(f"{metadata_sender.stats().send_failures} metadata messages dropped")
+        print(f"{metadata_sender.stats().send_failures} metadata messages dropped", flush=True)
     return 0
 
 

@@ -124,6 +124,19 @@ bool test_a_dot_or_a_line_is_outlined_by_its_box() {
                      "a dot and a line are outlined by their boxes");
 }
 
+// A dot in the map's bottom-right pixel scales its box to the frame size; every point stays inside
+// the frame, because Insight drops a point outside it.
+bool test_a_box_on_the_map_edge_stays_inside_the_frame() {
+  cv::Mat map = cv::Mat::zeros(16, 16, CV_32FC1);
+  map.at<float>(15, 15) = 0.9F;
+  const fastflow::RegionOptions edge_options = {
+      .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
+  const auto regions = fastflow::defect_regions(map, edge_options);
+  const std::vector<std::array<int, 2>> outline = {{30, 45}, {30, 47}, {31, 47}, {31, 45}};
+  return expect_true(regions.size() == 1U && regions[0].polygon == outline,
+                     "a box on the map edge stays inside the frame");
+}
+
 bool test_segments_carry_the_box_outline_and_score() {
   const auto regions = fastflow::defect_regions(three_region_map(), options(1));
   const auto segments = nlohmann::json::parse(fastflow::segments_json(regions)).at("segments");
@@ -147,6 +160,7 @@ int main() {
   ok &= test_max_regions_keeps_the_highest_scores();
   ok &= test_a_map_below_the_threshold_has_no_region();
   ok &= test_a_dot_or_a_line_is_outlined_by_its_box();
+  ok &= test_a_box_on_the_map_edge_stays_inside_the_frame();
   ok &= test_segments_carry_the_box_outline_and_score();
   return ok ? 0 : 1;
 }

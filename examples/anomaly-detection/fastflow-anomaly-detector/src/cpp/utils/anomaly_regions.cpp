@@ -53,9 +53,12 @@ std::vector<Region> defect_regions(const cv::Mat& anomaly_map, const RegionOptio
     Region region;
     region.bbox = {x0, y0, x1 - x0, y1 - y0};
     cv::minMaxLoc(anomaly_map, nullptr, &region.score, nullptr, nullptr, member);
+    // A box that touches the map's right or bottom edge would scale to the frame size; Insight
+    // needs every point inside the frame.
     for (const cv::Point& point : outline) {
       region.polygon.push_back(
-          {point.x * options.width / map_width, point.y * options.height / map_height});
+          {std::min(point.x * options.width / map_width, options.width - 1),
+           std::min(point.y * options.height / map_height, options.height - 1)});
     }
     regions.push_back(std::move(region));
   }

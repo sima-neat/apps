@@ -96,6 +96,18 @@ def test_a_dot_or_a_line_is_outlined_by_its_box():
     assert regions[1].polygon == [[4, 42], [4, 45], [14, 45], [14, 42]]
 
 
+def test_a_box_on_the_map_edge_stays_inside_the_frame():
+    """A dot in the map's bottom-right pixel scales its box to the frame size; every point
+    stays inside the frame, because Insight drops a point outside it."""
+    anomaly_map = np.zeros((16, 16), np.float32)
+    anomaly_map[15, 15] = 0.9
+    options = anomaly_regions.RegionOptions(
+        width=32, height=48, threshold=0.5, min_region_px=1, max_regions=10
+    )
+    (region,) = anomaly_regions.defect_regions(anomaly_map, options)
+    assert region.polygon == [[30, 45], [30, 47], [31, 47], [31, 45]]
+
+
 def test_segments_carry_the_box_outline_and_score():
     regions = anomaly_regions.defect_regions(_three_region_map(), _options(max_regions=1))
     (segment,) = json.loads(anomaly_regions.segments_json(regions))["segments"]

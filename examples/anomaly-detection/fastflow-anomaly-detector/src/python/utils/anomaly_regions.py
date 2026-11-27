@@ -61,8 +61,13 @@ def defect_regions(anomaly_map: np.ndarray, options: RegionOptions) -> list[Regi
             Region(
                 bbox=(x0, y0, x1 - x0, y1 - y0),
                 score=float(anomaly_map[member].max()),
+                # A box that touches the map's right or bottom edge would scale to the frame
+                # size; Insight needs every point inside the frame.
                 polygon=[
-                    [px * options.width // map_width, py * options.height // map_height]
+                    [
+                        min(px * options.width // map_width, options.width - 1),
+                        min(py * options.height // map_height, options.height - 1),
+                    ]
                     for px, py in outline
                 ],
             )
