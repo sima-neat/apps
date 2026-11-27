@@ -80,9 +80,6 @@ jobs:
         "${SDK_PACKAGE_HELPER:?Shared SDK package helper required}" "${sdk_container}" configure
 
         packages=()
-        if ! docker exec "${sdk_container}" bash -lc 'command -v npm >/dev/null 2>&1'; then
-          packages+=(nodejs npm)
-        fi
         if ! docker exec "${sdk_container}" bash -lc 'command -v rg >/dev/null 2>&1'; then
           packages+=(ripgrep)
         fi
@@ -147,6 +144,17 @@ jobs:
         test -f deps/scheduler-sdk-policy.json
         scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
+        tar -tzf neat-apps-tests.tar.gz \
+          neat-apps-tests/assets/datasets-test/imagenet/goldfish.jpeg >/dev/null
+        test_coco_count="$(
+          tar -tzf neat-apps-tests.tar.gz \
+            | grep -Ec '^neat-apps-tests/assets/datasets-test/coco/[^/]+\.jpg$' \
+            || true
+        )"
+        if [[ "${test_coco_count}" -ne 10 ]]; then
+          echo "ERROR: expected 10 COCO test images, found ${test_coco_count}." >&2
+          exit 1
+        fi
         ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
 
         # One upload root preserves paths when the shared workflow prefixes it.
@@ -179,6 +187,19 @@ jobs:
 
       - name: Run repository contract tests
         run: python3 -m pytest -c tests/pytest.ini --rootdir=. -v tests/scripts
+
+      # Builds the portal on every ref, so a broken catalog or portal build blocks
+      # publishing. build-sysdoc-examples builds the published copy.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build portal
+        working-directory: portal
+        run: |
+          npm ci
+          npm run build
 
   publish-vulcan-artifacts:
     name: Publish to Vulcan

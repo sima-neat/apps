@@ -21,11 +21,12 @@ from pathlib import Path
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 README = EXAMPLE_DIR / "README.md"
 
-# The first path segment of anything build.sh ships in the customer bundle. A
-# referenced token whose first segment is not one of these is a model repo,
-# config key, URL, runtime directory, or a repository-only path such as
-# ``tests/`` (named in the README's development section, and overlaid onto the
-# install only by CI), so it is not checked for existence here.
+# The first path segment of anything scripts/ci/package-apps.sh ships in the
+# customer bundle. A referenced token whose first segment is not one of these
+# is a model repo, config key, URL, runtime directory, or a repository-only
+# path such as ``tests/`` (named in the README's development section, and
+# overlaid onto the install only by CI), so it is not checked for existence
+# here.
 PACKAGED_TOP = {
     "run.sh",
     "setup.sh",
@@ -86,8 +87,9 @@ def _referenced_paths(text: str) -> set[str]:
     return tokens
 
 
-# What build.sh packages for an example (its find(1) filter): everything under
-# src/python/ and src/common/, plus README.md, run.sh and setup.sh.
+# What scripts/ci/package-apps.sh packages for an example (its find(1)
+# filter): everything under src/python/ and src/common/, plus README.md, run.sh
+# and setup.sh.
 _BUILD_PACKAGED = ("src/python/", "src/common/")
 _BUILD_PACKAGED_FILES = {"README.md", "run.sh", "setup.sh"}
 _EXAMPLE_DIR_REF = re.compile(r"\$\{?EXAMPLE_DIR\}?/([A-Za-z0-9_./-]+)")
@@ -119,7 +121,7 @@ class LauncherPackagePathsTests(unittest.TestCase):
             )
             self.assertEqual(
                 unpackaged, [],
-                f"{script} uses files build.sh does not package: {unpackaged}",
+                f"{script} uses files scripts/ci/package-apps.sh does not package: {unpackaged}",
             )
             missing = sorted(p for p in paths if not (EXAMPLE_DIR / p).exists())
             self.assertEqual(missing, [], f"{script} uses missing files: {missing}")
