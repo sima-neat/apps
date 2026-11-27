@@ -14,8 +14,6 @@ sandbox/
 sandbox-test/
 tests/.env.local
 tests/configs/.env.local
-.neat-core-installed
-deps/debs/
 deps/neat-core.json
 deps/scheduler-sdk-policy.json
 portal/node_modules/
@@ -23,7 +21,6 @@ portal/.vite/
 portal/dist/
 portal/public/catalog.json
 portal/public/example-assets/
-install_neat_framework.sh
 neat-apps-runtime/
 prebuilt-apps/
 docs/*
