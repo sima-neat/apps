@@ -184,7 +184,6 @@ does.
 ## Used in
 
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (BGR or NV12 frames to Insight, named endpoints)
-- [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/)
 - [face-detector](../../../examples/face-detection/face-detector/) (`model.input_appsrc_options(true)`)
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`model.input_appsrc_options(true)`)
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (NV12 model input with `max_width`, encoded input)
