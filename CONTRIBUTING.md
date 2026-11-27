@@ -257,6 +257,7 @@ README validation, catalog generation, and affected CI workflows.
 | `support/python/` | Helpers the Python examples share |
 | `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
+| `scripts/get-example.sh` | Fetches one example of a published bundle |
 | `models/` | User-managed model packages |
 | `deps/neat-apps.json` | Installed Apps ref and exact commit |
 | `deps/neat-core.json` | Core artifact selected for this Apps build |

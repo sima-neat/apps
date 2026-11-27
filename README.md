@@ -148,9 +148,10 @@ in the folder names the Core version the example needs. The script checks the
 bundle's SHA-256 before it extracts anything. The folder has the
 `prebuilt-apps/` layout, so the commands after Install Apps in the example's
 README run from it. It holds the example and the `assets/datasets/` folders the
-example names. It also holds `support/` and `deps/`, which names the Apps ref
-and commit, when the bundle has them. The `develop` and `main` bundles have no
-`support/`. An example that
+example names. It also holds `support/`, `deps/`, which names the Apps ref and
+commit, and `scripts/get-example.sh` of the same version, when the bundle has
+them. Bundles published before this change have no `scripts/get-example.sh`, and
+`develop` and `main` have no `support/`. An example that
 runs other examples, such as `docker/parallel-apps`, needs the whole bundle.
 
 `--ref <branch|tag>` picks the bundle, and the default is `main`. `--dest <dir>`

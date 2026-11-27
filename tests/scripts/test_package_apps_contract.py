@@ -48,6 +48,7 @@ def _fake_repo(root: Path) -> None:
     _write(root / "deps/manifest.json", json.dumps({"neat-core": ""}) + "\n")
     _write(root / "deps/neat-core.json", CORE_METADATA)
     _write(root / "scripts/download_models.sh", executable=True)
+    _write(root / "scripts/get-example.sh", executable=True)
     _write(root / "tests/conftest.py")
     _write(root / "tests/test.sh", executable=True)
     _write(root / "support/README.md")
@@ -178,6 +179,7 @@ def test_package_apps_ships_runtime_and_test_layout(packaged_without_git):
         f"{demo}/src/cpp/pre-built/demo",
         "prebuilt-apps/deps/neat-core.json",
         "prebuilt-apps/deps/neat-apps.json",
+        "prebuilt-apps/scripts/get-example.sh",
         "prebuilt-apps/support/README.md",
         "prebuilt-apps/support/labels/coco80.txt",
         "prebuilt-apps/support/python/sima_examples/helpers.py",
@@ -186,6 +188,7 @@ def test_package_apps_ships_runtime_and_test_layout(packaged_without_git):
     ):
         assert member in runtime, member
     assert runtime[f"{demo}/src/cpp/pre-built/demo"][1] & stat.S_IXUSR
+    assert runtime["prebuilt-apps/scripts/get-example.sh"][1] & stat.S_IXUSR
     for member in (
         f"{demo}/src/cpp/CMakeLists.txt",
         f"{demo}/src/python/model.onnx",
@@ -194,6 +197,7 @@ def test_package_apps_ships_runtime_and_test_layout(packaged_without_git):
         "prebuilt-apps/support/cpp/CMakeLists.txt",
         "prebuilt-apps/support/cpp/sima_examples/testing/fixture.h",
         "prebuilt-apps/assets/datasets-test/coco/test.jpg",
+        "prebuilt-apps/scripts/download_models.sh",
     ):
         assert member not in runtime, member
     assert not [name for name in runtime if name.endswith(("_unit_test", "_e2e_test"))]
