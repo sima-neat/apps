@@ -32,7 +32,8 @@ bool valid_segments(const MetadataJsonListenerResult& result) {
         message.timestamp_ms < 0) {
       return false;
     }
-    for (const auto& segment : nlohmann::json::parse(message.payload).at("data").at("segments")) {
+    const auto payload = nlohmann::json::parse(message.payload);
+    for (const auto& segment : payload.at("data").at("segments")) {
       const double confidence = segment.at("confidence").get<double>();
       if (segment.at("label") != "person" || confidence <= 0.3 || confidence > 1.0 ||
           segment.at("bbox").size() != 4U || segment.at("mask_format") != "polygon" ||

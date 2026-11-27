@@ -1,39 +1,33 @@
+# FastFlow anomaly detection of one RTSP stream, with the defects outlined in Insight.
 model:
-  path: models/fastflow_demo_mpk.tar.gz   # Compiled model archive. See Prepare the Model.
-  # Input normalisation the package expects, RGB order on 0..1 pixels. fastflow_demo takes
-  # its blue-disc mean; a package compiled from an anomalib export normalises inside the
-  # graph and takes mean [0, 0, 0] and stddev [1, 1, 1].
-  normalize:
-    mean: [0.3893437, 0.35421189, 0.36142577]
-    stddev: [1.0, 1.0, 1.0]
+  # fastflow_demo, the Model Zoo package trained on the blue discs, or anomalib, a package
+  # compiled from an anomalib FastFlow export, which normalizes inside its graph.
+  id: fastflow_demo
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/fastflow_demo_mpk.tar.gz
 
-source:
-  rtsp_url: <rtsp-url>       # e.g. rtsp://<insight-host-ip>:8554/src1. Frames must be square.
-  tcp: true                  # Use TCP for RTSP transport.
-  latency_ms: 100            # RTSP receive latency in milliseconds.
+input:
+  source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # RTSP URL of a stream with square frames.
+  codec: h264                   # h264, h265, or mjpeg.
+  width: 0                      # 0 reads the stream's frame size and rate with a probe. Set them
+  height: 0                     # only for a stream that does not report them.
+  fps: 0
+  rtsp:
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0                  # Frame limit. 0 means run continuously.
-  threshold: 0.5             # Map probability that counts as anomalous. Fixed by training.
-  min_region_px: 300         # Smallest connected region, in 256x256 map pixels, that marks a
-                             # frame ANOMALY. Measured on the blue discs; re-measure per product.
-
-runtime:
-  profile: false             # Print aggregate profiling summaries.
-  profile_interval: 100      # Rolling profile window in published frames.
+  frames: 0                     # Frames to process before stopping; 0 runs until stopped.
+  max_detections: 10            # Defect regions sent per frame, highest score first.
 
 output:
-  heat_max: 0.7              # Map probability drawn at full heatmap intensity.
-  alpha: 0.55                # Heatmap opacity over the frame.
-  save_dir: ""               # Optional directory for annotated frames.
-  save_every: 0              # Save every Nth output frame. 0 disables saving.
   insight:
-    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
-    video_port: 9000         # UDP video port.
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Insight video port.
+    metadata_port_base: 9100    # Insight metadata port.
 
-# Test harness settings only. Normal example runs ignore this section.
-testing:
-  e2e:
-    output:
-      save_every: 10
-      total_saved_frames: 20
+app:
+  anomaly_threshold: 0.5        # Map probability at which a pixel counts as anomalous.
+  # Smallest connected region, in map pixels, that counts as a defect: smaller ones are the
+  # speckle a good part produces. Measured on the blue discs; measure again for each product.
+  min_region_px: 300

@@ -1,277 +1,176 @@
-// Unit test for fastflow-anomaly-detector: validates CLI arg handling and config validation.
-#include "sima_examples/pull_status.h"
-#include "sima_examples/testing/test_config.h"
-#include "sima_examples/testing/test_process.h"
+// Unit tests for the FastFlow anomaly detector: the checks the application leaves to its config,
+// and the defect regions it sends. tests/python/test_unit.py runs the same checks in Python.
 
+#include "../../src/cpp/utils/anomaly_regions.h"
+#include "sima_examples/config.h"
+#include "sima_examples/testing/test_checks.h"
+
+#include <nlohmann/json.hpp>
+#include <opencv2/core.hpp>
+
+#include <array>
+#include <cmath>
 #include <filesystem>
-#include <iostream>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
-using sima_examples::testing::create_test_scratch_dir;
-using sima_examples::testing::ProcessResult;
-using sima_examples::testing::remove_dir;
-using sima_examples::testing::spawn_and_wait;
-using sima_examples::testing::write_e2e_config;
+
+using sima_examples::testing::expect_true;
 
 namespace {
 
-constexpr const char* kExampleName = "fastflow-anomaly-detector";
-
-// ---------------------------------------------------------------------------
-// Configuration rules --validate-config-only can reach without a model or a
-// stream (Refs #526). Each case is the packaged config with exactly one value
-// broken, and asserts the message that names the rule; the accepted cases pin
-// both ends of each range so an off-by-one cannot creep in. Tests 6 and 7
-// above own the stddev and alpha rules.
-// ---------------------------------------------------------------------------
-struct RuleCase {
-  const char* name;
-  sima_examples::testing::ConfigScalars overrides;
-  const char* message; // empty: the config must validate
-};
-
-int configuration_rule_failures(const std::string& binary) {
-  const std::vector<RuleCase> cases = {
-      {"model-path-empty", {{"model.path", ""}}, "model.path must be set"},
-      {"rtsp-url-empty", {{"source.rtsp_url", ""}}, "source.rtsp_url must be set"},
-      {"insight-host-empty", {{"output.insight.host", ""}}, "output.insight.host must be set"},
-      {"latency-negative", {{"source.latency_ms", "-1"}}, "source.latency_ms must be >= 0"},
-      {"frames-negative", {{"inference.frames", "-1"}}, "inference.frames must be >= 0"},
-      {"threshold-above",
-       {{"inference.threshold", "1.5"}},
-       "inference.threshold must be between 0 and 1"},
-      {"threshold-below",
-       {{"inference.threshold", "-0.5"}},
-       "inference.threshold must be between 0 and 1"},
-      {"min-region-zero",
-       {{"inference.min_region_px", "0"}},
-       "inference.min_region_px must be > 0"},
-      {"profile-interval-zero",
-       {{"runtime.profile_interval", "0"}},
-       "runtime.profile_interval must be > 0"},
-      {"video-port-zero",
-       {{"output.insight.video_port", "0"}},
-       "output.insight.video_port must be in [1, 65535]"},
-      {"video-port-above",
-       {{"output.insight.video_port", "65536"}},
-       "output.insight.video_port must be in [1, 65535]"},
-      {"save-every-negative", {{"output.save_every", "-1"}}, "output.save_every must be >= 0"},
-      {"heat-max-equals-threshold",
-       {{"output.heat_max", "0.5"}},
-       "output.heat_max must be greater than inference.threshold"},
-      {"heat-max-below-threshold",
-       {{"inference.threshold", "0.8"}, {"output.heat_max", "0.7"}},
-       "output.heat_max must be greater than inference.threshold"},
-      // accepted boundaries
-      {"threshold-zero-accepted", {{"inference.threshold", "0"}}, ""},
-      {"threshold-one-accepted", {{"inference.threshold", "1"}, {"output.heat_max", "1.5"}}, ""},
-      {"alpha-zero-accepted", {{"output.alpha", "0"}}, ""},
-      {"alpha-one-accepted", {{"output.alpha", "1"}}, ""},
-      {"latency-zero-accepted", {{"source.latency_ms", "0"}}, ""},
-      {"min-region-one-accepted", {{"inference.min_region_px", "1"}}, ""},
-      {"profile-interval-one-accepted", {{"runtime.profile_interval", "1"}}, ""},
-      {"video-port-one-accepted", {{"output.insight.video_port", "1"}}, ""},
-      {"video-port-max-accepted", {{"output.insight.video_port", "65535"}}, ""},
-      {"save-every-zero-accepted", {{"output.save_every", "0"}}, ""},
-  };
-  int failures = 0;
-  const fs::path scratch = create_test_scratch_dir(kExampleName, "configuration-rules");
-  if (scratch.empty()) {
-    std::cerr << "[FAIL] could not create config test directory\n";
-    return 1;
+// The checks the application leaves to its config: the values it reads are usable.
+bool test_shipped_config_names_a_supported_model_and_input() {
+  const fs::path common_dir = "examples/anomaly-detection/fastflow-anomaly-detector/src/common";
+  const auto config = sima_examples::Config::load(common_dir / "config.yaml");
+  const std::string model_id = config.string("model.id");
+  const std::string codec = config.string("input.codec");
+  bool ok = expect_true(model_id == "fastflow_demo" || model_id == "anomalib",
+                        "the shipped model.id is supported");
+  ok &= expect_true(codec == "h264" || codec == "h265" || codec == "mjpeg",
+                    "the shipped codec is supported");
+  ok &= expect_true(fs::path(config.string("model.path")).filename() == "fastflow_demo_mpk.tar.gz",
+                    "model.path names the fastflow_demo package");
+  ok &= expect_true(
+      config.integer("input.width") >= 0 && config.integer("input.height") >= 0 &&
+          config.integer("input.fps") >= 0 && config.integer("input.rtsp.latency_ms") >= 0 &&
+          config.integer("inference.frames") >= 0 &&
+          config.integer("inference.max_detections") > 0 && config.integer("app.min_region_px") > 0,
+      "the shipped sizes, latency, and counts are in range");
+  ok &= expect_true(config.number("app.anomaly_threshold") > 0.0 &&
+                        config.number("app.anomaly_threshold") < 1.0,
+                    "the shipped anomaly threshold is between 0 and 1");
+  for (const std::string key :
+       {"output.insight.video_port_base", "output.insight.metadata_port_base"}) {
+    ok &= expect_true(config.integer(key) >= 1 && config.integer(key) <= 65535, key + " is a port");
   }
-  for (const RuleCase& c : cases) {
-    const fs::path config_path = scratch / (std::string(c.name) + ".yaml");
-    write_e2e_config(kExampleName, config_path, c.overrides);
-    const ProcessResult r =
-        spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-    const bool expect_reject = std::string(c.message).empty() == false;
-    if (expect_reject) {
-      if (r.exit_code == 0) {
-        std::cerr << "[FAIL] " << c.name << ": expected rejection, got exit 0\n";
-        ++failures;
-      } else if (r.stderr_text.find(std::string("[ERR] ") + c.message) == std::string::npos) {
-        std::cerr << "[FAIL] " << c.name << ": stderr does not name the rule (" << c.message
-                  << ")\n"
-                  << r.stderr_text;
-        ++failures;
-      } else {
-        std::cout << "[OK] " << c.name << " is rejected by its rule\n";
-      }
-    } else if (r.exit_code != 0 || r.stdout_text.find("Config validated") == std::string::npos) {
-      std::cerr << "[FAIL] " << c.name << ": expected the config to validate, got exit "
-                << r.exit_code << "\n"
-                << r.stderr_text;
-      ++failures;
-    } else {
-      std::cout << "[OK] " << c.name << "\n";
-    }
+  // Core sends to 127.0.0.1 when the host is empty.
+  ok &=
+      expect_true(!config.string("output.insight.host").empty() && config.boolean("input.rtsp.tcp"),
+                  "the shipped Insight host is set and RTSP runs over TCP");
+  return ok;
+}
+
+// A 16x16 map with a 16-pixel region scoring 0.9, a 9-pixel one peaking at 0.7, and a 4-pixel
+// one at 0.8.
+cv::Mat three_region_map() {
+  cv::Mat map = cv::Mat::zeros(16, 16, CV_32FC1);
+  map(cv::Rect(2, 2, 4, 4)).setTo(0.9F);
+  map(cv::Rect(10, 1, 3, 3)).setTo(0.6F);
+  map.at<float>(2, 11) = 0.7F;
+  map(cv::Rect(12, 12, 2, 2)).setTo(0.8F);
+  return map;
+}
+
+// A 32x48 frame scales map x by 2 and map y by 3.
+fastflow::RegionOptions options(int max_regions = 10) {
+  return {
+      .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 5, .max_regions = max_regions};
+}
+
+const std::vector<std::array<int, 2>> kFirstOutline = {{4, 6}, {4, 15}, {10, 15}, {10, 6}};
+
+// The 4-pixel region is dropped; the others come best first, scaled to the frame.
+bool test_regions_below_min_region_px_are_speckle() {
+  const auto regions = fastflow::defect_regions(three_region_map(), options());
+  bool ok = expect_true(regions.size() == 2U, "two regions reach min_region_px");
+  if (!ok) {
+    return false;
   }
-  remove_dir(scratch.string());
-  return failures;
+  ok &= expect_true(regions[0].bbox == std::array<int, 4>{4, 6, 8, 12} &&
+                        regions[1].bbox == std::array<int, 4>{20, 3, 6, 9},
+                    "the boxes are scaled to the frame, best first");
+  ok &= expect_true(std::abs(regions[0].score - 0.9) < 1e-6 &&
+                        std::abs(regions[1].score - 0.7) < 1e-6,
+                    "each score is the region's highest probability");
+  ok &= expect_true(regions[0].polygon == kFirstOutline, "the outline is scaled to the frame");
+  return ok;
+}
+
+bool test_max_regions_keeps_the_highest_scores() {
+  const auto regions = fastflow::defect_regions(three_region_map(), options(1));
+  return expect_true(regions.size() == 1U && regions[0].bbox == std::array<int, 4>{4, 6, 8, 12},
+                     "max_regions keeps the best region");
+}
+
+bool test_a_map_below_the_threshold_has_no_region() {
+  const cv::Mat good_part(16, 16, CV_32FC1, cv::Scalar(0.49F));
+  bool ok = expect_true(fastflow::defect_regions(good_part, options()).empty(),
+                        "a good part has no region");
+  ok &= expect_true(nlohmann::json::parse(fastflow::segments_json({})) ==
+                        nlohmann::json{{"segments", nlohmann::json::array()}},
+                    "a good part sends no segments");
+  return ok;
+}
+
+// Insight draws a polygon only from three points, so a region approxPolyDP reduces to fewer
+// gets its box.
+bool test_a_dot_or_a_line_is_outlined_by_its_box() {
+  cv::Mat map = cv::Mat::zeros(16, 16, CV_32FC1);
+  map.at<float>(9, 7) = 0.9F;
+  map(cv::Rect(2, 14, 5, 1)).setTo(0.8F);
+  const fastflow::RegionOptions dot_options = {
+      .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
+  const auto regions = fastflow::defect_regions(map, dot_options);
+  if (!expect_true(regions.size() == 2U, "the dot and the line are regions")) {
+    return false;
+  }
+  const std::vector<std::array<int, 2>> dot_outline = {{14, 27}, {14, 30}, {16, 30}, {16, 27}};
+  const std::vector<std::array<int, 2>> line_outline = {{4, 42}, {4, 45}, {14, 45}, {14, 42}};
+  return expect_true(regions[0].bbox == std::array<int, 4>{14, 27, 2, 3} &&
+                         regions[1].bbox == std::array<int, 4>{4, 42, 10, 3} &&
+                         regions[0].polygon == dot_outline && regions[1].polygon == line_outline,
+                     "a dot and a line are outlined by their boxes");
+}
+
+// A dot in the map's bottom-right pixel scales its box to the frame size; every point stays inside
+// the frame, because Insight drops a point outside it.
+bool test_a_box_on_the_map_edge_stays_inside_the_frame() {
+  cv::Mat map = cv::Mat::zeros(16, 16, CV_32FC1);
+  map.at<float>(15, 15) = 0.9F;
+  const fastflow::RegionOptions edge_options = {
+      .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
+  const auto regions = fastflow::defect_regions(map, edge_options);
+  const std::vector<std::array<int, 2>> outline = {{30, 45}, {30, 47}, {31, 47}, {31, 45}};
+  bool ok = expect_true(regions.size() == 1U && regions[0].polygon == outline,
+                        "a box on the map edge stays inside the frame");
+  // At 1:1 scaling the box still keeps an area.
+  const fastflow::RegionOptions same_size = {
+      .width = 16, .height = 16, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
+  const auto same_size_regions = fastflow::defect_regions(map, same_size);
+  const std::vector<std::array<int, 2>> same_size_outline = {
+      {14, 14}, {14, 15}, {15, 15}, {15, 14}};
+  ok &= expect_true(same_size_regions.size() == 1U &&
+                        same_size_regions[0].polygon == same_size_outline,
+                    "a box on the map edge keeps an area at 1:1 scaling");
+  return ok;
+}
+
+bool test_segments_carry_the_box_outline_and_score() {
+  const auto regions = fastflow::defect_regions(three_region_map(), options(1));
+  const auto segments = nlohmann::json::parse(fastflow::segments_json(regions)).at("segments");
+  if (!expect_true(segments.size() == 1U, "one segment per region")) {
+    return false;
+  }
+  const auto& segment = segments.front();
+  return expect_true(segment.at("label") == "anomaly" &&
+                         segment.at("bbox") == nlohmann::json{4, 6, 8, 12} &&
+                         segment.at("mask_format") == "polygon" &&
+                         segment.at("mask") == nlohmann::json(kFirstOutline) &&
+                         std::abs(segment.at("confidence").get<double>() - 0.9) < 1e-6,
+                     "the segment carries the box, outline, and score");
 }
 
 } // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
-  const std::string binary = argv[1];
-  int failures = 0;
-
-  // Test 1: --help exits successfully and prints usage.
-  {
-    const ProcessResult r = spawn_and_wait(binary, {"--help"}, 20000);
-    if (r.exit_code != 0) {
-      std::cerr << "[FAIL] --help: expected exit 0, got " << r.exit_code << "\n";
-      ++failures;
-    } else if (r.stdout_text.find("Usage") == std::string::npos) {
-      std::cerr << "[FAIL] --help: stdout does not contain Usage\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] --help printed usage\n";
-    }
-  }
-
-  // Test 2: unknown flag is rejected before model/runtime startup.
-  {
-    const ProcessResult r = spawn_and_wait(binary, {"--bogus"}, 20000);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] --bogus: expected nonzero exit\n";
-      ++failures;
-    } else if (r.stderr_text.find("unknown argument") == std::string::npos) {
-      std::cerr << "[FAIL] --bogus: stderr does not mention unknown argument\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] unknown flag rejected\n";
-    }
-  }
-
-  // Test 3: missing --config value is rejected.
-  {
-    const ProcessResult r = spawn_and_wait(binary, {"--config"}, 20000);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] --config without a path: expected nonzero exit\n";
-      ++failures;
-    } else if (r.stderr_text.find("--config requires a path") == std::string::npos) {
-      std::cerr << "[FAIL] --config without a path: stderr does not explain failure\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] missing config path rejected\n";
-    }
-  }
-
-  // Test 4: bad config path is rejected.
-  {
-    const ProcessResult r = spawn_and_wait(binary, {"--config", "/nonexistent_config.yaml"}, 20000);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] bad config: expected nonzero exit\n";
-      ++failures;
-    } else if (r.stderr_text.find("[ERR]") == std::string::npos) {
-      std::cerr << "[FAIL] bad config: stderr does not report [ERR]\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] bad config path rejected\n";
-    }
-  }
-
-  // Test 5: --validate-config-only accepts the packaged config, the binary's default. Its
-  // <rtsp-url> and <insight-host-ip> placeholders are non-empty strings, which is all
-  // validation asks of them. No --config, so no process logs land next to the packaged config.
-  {
-    const ProcessResult r = spawn_and_wait(binary, {"--validate-config-only"}, 20000);
-    if (r.exit_code != 0) {
-      std::cerr << "[FAIL] validate-config-only: expected exit 0, got " << r.exit_code << "\n"
-                << r.stderr_text;
-      ++failures;
-    } else if (r.stdout_text.find("Config validated") == std::string::npos) {
-      std::cerr << "[FAIL] validate-config-only: stdout does not confirm validation\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] validate-config-only accepts the packaged config\n";
-    }
-  }
-
-  // Test 6: a config that fails validation is rejected with [ERR].
-  {
-    const fs::path scratch = create_test_scratch_dir(kExampleName, "config");
-    const fs::path invalid = scratch / "invalid.yaml";
-    write_e2e_config(kExampleName, invalid, {{"model.normalize.stddev", "[-1, 1, 1]"}});
-    const ProcessResult r =
-        spawn_and_wait(binary, {"--config", invalid.string(), "--validate-config-only"}, 20000);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] invalid config: expected nonzero exit\n";
-      ++failures;
-    } else if (r.stderr_text.find("[ERR] model.normalize.stddev must be > 0") ==
-               std::string::npos) {
-      std::cerr << "[FAIL] invalid config: stderr does not explain failure\n" << r.stderr_text;
-      ++failures;
-    } else {
-      std::cout << "[OK] invalid config rejected\n";
-    }
-    remove_dir(scratch.string());
-  }
-
-  // Test 7: the heatmap opacity is checked too.
-  {
-    const fs::path scratch = create_test_scratch_dir(kExampleName, "config_alpha");
-    const fs::path invalid = scratch / "invalid_alpha.yaml";
-    write_e2e_config(kExampleName, invalid, {{"output.alpha", "1.5"}});
-    const ProcessResult r =
-        spawn_and_wait(binary, {"--config", invalid.string(), "--validate-config-only"}, 20000);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] invalid alpha: expected nonzero exit\n";
-      ++failures;
-    } else if (r.stderr_text.find("[ERR] output.alpha must be between 0 and 1") ==
-               std::string::npos) {
-      std::cerr << "[FAIL] invalid alpha: stderr does not explain failure\n" << r.stderr_text;
-      ++failures;
-    } else {
-      std::cout << "[OK] invalid alpha rejected\n";
-    }
-    remove_dir(scratch.string());
-  }
-
-  // Test 8: every configuration rule --validate-config-only can reach, both ends of each range.
-  failures += configuration_rule_failures(binary);
-
-  // The pull loop treats a timeout as "try again" and a closed output or pull error as the
-  // end of the run, carrying the runtime's own reason.
-  {
-    using sima_examples::pull_status_has_sample;
-    using simaai::neat::PullStatus;
-    simaai::neat::PullError pull_error;
-    pull_error.message = "queue torn down";
-    const auto thrown_message = [&](PullStatus status) -> std::string {
-      try {
-        (void)pull_status_has_sample(status, "frame", pull_error, "source reached EOS");
-      } catch (const std::runtime_error& error) {
-        return error.what();
-      }
-      return "";
-    };
-    const std::string closed = thrown_message(PullStatus::Closed);
-    const std::string errored = thrown_message(PullStatus::Error);
-    if (closed != "frame output closed unexpectedly: source reached EOS") {
-      std::cerr << "[FAIL] closed output should end the run with the reason, got: " << closed
-                << "\n";
-      ++failures;
-    } else if (errored != "failed to pull frame: queue torn down") {
-      std::cerr << "[FAIL] pull error should end the run with its message, got: " << errored
-                << "\n";
-      ++failures;
-    } else if (pull_status_has_sample(PullStatus::Timeout, "frame", pull_error, "") ||
-               !pull_status_has_sample(PullStatus::Ok, "frame", pull_error, "")) {
-      std::cerr << "[FAIL] a timeout is not a sample and a successful pull is\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] closed output and pull error are terminal, timeout is not\n";
-    }
-  }
-
-  return failures > 0 ? 1 : 0;
+int main() {
+  bool ok = test_shipped_config_names_a_supported_model_and_input();
+  ok &= test_regions_below_min_region_px_are_speckle();
+  ok &= test_max_regions_keeps_the_highest_scores();
+  ok &= test_a_map_below_the_threshold_has_no_region();
+  ok &= test_a_dot_or_a_line_is_outlined_by_its_box();
+  ok &= test_a_box_on_the_map_edge_stays_inside_the_frame();
+  ok &= test_segments_carry_the_box_outline_and_score();
+  return ok ? 0 : 1;
 }

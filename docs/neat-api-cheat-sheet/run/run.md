@@ -161,7 +161,7 @@ the device logs then reach the console.
 
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — `Realtime`, `ZeroCopy`, `queue_depth` from config, `overflow_policy` left `Auto`
 - [depth-estimator](../../../examples/depth-estimation/depth-estimator/) — `Block`, explicit `queue_depth`, folder-of-images workload
-- [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/)
+- [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — `Realtime`, `ZeroCopy`, the model in the graph after `SimaDecode`
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/)
 - [single-stream-instance-segmenter](../../../examples/segmentation/single-stream-instance-segmenter/)
 

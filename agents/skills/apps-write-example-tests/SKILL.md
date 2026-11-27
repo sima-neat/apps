@@ -23,7 +23,12 @@ checks of flags and messages.
    `saved_frames_problem` in `support/cpp/sima_examples/testing/test_process.h`, and for a
    saved stream, that it advances, with `assert_streamed_frames_are_usable` and
    `streamed_frames_problem`. Assert values the code can get wrong,
-   not ones the serializer guarantees, such as a box clamped to the frame.
+   not ones the serializer guarantees, such as a box clamped to the frame. Read metadata during
+   the run, in a thread that calls `poll_messages` until exit in C++ or `wait_for_messages` in
+   Python. After exit, read the rest once with `drain_pending()`. Don't loop on the value
+   `poll_messages` returns. Before the success condition, it returns false after one datagram
+   per port, so a message spread over several datagrams can expire. After it, it returns true
+   after one datagram from the lowest port, so the other ports starve.
 3. Write unit tests for the example's own logic, with real inputs and exact expected values,
    such as RF-DETR's proposal ranking and mask polygons. Add one test that every shipped config
    loads, because a broken shipped config stops the customer at the first step.

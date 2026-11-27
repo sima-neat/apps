@@ -311,6 +311,23 @@ const std::string& MetadataJsonListener::error() const {
   return err_;
 }
 
+std::size_t MetadataJsonListener::read_ready(MetadataJsonListenerResult& result) {
+  if (!ok()) {
+    result.error = err_;
+    return 0;
+  }
+  std::size_t read = 0;
+  for (auto& sock : sockets_) {
+    pollfd pfd{sock.fd, POLLIN, 0};
+    while (::poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN) != 0) {
+      pfd.revents = 0;
+      (void)handle_datagram(sock, result);
+      ++read;
+    }
+  }
+  return read;
+}
+
 MetadataJsonListenerResult MetadataJsonListener::drain_pending() {
   MetadataJsonListenerResult result;
   if (!ok()) {

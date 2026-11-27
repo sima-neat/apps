@@ -16,7 +16,9 @@ then `agents/coding-style.md` and `agents/rules.md`.
    conversion, list what the README advertises: inputs, outputs, CLI arguments, config keys,
    and printed results. The step is done when each item is marked kept, or dropped with the reason the pull request will state.
 2. Write `config.yaml` with the key names `agents/rules.md` "Config keys" sets, and remove the
-   example from `PENDING_EXAMPLES` in `tests/scripts/test_config_keys.py`. The step is done when
+   example from `PENDING_EXAMPLES` in `tests/scripts/test_config_keys.py`. An example with a
+   different model per stream lists them as `model` entries, a `mapping_list` in
+   `examples/config-keys.yaml`, instead of `model.path`, `model.id`, and `model.labels`. The step is done when
    that test passes and every key left in `config.yaml` names a setting the README or the
    code needs.
 3. Read the config as `agents/coding-style.md` "Configuration" describes, and move the

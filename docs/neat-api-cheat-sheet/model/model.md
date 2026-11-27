@@ -312,7 +312,6 @@ These calls ask a loaded model about itself. All of them except
 ## Used in
 
 - One-shot `run`:
-  [FastFlow Anomaly Detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/),
   [Image Classification Explorer](../../../examples/classification/image-classification-explorer/),
   [PatchCore Anomaly Detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/)
   (calibration)
