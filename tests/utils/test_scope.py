@@ -289,18 +289,22 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         "be a filename without directory components"
                     )
         selected_registry_models: set[str] = set()
-        for place, mapping in (
-            ("", entry), ("e2e.", entry.get("e2e")), ("unit.", entry.get("unit"))
-        ):
-            if isinstance(mapping, dict) and "runner_labels" in mapping:
-                errors.append(
-                    f"{example_key}: {place}runner_labels belongs under e2e.<language>"
+        if "runner_labels" in entry:
+            errors.append(f"{example_key}: runner_labels belongs under e2e.<language>")
+        for kind in sorted(VALID_KINDS):
+            mapping = entry.get(kind)
+            if isinstance(mapping, dict):
+                errors.extend(
+                    f"{example_key}: {kind} has unknown key {key!r}"
+                    for key in sorted(set(mapping) - VALID_LANGUAGES, key=str)
                 )
         for language in sorted(VALID_LANGUAGES):
             try:
                 errors.extend(
                     f"{example_key}: e2e.{language} has unknown key {key!r}"
-                    for key in sorted(set(e2e_config(entry, language)) - E2E_FIELDS)
+                    for key in sorted(
+                        set(e2e_config(entry, language)) - E2E_FIELDS, key=str
+                    )
                 )
                 if not isinstance(e2e_config(entry, language).get("requires_rtsp", True), bool):
                     errors.append(f"{example_key}: e2e.{language}.requires_rtsp must be boolean")

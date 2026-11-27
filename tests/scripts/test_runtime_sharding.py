@@ -566,50 +566,80 @@ def test_oversized_model_runs_without_persistent_publication(acquisition, monkey
     assert len(downloads) == 2
 
 
-def test_validate_scope_accepts_runner_labels_on_a_disabled_suite(scope):
-    e2e = scope["examples"][HIGH_DENSITY]["e2e"]["python"]
+def runner_label_errors(scope, language):
+    prefix = f"{HIGH_DENSITY}: e2e.{language}.runner_labels "
+    return [e.removeprefix(prefix) for e in validate_scope(scope, ROOT) if e.startswith(prefix)]
+
+
+@pytest.mark.parametrize("language", ["cpp", "python"])
+def test_validate_scope_accepts_runner_labels_on_a_disabled_suite(scope, language):
+    e2e = scope["examples"][HIGH_DENSITY]["e2e"][language]
     e2e["enabled"] = False
     e2e["runner_labels"] = [SOM_16]
     assert not validate_scope(scope, ROOT)
 
 
+@pytest.mark.parametrize("language", ["cpp", "python"])
 @pytest.mark.parametrize("enabled", [True, False])
-@pytest.mark.parametrize(("value", "message"), [
-    (None, "must be a list"),
-    (SOM_16, "must be a list"),
-    ([], "must not be empty"),
-    ([""], "items must be non-empty strings, not ''"),
-    ([16], "items must be non-empty strings, not 16"),
-    (["  "], "item '  ' must not contain whitespace"),
-    ([f" {SOM_16}"], f"item ' {SOM_16}' must not contain whitespace"),
-    (["modalix som"], "item 'modalix som' must not contain whitespace"),
-    (["modalix-som\t16gig"], "item 'modalix-som\\t16gig' must not contain whitespace"),
-    ([f"{SOM_16}\n"], f"item '{SOM_16}\\n' must not contain whitespace"),
-    ([SOM_16, "Modalix-SOM-16GIG"], "repeats 'Modalix-SOM-16GIG'"),
-    (["Modalix-SOM-16GIG", SOM_16], f"repeats '{SOM_16}'"),
-    (["RTSP"], "must not name the legacy rtsp label"),
-    ([SOM_16, "rtsp"], "must not name the legacy rtsp label"),
+@pytest.mark.parametrize(("value", "messages"), [
+    (None, ["must be a list"]),
+    (SOM_16, ["must be a list"]),
+    ([], ["must not be empty"]),
+    ([""], ["items must be non-empty strings, not ''"]),
+    ([16], ["items must be non-empty strings, not 16"]),
+    (["  "], ["item '  ' must not contain whitespace"]),
+    ([f" {SOM_16}"], [f"item ' {SOM_16}' must not contain whitespace"]),
+    (["modalix som"], ["item 'modalix som' must not contain whitespace"]),
+    (["modalix-som\t16gig"], ["item 'modalix-som\\t16gig' must not contain whitespace"]),
+    ([f"{SOM_16}\n"], [f"item '{SOM_16}\\n' must not contain whitespace"]),
+    ([SOM_16, "Modalix-SOM-16GIG"], ["repeats 'Modalix-SOM-16GIG'"]),
+    (["Modalix-SOM-16GIG", SOM_16], [f"repeats '{SOM_16}'"]),
+    (["RTSP"], ["must not name the legacy rtsp label"]),
+    ([SOM_16, "rtsp"], ["must not name the legacy rtsp label"]),
+    ([16, " x"], ["items must be non-empty strings, not 16",
+                  "item ' x' must not contain whitespace"]),
 ])
-def test_validate_scope_rejects_invalid_runner_labels(scope, value, message, enabled):
-    e2e = scope["examples"][HIGH_DENSITY]["e2e"]["python"]
+def test_validate_scope_rejects_invalid_runner_labels(scope, value, messages, enabled, language):
+    e2e = scope["examples"][HIGH_DENSITY]["e2e"][language]
     e2e["runner_labels"] = value
     e2e["enabled"] = enabled
-    assert f"{HIGH_DENSITY}: e2e.python.runner_labels {message}" in validate_scope(scope, ROOT)
+    assert runner_label_errors(scope, language) == messages
 
 
+@pytest.mark.parametrize("language", ["cpp", "python"])
 @pytest.mark.parametrize(("place", "message"), [
     ("top", "runner_labels belongs under e2e.<language>"),
-    ("e2e", "e2e.runner_labels belongs under e2e.<language>"),
-    ("unit", "unit.runner_labels belongs under e2e.<language>"),
-    ("typo", "e2e.python has unknown key 'runner_label'"),
+    ("e2e", "e2e has unknown key 'runner_labels'"),
+    ("e2e-capitalized", "e2e has unknown key '{Language}'"),
+    ("e2e-bool", "e2e has unknown key True"),
+    ("unit", "unit has unknown key 'runner_labels'"),
+    ("typo", "e2e.{language} has unknown key 'runner_label'"),
+    ("typo-disabled", "e2e.{language} has unknown key 'runner_label'"),
+    ("bool", "e2e.{language} has unknown key True"),
 ])
-def test_validate_scope_rejects_misplaced_runner_labels(scope, place, message):
+def test_validate_scope_rejects_misplaced_runner_labels(scope, place, message, language):
     entry = scope["examples"][HIGH_DENSITY]
-    if place == "typo":
-        entry["e2e"]["python"]["runner_label"] = [SOM_16]
+    e2e = entry["e2e"][language]
+    if place == "top":
+        entry["runner_labels"] = [SOM_16]
+    elif place == "e2e":
+        entry["e2e"]["runner_labels"] = [SOM_16]
+    elif place == "e2e-capitalized":
+        entry["e2e"][language.capitalize()] = {"runner_labels": [SOM_16]}
+    elif place == "e2e-bool":
+        # YAML reads an "on:" key as True. Sorting it with a str key must not fail.
+        entry["e2e"][True] = {}
+        entry["e2e"]["runner_labels"] = [SOM_16]
+    elif place == "unit":
+        entry["unit"]["runner_labels"] = [SOM_16]
+    elif place == "bool":
+        e2e[True] = [SOM_16]
+        e2e["runner_label"] = [SOM_16]
     else:
-        {"top": entry, "e2e": entry["e2e"], "unit": entry["unit"]}[place]["runner_labels"] = [SOM_16]
-    assert f"{HIGH_DENSITY}: {message}" in validate_scope(scope, ROOT)
+        e2e["enabled"] = place == "typo"
+        e2e["runner_label"] = [SOM_16]
+    expected = message.format(language=language, Language=language.capitalize())
+    assert f"{HIGH_DENSITY}: {expected}" in validate_scope(scope, ROOT)
 
 
 def shard_of(plan, task):
