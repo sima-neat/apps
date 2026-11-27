@@ -1,58 +1,35 @@
 ---
 name: Bug Report
-about: Report a reproducible problem in the apps repo
+about: Report a problem with an Apps example, script, or test
 title: "[Bug] "
 labels: bug
 assignees: ""
 ---
 
-## Summary
+## What happened?
 
-Describe the bug clearly and concretely.
+Describe what happened and what you expected. Include the exact error message
+and how often the problem occurs.
 
-## Affected Example or Workflow
+## How can we reproduce it?
 
-List the example, pipeline, script, or test you were running.
-
-## Exact Command or Script
-
-Paste the exact command, script, or invocation that triggered the bug.
-
-```bash
-
-```
-
-## Steps to Reproduce
-
-1. 
-2. 
-3. 
-
-## Actual Behavior
-
-Describe what happened.
-
-## Expected Behavior
-
-Describe what you expected to happen instead.
-
-## Error Message or Logs
-
-Paste the full error message, traceback, or relevant logs. Redact secrets if needed.
-
-```text
-
-```
+Name the example, script, or test, and paste the exact command you ran. For a
+README problem, link the page and quote the wrong instruction.
 
 ## Environment
 
-- Hardware platform:
-- Host OS:
-- SiMa.ai Neat apps branch or commit:
-- Neat Library and Palette SDK versions:
-- Python version, compiler, or toolchain:
-- Model, media, or RTSP source details:
+- Apps branch, commit, or package version
+- Neat Library and Palette SDK versions
+- DevKit or host used
 
-## Additional Context
+## Impact and workaround
 
-Add screenshots, attachments, or recent changes that may help reproduce or triage the issue.
+Which workflow does this block? Include any workaround or last version that
+worked, if known.
+
+## Additional diagnostics (optional)
+
+Add only details that explain the failure, such as the model, the media or RTSP
+source type, the config values you changed, a stack trace, or a short log. Use
+public or synthetic inputs where possible. Redact credentials, private stream
+URLs, and customer data.

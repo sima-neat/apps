@@ -1,35 +1,27 @@
 ---
 name: Feature Request
-about: Request a new capability or change in the apps repo
+about: Request a new Apps example or a change to an existing one
 title: "[Feature] "
 labels: enhancement
 assignees: ""
 ---
 
-## Summary
+## Which workflow needs this?
 
-Describe the requested feature in one or two sentences.
+Describe what you are trying to build, what the current examples do not cover,
+and who is affected.
 
-## What Should Change?
+## What outcome would solve the problem?
 
-Explain exactly what needs to be added, removed, or changed.
+Describe the behavior you want and a result that would show it works, such as
+an example that runs a given model on a given input and sends a given output to
+Insight. Include measurable requirements, such as a frame rate, when useful.
 
-## Why Is This Necessary?
+## Current workaround
 
-Describe the problem, limitation, or workflow need behind this request.
+Name the example or Neat API you tried and where it falls short.
 
-## Affected Example, API, or Workflow
+## Additional context (optional)
 
-List the examples, docs, scripts, tests, or runtime flows that should change.
-
-## Expected Outcome
-
-Describe what success looks like. Include expected behavior, API shape, CLI usage, or documentation changes if known.
-
-## Alternatives Considered
-
-List any alternatives or workarounds you considered.
-
-## Additional Context
-
-Add references, screenshots, mockups, acceptance criteria, or other constraints.
+Link related issues, examples, or models. Redact credentials, private stream
+URLs, and customer data.
