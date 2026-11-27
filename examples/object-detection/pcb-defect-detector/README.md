@@ -14,13 +14,36 @@
 
 ## Concept
 
-Batch visual inspection of printed circuit boards with a custom-trained YOLO26n
-detector. Every image in a folder is run on the MLA and saved back annotated with
-defect boxes and labels.
+Batch visual inspection of printed circuit boards with a custom-trained YOLO26n detector. Every image in a folder is run on the MLA and saved annotated with its defect boxes and labels.
 
-Images of any resolution up to the configured capacity are accepted and may be mixed in one folder. Core
-letterboxes each one to the model input on device, so boxes are drawn on the
-full-resolution source image.
+```text
+How does an image move through pcb-defect-detector?
+
+ ┌────────────────────────────────────┐
+ │ imread, one image at a time        │
+ └────────────────────────────────────┘
+                    │ BGR image, any size
+                    ▼
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN: Model::Runner from model.build      ┆
+┆ ┌────────────────────────────────────┐   ┆
+┆ │ YOLO26n Model                      │   ┆
+┆ └────────────────────────────────────┘   ┆
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+                    ▼ BBOX tensor, from runner.run
+ ┌────────────────────────────────────┐
+ │ decode_bbox_tensor, draw_boxes     │
+ └────────────────────────────────────┘
+                    │ annotated image
+                    ▼
+ ┌────────────────────────────────────┐
+ │ imwrite to output.dir              │
+ └────────────────────────────────────┘
+```
+
+- `model.build` makes one `Model::Runner` (Python `pyneat.ModelRunner`) for the whole folder, seeded with an image of the largest accepted size, `app.input_max_width` x `app.input_max_height`. Images of any size up to that, mixed in one folder, go through it: Core letterboxes each one to the model input on the device and returns the boxes in the image's own pixels, so the application does no geometry.
+- `runner.run` sends one image and waits for its result. The run uses the `Realtime` preset, the only one that applies a new input size on the first frame.
+- `draw_boxes` (in `src/*/utils/overlay.*`) draws each defect in its class's color on the source image.
 
 Six manufacturing defect classes are detected:
 
@@ -67,7 +90,7 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-Set `model.path` in the config to the downloaded package.
+The shipped `model.path` points at this file, `models/yolo26n_plc_mpk.tar.gz` under `prebuilt-apps/`.
 
 The detector is trained on a custom PCB defect dataset rather than published in
 Model Zoo. The pack is a BF16 build with MLA tessellation, compiled from the
@@ -80,11 +103,12 @@ Dataset and source-model reference:
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml` and set `model.path`, `io.input_dir`, and `io.output_dir`. Five sample boards ship under `assets/datasets/pcb/`, so the example runs as soon as the model pack is in place.
+Five sample boards ship under `assets/datasets/pcb/`, so the example runs with the shipped `${APP_DIR}/src/common/config.yaml` once the model is in place. To inspect your own boards, set:
 
-`model.input_max_width` and `model.input_max_height` set the largest image the run accepts. A larger board is reported as a failed image and the run exits 4; raise them for larger scans.
-
-Change `decode.score_threshold` only if you want to show more or fewer defects. Set `runtime.profile: true` for per-image timing, `runtime.num_runs` above 1 to repeat the folder for steadier timings, and `output.overlay: false` to measure inference without drawing or writing images.
+- `input.source`: the folder of `.jpg`, `.jpeg`, `.png`, or `.bmp` images. The application reads the images directly in it, in file-name order, and not those in subfolders.
+- `output.dir`: the folder for the annotated images, not `input.source`.
+- `app.input_max_width` and `app.input_max_height`: the largest image size, 3840 x 2160 as shipped. A larger image is reported as failed; raise both for larger scans.
+- `inference.min_score`: lower it to show more defects, raise it to show fewer.
 
 ## Run
 
@@ -104,32 +128,37 @@ python3 ${APP_DIR}/src/python/main.py \
   --config ${APP_DIR}/src/common/config.yaml
 ```
 
-Both implementations also accept `--score` and `--nms` to override the configured thresholds without editing the file, and `--validate-config-only` to check the configuration and label file without loading the model.
-
 ## Expected Result
 
-Each input image produces one annotated copy in `io.output_dir`, named `<stem>_pcb` with the source extension kept:
+Each input image produces one annotated copy in `output.dir`, named `<stem>_pcb` with the source extension kept:
 
 ```text
 pcb_01_missing_hole.jpg -> pcb_01_missing_hole_pcb.jpg
 ```
 
-Each run prints a per-image line with the defect count and class breakdown, followed by per-class totals for the folder.
+Each image prints one line with its defect count and classes, and the run ends with the totals:
+
+```text
+[1/5] pcb_01_missing_hole.jpg -> pcb_01_missing_hole_pcb.jpg (<n> defects) {missing_hole: <n>}
+...
+Done: 5/5 images in <seconds> s | images_with_defects=<n> total_defects=<n> failed=0
+Per-class totals: {<class>: <n>, ...}
+```
 
 ## Troubleshooting
 
-- Run either implementation with `--validate-config-only` to check configuration values and the label file without loading the model.
-- Confirm `model.path` points at a readable model package under `models/`.
-- Confirm `io.input_dir` exists and contains `.jpg`, `.jpeg`, `.png`, or `.bmp` files, and that `io.output_dir` is writable.
-- If no defects are reported, lower `decode.score_threshold`; if boxes overlap heavily, lower `decode.nms_iou`.
-- Class names in `src/common/pcb_label.txt` are index-aligned with the trained checkpoint. Reordering them mislabels detections.
-- Exit code 4 means one or more images could not be read, or their annotated
-  output could not be written; the run names them on stderr.
+- `[ERR] <image>: not a readable image`: the file has an image extension but does not decode. The run continues and exits 1.
+- `[ERR] <image>: <width>x<height> is larger than app.input_max_width x app.input_max_height`: raise both keys to at least the image's size.
+- `[ERR] image folder does not exist: <folder>`: set `input.source` to an existing folder; a relative path starts at the working directory.
+- `[ERR] no .jpg, .jpeg, .png, or .bmp files in <folder>`: point `input.source` at a folder that holds images directly, not in subfolders.
+- `[ERR] <output path>: could not be written`: check that `output.dir` is writable. The run continues and exits 1.
+- If no defects are reported, lower `inference.min_score`; if boxes overlap heavily, lower `inference.nms_iou`.
+- Class names in `src/common/pcb_label.txt` follow the model's class order. Loading fails when the file lists a different number of classes than the model.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`
-- Python source: `src/python/main.py`
+- C++ reference source: `src/cpp/main.cpp`, with `src/cpp/utils/images.*` and `src/cpp/utils/overlay.*`
+- Python source: `src/python/main.py`, with `src/python/utils/images.py` and `src/python/utils/overlay.py`
 - Shared config: `src/common/config.yaml`
 - Class labels: `src/common/pcb_label.txt`
 - Sample images: `assets/datasets/pcb/`

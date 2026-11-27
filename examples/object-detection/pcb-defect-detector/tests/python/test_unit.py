@@ -1,488 +1,98 @@
-"""Unit tests for pcb-defect-detector (Python)."""
+"""Unit tests for the PCB defect detector: the checks the application leaves to its config, and
+its own logic. tests/cpp/test_unit.cpp runs the same checks in C++.
+"""
 
-import importlib.util
-import re
-import subprocess
-import sys
+from __future__ import annotations
+
 from pathlib import Path
-
-import types
+from types import SimpleNamespace
 
 import numpy as np
-import pyneat
 import pytest
-import yaml
 
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+from tests.utils.config_cases import load_example_main
+
+EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 COMMON_DIR = EXAMPLE_DIR / "src" / "common"
-CONFIG_YAML = COMMON_DIR / "config.yaml"
-LABELS_TXT = COMMON_DIR / "pcb_label.txt"
-SCOPE_YAML = EXAMPLE_DIR / "tests" / "test-scope.yaml"
-README_MD = EXAMPLE_DIR / "README.md"
-
-_SPEC = importlib.util.spec_from_file_location("pcb_defect_detector_main", MAIN_PY)
-assert _SPEC is not None and _SPEC.loader is not None
-main = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = main
-_SPEC.loader.exec_module(main)
-
-
-
-def valid_config() -> dict:
-    return {
-        "model": {"path": "models/pack.tar.gz", "labels": str(LABELS_TXT)},
-        "io": {"input_dir": "assets/datasets/pcb", "output_dir": "sandbox/pcb-defect-detector"},
-        "decode": {"score_threshold": 0.25, "nms_iou": 0.45, "max_detections": 300},
-        "runtime": {"num_runs": 1, "queue_depth": 8},
-        "output": {"overlay": True},
-    }
-
-
-@pytest.mark.unit
-class TestArgParsing:
-    """Validate CLI argument parsing for the PCB defect detection pipeline."""
-
-    def test_help(self):
-        """--help should describe the config-driven CLI."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--help"],
-            capture_output=True, text=True, timeout=20,
-        )
-        assert r.returncode == 0
-        assert "--config" in r.stdout
-        assert "--validate-config-only" in r.stdout
-
-    def test_bad_config_path(self):
-        """A missing config file exits with code 2, as the C++ twin does."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", "/nonexistent/pcb-config.yaml"],
-            capture_output=True, text=True, timeout=20,
-        )
-        assert r.returncode == 2
-        assert "config file not found" in r.stderr
-
-    def test_unknown_flag(self):
-        """An unrecognized flag should cause argparse to exit with code 2."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--bogus"],
-            capture_output=True, text=True, timeout=20,
-        )
-        assert r.returncode == 2
-        assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()
-
-    def test_threshold_overrides_are_parsed(self):
-        """--score and --nms are optional float overrides."""
-        args = main.parse_args(["--score", "0.4", "--nms", "0.55"])
-        assert args.score == pytest.approx(0.4)
-        assert args.nms == pytest.approx(0.55)
-
-    def test_config_defaults_to_shared_common_config(self):
-        """Without --config the packaged src/common/config.yaml is used."""
-        assert main.parse_args([]).config == CONFIG_YAML
-
-
-@pytest.mark.unit
-class TestConfigLoading:
-    """Validate config loading and value checking."""
-
-    def test_shipped_config_is_valid(self):
-        """The packaged config.yaml must load and validate as-is."""
-        cfg = main.build_app_config(main.load_config(CONFIG_YAML))
-        main.validate_config(cfg)
-        # Like every other example, the shipped config ships a placeholder the
-        # reader replaces after downloading the pack. A concrete path here would
-        # mean someone committed a machine-local model location.
-        assert cfg.model_path == "<model-path>"
-        assert cfg.labels_path.name == "pcb_label.txt"
-        assert cfg.input_dir == Path("assets/datasets/pcb")
-        assert cfg.max_detections == 300
-
-    def test_defaults_apply_to_missing_sections(self):
-        cfg = main.build_app_config({"model": {"path": "models/pack.tar.gz", "labels": "l.txt"}})
-        assert cfg.score_threshold == pytest.approx(0.25)
-        assert cfg.max_detections == 300
-        assert cfg.profile is False
-
-    @pytest.mark.parametrize("raw_value,expected", [
-        (True, True), (False, False), ("true", True), ("false", False),
-        ("True", True), ("FALSE", False),
-    ])
-    def test_quoted_booleans_match_the_cpp_parser(self, raw_value, expected):
-        """A quoted "false" must not be read as True; every nonempty str is truthy."""
-        raw = valid_config()
-        raw["output"] = {"overlay": raw_value}
-        assert main.build_app_config(raw).overlay is expected
-
-    @pytest.mark.parametrize("bad", ["yes", "no", "1", "0", 1, 0, "", " true", "false "])
-    def test_non_boolean_values_are_rejected(self, bad):
-        """The C++ parser accepts only true/false; Python must agree."""
-        raw = valid_config()
-        raw["runtime"] = {"profile": bad}
-        with pytest.raises(ValueError, match="runtime.profile must be true or false"):
-            main.build_app_config(raw)
-
-    @pytest.mark.parametrize("raw_value,expected", [
-        (8000, 8000), ("8000", 8000), ("+8000", 8000), (" 8000", 8000),
-    ])
-    def test_quoted_integers_match_the_cpp_parser(self, raw_value, expected):
-        """The C++ parser unquotes before parsing, so "8000" is the same setting."""
-        raw = valid_config()
-        raw["runtime"]["queue_depth"] = raw_value
-        assert main.build_app_config(raw).queue_depth == expected
-
-    @pytest.mark.parametrize(
-        "bad", [1.0, 1.5, "1.0", "8e3", "abc", "", True, "1_0", "8000 ", " 8000 "]
-    )
-    def test_non_integer_values_are_rejected(self, bad):
-        """The C++ parser rejects anything stoi cannot fully consume; Python must agree."""
-        raw = valid_config()
-        raw["runtime"]["num_runs"] = bad
-        with pytest.raises(ValueError, match="runtime.num_runs must be an integer"):
-            main.build_app_config(raw)
-
-    @pytest.mark.parametrize("raw_value,expected", [
-        (0.25, 0.25), ("0.25", 0.25), (1, 1.0), ("1", 1.0), ("2.5e-1", 0.25),
-        (" 0.25", 0.25),
-    ])
-    def test_quoted_floats_match_the_cpp_parser(self, raw_value, expected):
-        """A quoted "0.25" parses in C++ via stod; Python must accept it too."""
-        raw = valid_config()
-        raw["decode"]["score_threshold"] = raw_value
-        assert main.build_app_config(raw).score_threshold == pytest.approx(expected)
-
-    @pytest.mark.parametrize("bad", ["abc", "", True, "0_25", "0.45 "])
-    def test_non_numeric_values_are_rejected(self, bad):
-        """The C++ parser rejects anything stod cannot fully consume; Python must agree."""
-        raw = valid_config()
-        raw["decode"]["nms_iou"] = bad
-        with pytest.raises(ValueError, match="decode.nms_iou must be numeric"):
-            main.build_app_config(raw)
-
-    def test_missing_model_path_is_rejected(self):
-        raw = valid_config()
-        raw["model"]["path"] = ""
-        with pytest.raises(ValueError, match="model.path"):
-            main.validate_config(main.build_app_config(raw))
-
-    @pytest.mark.parametrize("null", [None, "null", "NULL"])
-    def test_null_model_path_is_rejected(self, null):
-        """PyYAML reads a blank or null value as None; it must not become "None"."""
-        raw = valid_config()
-        raw["model"]["path"] = null
-        with pytest.raises(ValueError, match="model.path"):
-            main.validate_config(main.build_app_config(raw))
-
-    @pytest.mark.parametrize("null", [None, "null"])
-    def test_null_settings_fall_back_to_defaults(self, null):
-        """The C++ parser treats null as unset, so both twins use the default."""
-        raw = valid_config()
-        raw["model"]["labels"] = null
-        raw["io"] = {"input_dir": null, "output_dir": null}
-        raw["runtime"]["queue_depth"] = null
-        cfg = main.build_app_config(raw)
-        assert cfg.labels_path.name == "pcb_label.txt"
-        assert cfg.input_dir == Path("assets/datasets/pcb")
-        assert cfg.output_dir == Path("sandbox/pcb-defect-detector")
-        assert cfg.queue_depth == 8
-
-    @pytest.mark.parametrize(
-        "section,key,value",
-        [
-            ("decode", "score_threshold", 1.5),
-            ("decode", "score_threshold", -0.1),
-            ("decode", "nms_iou", 1.2),
-            ("decode", "max_detections", 0),
-            ("runtime", "num_runs", 0),
-            ("runtime", "queue_depth", 0),
-        ],
-    )
-    def test_out_of_range_values_are_rejected(self, section, key, value):
-        raw = valid_config()
-        raw[section][key] = value
-        with pytest.raises(ValueError, match=key):
-            main.validate_config(main.build_app_config(raw))
-
-
-@pytest.mark.unit
-class TestValidateConfigOnly:
-    """Validate the --validate-config-only path shared with the C++ twin."""
-
-    @staticmethod
-    def run_validate(config_path: Path, *extra: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path),
-             "--validate-config-only", *extra],
-            capture_output=True, text=True, timeout=20, cwd=str(EXAMPLE_DIR.parents[2]),
-        )
-
-    def write_config(self, tmp_path: Path, raw: dict) -> Path:
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-        return config_path
-
-    def test_shipped_config_validates(self):
-        """The packaged config validates without loading the model."""
-        r = self.run_validate(CONFIG_YAML)
-
-        assert r.returncode == 0, r.stderr
-        assert "classes=6" in r.stdout
-        assert "max_detections=300" in r.stdout
-        assert "configuration OK" in r.stdout
-
-    def test_cli_overrides_reach_the_resolved_config(self, tmp_path: Path):
-        config_path = self.write_config(tmp_path, valid_config())
-        r = self.run_validate(config_path, "--score", "0.40", "--nms", "0.55")
-
-        assert r.returncode == 0, r.stderr
-        assert "score_threshold=0.40" in r.stdout
-        assert "nms_iou=0.55" in r.stdout
-
-    def test_out_of_range_override_exits_with_code_2(self, tmp_path: Path):
-        config_path = self.write_config(tmp_path, valid_config())
-        r = self.run_validate(config_path, "--score", "1.5")
-
-        assert r.returncode == 2
-        assert "decode.score_threshold" in r.stderr
-
-    def test_missing_labels_file_exits_with_code_2(self, tmp_path: Path):
-        raw = valid_config()
-        raw["model"]["labels"] = "/nonexistent/pcb_label.txt"
-        r = self.run_validate(self.write_config(tmp_path, raw))
-
-        assert r.returncode == 2
-        assert "labels file does not exist" in r.stderr
-
-    def test_missing_input_dir_exits_with_code_2(self, tmp_path: Path):
-        raw = valid_config()
-        raw["io"]["input_dir"] = "/nonexistent/pcb-images"
-        config_path = self.write_config(tmp_path, raw)
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=20, cwd=str(EXAMPLE_DIR.parents[2]),
-        )
-
-        assert r.returncode == 2
-        assert "Input directory does not exist" in r.stderr
-
-    def test_empty_input_dir_exits_with_code_3(self, tmp_path: Path):
-        empty_input = tmp_path / "images"
-        empty_input.mkdir()
-        raw = valid_config()
-        raw["io"]["input_dir"] = str(empty_input)
-        config_path = self.write_config(tmp_path, raw)
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=20, cwd=str(EXAMPLE_DIR.parents[2]),
-        )
-
-        assert r.returncode == 3
-        assert "No images found" in r.stderr
-
-
-@pytest.mark.unit
-class TestModelAcquisition:
-    """Keep the configured model, the documented download, and the test scope in step."""
-
-    @staticmethod
-    def scope() -> dict:
-        return yaml.safe_load(SCOPE_YAML.read_text(encoding="utf-8"))
-
-    def test_documented_model_is_declared_in_test_scope(self):
-        """The package the README tells you to download must be the one e2e downloads."""
-        documented = set(
-            re.findall(r"([A-Za-z0-9._-]+\.tar\.gz)", README_MD.read_text(encoding="utf-8"))
-        )
-        declared = {model["file"] for model in self.scope()["models"].values()}
-
-        assert documented, "README documents no model package to download"
-        assert documented <= declared, (
-            f"{sorted(documented - declared)} not declared in test-scope.yaml"
-        )
-
-    def test_scope_models_are_downloadable_artifacts(self):
-        for model_id, model in self.scope()["models"].items():
-            assert model["source"] == "url", f"{model_id} must be a downloadable artifact"
-            assert model["url"].startswith("https://"), f"{model_id} needs an https url"
-            assert model["url"].endswith(model["file"]), (
-                f"{model_id} url must end with its file name"
-            )
-
-    def test_scope_model_urls_are_modelzoo_version_agnostic(self):
-        """The Model Zoo version is resolved at download time, never hardcoded."""
-        for model_id, model in self.scope()["models"].items():
-            assert "{modelzoo_version}" in model["url"], (
-                f"{model_id} url must use the {{modelzoo_version}} placeholder"
-            )
-            assert "SDK2." not in model["url"].replace("SDK{modelzoo_version}", ""), (
-                f"{model_id} url must not pin an SDK version"
-            )
-
-    @pytest.mark.parametrize("language", ["python", "cpp"])
-    def test_e2e_selects_a_declared_model(self, language):
-        scope = self.scope()
-        e2e = scope["e2e"][language]
-
-        assert e2e["enabled"] is True, f"{language} e2e should be enabled"
-        assert e2e["models"], f"{language} e2e selects no model"
-        for model_id in e2e["models"]:
-            assert model_id in scope["models"], f"{model_id} is not declared"
-
-    def test_documented_download_matches_the_scope_url(self):
-        """README must document the same artifact the test scope downloads."""
-        readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
-        for model in self.scope()["models"].values():
-            documented = model["url"].replace("{modelzoo_version}", "${MODELZOO_VERSION}")
-            assert documented in readme, f"README does not document {documented}"
-
-
-@pytest.mark.unit
-class TestLabels:
-    """Validate label handling for the six PCB defect classes."""
-
-    def test_shipped_labels_match_the_color_palette(self):
-        labels = main.load_labels(LABELS_TXT)
-        assert labels == [
-            "missing_hole",
-            "mouse_bite",
-            "open_circuit",
-            "short",
-            "spur",
-            "spurious_copper",
-        ]
-        assert len(labels) == len(main.DEFECT_COLORS)
-
-    def test_missing_labels_file_is_rejected(self, tmp_path: Path):
-        with pytest.raises(FileNotFoundError):
-            main.load_labels(tmp_path / "absent.txt")
-
-    def test_empty_labels_file_is_rejected(self, tmp_path: Path):
-        empty = tmp_path / "empty.txt"
-        empty.write_text("\n \n", encoding="utf-8")
-        with pytest.raises(ValueError, match="empty"):
-            main.load_labels(empty)
-
-    def test_class_name_falls_back_for_unknown_ids(self):
-        labels = ["missing_hole", "mouse_bite"]
-        assert main.class_name(1, labels) == "mouse_bite"
-        assert main.class_name(9, labels) == "class_9"
-        assert main.class_name(-1, labels) == "class_-1"
-
-    def test_class_color_is_stable_and_in_range(self):
-        assert main.class_color(0) == main.DEFECT_COLORS[0]
-        assert main.class_color(len(main.DEFECT_COLORS)) == main.DEFECT_COLORS[0]
-        # Negative ids fold by absolute value, matching the C++ twin.
-        assert main.class_color(-3) == main.DEFECT_COLORS[3]
-
-
-@pytest.mark.unit
-class TestImageDiscovery:
-    """Validate input discovery and output naming."""
-
-    def test_supported_extensions_only(self, tmp_path: Path):
-        for name in ("a.jpg", "b.JPEG", "c.png", "d.bmp", "notes.txt", "model.tar.gz"):
-            (tmp_path / name).write_bytes(b"x")
-        (tmp_path / "nested").mkdir()
-
-        assert [p.name for p in main.discover_images(tmp_path)] == ["a.jpg", "b.JPEG", "c.png", "d.bmp"]
-
-    def test_discovery_is_sorted(self, tmp_path: Path):
-        for name in ("pcb_03.jpg", "pcb_01.jpg", "pcb_02.jpg"):
-            (tmp_path / name).write_bytes(b"x")
-
-        assert [p.name for p in main.discover_images(tmp_path)] == [
-            "pcb_01.jpg",
-            "pcb_02.jpg",
-            "pcb_03.jpg",
-        ]
-
-    def test_output_paths_are_unique_per_input(self, tmp_path: Path):
-        """Distinct inputs must never collapse onto one output file.
-
-        Keeping the source extension is what separates board.jpg from
-        board.png; without it one result would be lost.
-        """
-        inputs = [tmp_path / "board.jpg", tmp_path / "board.png", tmp_path / "board.bmp"]
-        outputs = [main.output_path_for(path, tmp_path / "out") for path in inputs]
-
-        assert len({path.name for path in outputs}) == len(inputs)
-        assert [path.name for path in outputs] == [
-            "board_pcb.jpg", "board_pcb.png", "board_pcb.bmp"
-        ]
-
-    def test_output_never_resolves_onto_its_own_source(self, tmp_path: Path):
-        """A PNG input must not map onto itself even when in/out dirs match."""
-        source = tmp_path / "board.png"
-        assert main.output_path_for(source, tmp_path).resolve() != source.resolve()
-
-
-@pytest.mark.unit
-class TestDetectionOutput:
-    """A missing detection result must fail, not read as a clean board."""
-
-    class _FakeTensor:
-        def __init__(self, detection_format):
-            self.detection_format = detection_format
-
-    @staticmethod
-    def _config(tmp_path: Path):
-        return main.build_app_config({
-            "model": {"path": "m.tar.gz", "labels": str(LABELS_TXT)},
-            "io": {"input_dir": str(tmp_path), "output_dir": str(tmp_path / "out")},
-        })
-
-    def test_no_output_tensors_raises(self, tmp_path: Path):
-        with pytest.raises(RuntimeError, match="expected one BBOX tensor"):
-            main.decode_detections([], 640, 640, self._config(tmp_path))
-
-    def test_missing_bbox_tensor_raises(self, tmp_path: Path, monkeypatch):
-        """An output route that returns non-detection tensors is a failure.
-
-        Treating it as zero defects would report an incompatible model package
-        as a clean inspection.
-        """
-        monkeypatch.setattr(pyneat.detections, "read_detection_format", lambda t: "FEATURE_POINTS_V1")
-        monkeypatch.setattr(pyneat.detections, "format_is_bbox", lambda f: False)
-
-        with pytest.raises(RuntimeError, match="no BBOX detection tensor"):
-            main.decode_detections([self._FakeTensor("FEATURE_POINTS_V1")], 640, 640,
-                                   self._config(tmp_path))
-
-    def test_valid_empty_result_is_zero_detections_not_an_error(self, tmp_path: Path, monkeypatch):
-        """A BBOX payload with count zero is a real 'no defects' answer."""
-        monkeypatch.setattr(pyneat.detections, "read_detection_format", lambda t: "BBOX")
-        monkeypatch.setattr(pyneat.detections, "format_is_bbox", lambda f: True)
-        monkeypatch.setattr(pyneat.detections, "decode_bbox_tensor",
-                            lambda *a, **k: types.SimpleNamespace(boxes=[], raw=b""))
-
-        assert main.decode_detections([self._FakeTensor("BBOX")], 640, 640,
-                                      self._config(tmp_path)) == []
-
-
-@pytest.mark.unit
-class TestOverlay:
-    """Validate the annotation overlay."""
-
-    def test_overlay_changes_pixels(self):
-
-        frame = np.zeros((120, 160, 3), dtype=np.uint8)
-        before = frame.copy()
-        main.draw_boxes(
-            frame,
-            [{"x1": 20.0, "y1": 30.0, "x2": 90.0, "y2": 100.0, "score": 0.87, "class_id": 4}],
-            main.load_labels(LABELS_TXT),
-        )
-
-        assert not np.array_equal(before, frame)
-
-    def test_overlay_skips_degenerate_boxes(self):
-
-        frame = np.zeros((120, 160, 3), dtype=np.uint8)
-        before = frame.copy()
-        main.draw_boxes(
-            frame,
-            [{"x1": 50.0, "y1": 50.0, "x2": 50.0, "y2": 50.0, "score": 0.9, "class_id": 0}],
-            main.load_labels(LABELS_TXT),
-        )
-
-        assert np.array_equal(before, frame)
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+
+main_module = load_example_main(EXAMPLE_DIR, "pcb_defect_detector_main")
+images = main_module.images
+overlay = main_module.overlay
+
+pytestmark = pytest.mark.unit
+
+
+def test_shipped_config_names_the_model_labels_and_folders():
+    """The checks the application leaves to its config: the values it reads are usable."""
+    config = main_module.Config.load(COMMON_DIR / "config.yaml")
+    model_path = COMMON_DIR / config.string("model.path")
+    assert model_path.name == "yolo26n_plc_mpk.tar.gz"
+    # The packaged path reaches prebuilt-apps/models from the config file.
+    assert model_path.resolve().is_relative_to(APPS_ROOT / "models")
+    # The model's class IDs index the labels, and each class has a color.
+    labels = main_module.load_labels(APPS_ROOT / config.string("model.labels"))
+    assert labels == ["missing_hole", "mouse_bite", "open_circuit", "short", "spur",
+                      "spurious_copper"]
+    assert len(overlay.CLASS_COLORS) == len(labels)
+    # The shipped sample boards run as soon as the model is in place.
+    assert main_module.image_folder.image_paths(APPS_ROOT / config.string("input.source"))
+    output_dir = config.string("output.dir")
+    assert output_dir.startswith("sandbox/")
+    # An annotated image written into input.source would be read as a board on the next run.
+    assert Path(output_dir) != Path(config.string("input.source"))
+    # Core's YOLO26 box decode fails at build with a score threshold of 1.0.
+    assert 0 <= config.number("inference.min_score") < 1
+    assert 0 <= config.number("inference.nms_iou") <= 1
+    assert config.integer("inference.max_detections") > 0
+    assert config.integer("app.input_max_width") > 0
+    assert config.integer("app.input_max_height") > 0
+
+
+def test_test_scope_downloads_the_configured_model():
+    """CI downloads the package the shipped config names."""
+    config = main_module.Config.load(COMMON_DIR / "config.yaml")
+    scope = main_module.Config.load(EXAMPLE_DIR / "tests" / "test-scope.yaml")
+    assert scope.string("models.yolo26n_plc.file") == Path(config.string("model.path")).name
+
+
+def test_image_problem_names_what_the_model_cannot_take():
+    assert images.image_problem(None, (640, 480)) == "not a readable image"
+    assert images.image_problem(np.zeros((480, 640, 3), np.uint8), (640, 480)) == ""
+    assert images.image_problem(np.zeros((480, 641, 3), np.uint8), (640, 480)) == (
+        "641x480 is larger than app.input_max_width x app.input_max_height (640x480)")
+    assert images.image_problem(np.zeros((481, 640, 3), np.uint8), (640, 480)) != ""
+
+
+def test_save_image_reports_a_failed_write_instead_of_raising(tmp_path: Path):
+    image = np.zeros((8, 8, 3), np.uint8)
+    assert images.save_image(tmp_path / "board_pcb.png", image)
+    # OpenCV raises for an encoder failure, such as an extension it has no writer for; one image
+    # that cannot be saved must not stop the batch.
+    assert not images.save_image(tmp_path / "board_pcb.unknown", image)
+    assert not images.save_image(tmp_path / "missing" / "board_pcb.png", image)
+
+
+def test_pixel_rounds_half_up_and_stays_in_the_image():
+    assert overlay.pixel(2.5, 10) == 3
+    assert overlay.pixel(2.49, 10) == 2
+    assert overlay.pixel(-3.0, 10) == 0
+    assert overlay.pixel(12.0, 10) == 9
+
+
+def test_draw_boxes_draws_each_box_in_its_class_color():
+    image = np.zeros((100, 100, 3), np.uint8)
+    labels = ["missing_hole", "mouse_bite", "open_circuit"]
+    box = SimpleNamespace(x1=10.0, y1=30.0, x2=60.0, y2=80.0, score=0.9, class_id=2)
+    overlay.draw_boxes(image, [box], labels)
+    # The left edge, below the label, is the class's color; the inside stays untouched.
+    assert tuple(int(channel) for channel in image[60, 10]) == overlay.CLASS_COLORS[2]
+    assert not image[55, 35].any()
+
+
+def test_draw_boxes_skips_a_box_with_no_area():
+    image = np.zeros((100, 100, 3), np.uint8)
+    flat = SimpleNamespace(x1=40.0, y1=30.0, x2=40.2, y2=80.0, score=0.9, class_id=0)
+    outside = SimpleNamespace(x1=120.0, y1=30.0, x2=150.0, y2=80.0, score=0.9, class_id=0)
+    overlay.draw_boxes(image, [flat, outside], ["missing_hole"])
+    assert not image.any()

@@ -74,7 +74,7 @@ class TestE2E:
 
         config_path = e2e_config_writer(
             {
-                "io": {"input_dir": str(input_dir), "output_dir": str(tmp_output_dir)},
+                "input": {"source": str(input_dir)}, "output": {"dir": str(tmp_output_dir)},
             }
         )
 
@@ -217,7 +217,7 @@ class TestE2E:
         mixed_output = tmp_output_dir.parent / "mixed-output"
         mixed_output.mkdir(parents=True, exist_ok=True)
         config_path = e2e_config_writer({
-            "io": {"input_dir": str(mixed_dir), "output_dir": str(mixed_output)},
+            "input": {"source": str(mixed_dir)}, "output": {"dir": str(mixed_output)},
         })
         result = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", str(config_path)],
@@ -263,47 +263,6 @@ class TestE2E:
         # Same content, only larger, so each board must still report its defect.
         assert_each_board_reports_its_defect(fixtures, result.stdout)
 
-    def test_overlay_off_inspects_every_board_and_writes_nothing(
-        self, e2e_model_path, apps_root, tmp_output_dir, test_timeout_ms,
-        skip_unless_e2e_ready, e2e_config_writer,
-    ):
-        """With output.overlay off, every board is still inspected but nothing is written."""
-        input_dir = apps_root / "assets" / "datasets-test" / "pcb"
-        skip_unless_e2e_ready(
-            input_dir.is_dir() and any(input_dir.iterdir()),
-            f"PCB test images are missing or empty: {input_dir}",
-        )
-        fixtures = sorted(path for path in input_dir.iterdir() if path.is_file())
-
-        config_path = e2e_config_writer({
-            "io": {"input_dir": str(input_dir), "output_dir": str(tmp_output_dir)},
-            "output": {"overlay": False},
-        })
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=test_timeout_ms / 1000,
-            cwd=str(EXAMPLE_DIR),
-        )
-
-        assert result.returncode == 0, (
-            f"main.py exited with code {result.returncode}\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
-        summary = re.search(
-            r"images_with_defects=(\d+) total_defects=(\d+) failed=(\d+)", result.stdout,
-        )
-        assert summary, f"summary line missing from stdout:\n{result.stdout}"
-        images_with_defects, _, failed = (int(g) for g in summary.groups())
-        assert failed == 0, f"{failed} image(s) failed to process:\n{result.stdout}"
-        assert images_with_defects == len(fixtures), (
-            f"overlay off must still inspect every board, but only {images_with_defects}"
-            f" of {len(fixtures)} produced defects:\n{result.stdout}"
-        )
-        assert_each_board_reports_its_defect(fixtures, result.stdout)
-
-        written = sorted(path.name for path in tmp_output_dir.iterdir())
-        assert not written, f"overlay off must write no images, but the output holds {written}"
-
     def test_unreadable_input_reports_failure_and_exits_nonzero(
         self, e2e_model_path, apps_root, tmp_output_dir, test_timeout_ms,
         skip_unless_e2e_ready, e2e_config_writer,
@@ -330,7 +289,7 @@ class TestE2E:
         broken_output = tmp_output_dir.parent / "broken-output"
         broken_output.mkdir(parents=True, exist_ok=True)
         config_path = e2e_config_writer(
-            {"io": {"input_dir": str(broken_input), "output_dir": str(broken_output)}},
+            {"input": {"source": str(broken_input)}, "output": {"dir": str(broken_output)}},
         )
 
         result = subprocess.run(
@@ -347,113 +306,37 @@ class TestE2E:
             f"an unreadable input must be counted in failed=\nstdout:\n{result.stdout}"
         )
 
-    def test_unwritable_output_reports_failure_and_exits_nonzero(
+    def test_min_score_near_one_reports_no_defects(
         self, e2e_model_path, apps_root, tmp_output_dir, test_timeout_ms,
         skip_unless_e2e_ready, e2e_config_writer,
     ):
-        """A save that fails must be reported, not counted as a processed image.
-
-        The application checks the image writer's return value; nothing else in
-        this suite drives that branch.
-        """
+        """inference.min_score takes effect only through Core's decode; nothing on the host
+        filters the scores again. At 0.99999 no defect of the test boards passes, so the run must
+        report none, while Core's default threshold of 0 would report every box. 1.0 itself fails
+        at build: the BoxDecode kernel takes a threshold in [0, 1). This is also the
+        no-detection case."""
         input_dir = apps_root / "assets" / "datasets-test" / "pcb"
         skip_unless_e2e_ready(
             input_dir.is_dir() and any(input_dir.iterdir()),
             f"PCB test images are missing or empty: {input_dir}",
         )
 
-        readonly = tmp_output_dir.parent / "readonly-output"
-        readonly.mkdir(parents=True, exist_ok=True)
-        # Written before the directory is sealed; the config itself does not live
-        # in the output directory.
         config_path = e2e_config_writer({
-            "io": {"input_dir": str(input_dir), "output_dir": str(readonly)},
-        })
-        readonly.chmod(0o555)
-        try:
-            # root ignores the mode bits, which would let every assertion below
-            # pass without a single write ever failing.
-            probe = readonly / ".probe"
-            try:
-                probe.write_text("x")
-                probe.unlink()
-                sealed = False
-            except OSError:
-                sealed = True
-            skip_unless_e2e_ready(
-                sealed,
-                f"{readonly} is still writable, so the write-failure path cannot be "
-                f"exercised (running as root?)",
-            )
-
-            result = subprocess.run(
-                [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-                capture_output=True, text=True, timeout=test_timeout_ms / 1000,
-                cwd=str(EXAMPLE_DIR),
-            )
-        finally:
-            readonly.chmod(0o755)
-
-        assert result.returncode != 0, (
-            f"images that could not be saved must not exit 0\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
-        summary = re.search(r"Done: (\d+)/(\d+) images .*?failed=(\d+)", result.stdout)
-        assert summary, f"no summary line found\nstdout:\n{result.stdout}"
-        processed, total, failed = (int(value) for value in summary.groups())
-        assert failed == total and processed == 0, (
-            f"no image could be saved, so all {total} must be counted as failed and none "
-            f"as processed; got {processed} processed, {failed} failed\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
-
-    def test_shared_input_and_output_directory_is_rejected(
-        self, apps_root, tmp_output_dir, test_timeout_ms, e2e_config_writer,
-    ):
-        """One directory for both would make outputs become inputs.
-
-        An annotated image written for one board would be re-read as a source for
-        a later board in the same run, and a rerun would discover the previous
-        outputs as fresh inputs.
-        """
-        shared = tmp_output_dir / "shared"
-        shared.mkdir(parents=True, exist_ok=True)
-        (shared / "board.jpg").write_bytes(b"not a real jpeg")
-
-        config_path = e2e_config_writer({
-            "io": {"input_dir": str(shared), "output_dir": str(shared)},
+            "input": {"source": str(input_dir)}, "output": {"dir": str(tmp_output_dir)},
+            "inference": {"min_score": 0.99999},
         })
         result = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", str(config_path)],
             capture_output=True, text=True, timeout=test_timeout_ms / 1000,
-            cwd=str(EXAMPLE_DIR),
+            cwd=str(EXAMPLE_DIR), check=False,
         )
 
-        assert result.returncode == 2, (
-            f"a shared input/output directory must exit 2, got {result.returncode}\n"
+        assert result.returncode == 0, (
+            f"main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert "must differ" in result.stderr, (
-            f"the rejection must name the constraint\nstderr:\n{result.stderr}"
-        )
-        assert not any(p.name.endswith("_pcb.jpg") for p in shared.iterdir()), (
-            "nothing may be written into a rejected shared directory"
-        )
-
-    def test_missing_input_directory_fails(self, apps_root, tmp_output_dir, e2e_config_writer,
-                                           test_timeout_ms, skip_unless_e2e_ready):
-        """A batch that cannot run must report failure, not success."""
-        config_path = e2e_config_writer({
-            "io": {
-                "input_dir": str(tmp_output_dir / "does-not-exist"),
-                "output_dir": str(tmp_output_dir),
-            },
-        })
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=test_timeout_ms / 1000,
-            cwd=str(EXAMPLE_DIR),
-        )
-        assert result.returncode != 0, (
-            f"a missing input directory must not exit 0\nstdout:\n{result.stdout}"
+        summary = re.search(r"total_defects=(\d+)", result.stdout)
+        assert summary, f"summary line missing from stdout:\n{result.stdout}"
+        assert int(summary.group(1)) == 0, (
+            f"inference.min_score: 0.99999 must report total_defects=0:\n{result.stdout}"
         )

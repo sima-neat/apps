@@ -48,32 +48,35 @@ constructor ([model.md](model.md)).
 
 C++, from
 [`pcb-defect-detector/src/cpp/main.cpp`](../../../examples/object-detection/pcb-defect-detector/src/cpp/main.cpp)
-(lines 334–338, de-indented):
+(lines 72–77, de-indented):
 
 ```cpp
-opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
-opt.score_threshold = cfg.score_threshold;
-opt.nms_iou_threshold = cfg.nms_iou;
-opt.top_k = cfg.max_detections;
-opt.num_classes = static_cast<int>(labels.size());
+options.decode_type = neat::BoxDecodeType::YoloV26;
+options.score_threshold = static_cast<float>(config.number("inference.min_score"));
+options.nms_iou_threshold = static_cast<float>(config.number("inference.nms_iou"));
+options.top_k = max_detections;
+// Loading fails when the label file's class count differs from the model's.
+options.num_classes = static_cast<int>(labels.size());
 ```
 
 Python, from
 [`pcb-defect-detector/src/python/main.py`](../../../examples/object-detection/pcb-defect-detector/src/python/main.py)
-(lines 371–375, de-indented):
+(lines 54–59, de-indented):
 
 ```python
-opt.decode_type = pyneat.BoxDecodeType.YoloV26
-opt.score_threshold = cfg.score_threshold
-opt.nms_iou_threshold = cfg.nms_iou
-opt.top_k = cfg.max_detections
-opt.num_classes = len(labels)
+options.decode_type = pyneat.BoxDecodeType.YoloV26
+options.score_threshold = config.number("inference.min_score")
+options.nms_iou_threshold = config.number("inference.nms_iou")
+options.top_k = max_detections
+# Loading fails when the label file's class count differs from the model's.
+options.num_classes = len(labels)
 ```
 
-The example reads each result in its `decode_detections` function: it checks
-the tag of the one output tensor, then calls `decode_bbox_tensor` (Python
-`pyneat.detections.decode_bbox_tensor`) with the frame's width and height and
-`strict` on, which gives a list of `Box` records in the frame's pixels.
+The example reads each result in its `detect_defects` function: it calls
+`decode_bbox_tensor` (Python `pyneat.detections.decode_bbox_tensor`) on the one
+output tensor with the image's width and height, `max_detections` as
+`expected_topk`, and `strict` on, which gives a list of `Box` records in the
+image's pixels.
 
 On a DevKit, the YOLO26n package with no `decode_type` returned six float32
 tensors: three `[1, H, W, 4]` box heads and three
@@ -94,7 +97,7 @@ no effect while `decode_type` is `Unspecified` (see Pitfalls).
 |---|---|---|---|---|---|
 | Decoder | `decode_type` | `decode_type` | `BoxDecodeType::Unspecified`: no BoxDecode stage; the route returns raw head tensors | Selects the decoder for the model family and adds the BoxDecode stage. See [`BoxDecodeType` values](#boxdecodetype-values). | Set it for every detection, pose, segmentation, oriented-box or SuperPoint model you want decoded. Pick the value for the family and export of your model, as the model's documentation names it. |
 | Head layout | `decode_type_option` | `decode_type_option` | `BoxDecodeTypeOption::Auto`: the package's contract decides | Forces one arrangement of the head tensors when the decoder cannot tell it apart. See [`BoxDecodeTypeOption` values](#boxdecodetypeoption-values). | `Auto` decides logits or probabilities only when the package's tensor names or score activation declare it. A decoded score above 1 means it read logits as probabilities: set the matching `...Logit` option, such as `GroupedByRoleLogit`, and do not clamp the scores. Core's decode-types guide names one more case: a YOLOv6 export with grouped `[bbox, class_prob]` outputs needs `GroupedByRoleProbability` and `num_classes`. |
-| Score threshold | `score_threshold` | `score_threshold` | `0.0`: no score filter | Drops detections whose score is below this value. `0` keeps zero-score detections; NMS and `top_k` still apply. For `SuperPoint`, `0` takes the profile's default, for example 0.1 for `A65V1`. | Set it to the confidence below which a detection is noise for your application: the YOLO26 Object Detector uses 0.40, the PCB Defect Detector 0.25, the SSD-MobileNet Object Detector 0.55. Raise it when a live display shows false boxes. Lower it only when you rank or filter the boxes yourself. |
+| Score threshold | `score_threshold` | `score_threshold` | `0.0`: no score filter | Drops detections whose score is below this value. `0` keeps zero-score detections; NMS and `top_k` still apply. It must be below 1: on a DevKit, YOLO26n with `1.0` failed at build with `[misconfig.pipeline_shape] ... BoxDecode kernel recipe: thresholds: detection must be in [0,1); NMS in [0,1]`, although the stage check in `BoxDecodeStageSemantics.cpp` accepts 0 to 1. For `SuperPoint`, `0` takes the profile's default, for example 0.1 for `A65V1`. | Set it to the confidence below which a detection is noise for your application: the YOLO26 Object Detector uses 0.40, the PCB Defect Detector 0.25, the SSD-MobileNet Object Detector 0.55. Raise it when a live display shows false boxes. Lower it only when you rank or filter the boxes yourself. |
 | NMS overlap | `nms_iou_threshold` | `nms_iou_threshold` | `0.0`. For YOLO26 (`YoloV26`, `YoloV26Pose`, `YoloV26Seg`) this turns NMS off. It does not turn NMS off for the other detectors: YOLOv5 to v10, YOLOX, EfficientDet, SSD and `YoloV8Obb` always run NMS, and at `0` it removes every box that overlaps a higher-scoring box of the same class, even slightly. With the default, these decoders silently lose objects that overlap (see Pitfalls). | Non-maximum suppression (NMS), the step that removes duplicate boxes, removes a box that overlaps a higher-scoring box of the same class by more than this IoU (intersection over union, 0–1). | Set 0.45 to 0.6 for every decoder that runs NMS, as the YOLO26 examples do. Raise it when real objects overlap, such as a crowd, so their boxes are kept. Lower it when the same object gets two boxes. Leave `0` for `YoloV26Obb`, `Detr` and `DetrFocal`, which apply no NMS. `YoloV26Obb` rejects any other value: the build fails with `YOLO26-OBB does not support per-tile NMS`. Rotated NMS (`YoloV8Obb`): 0.7 is Ultralytics' default for oriented boxes. |
 | Detection cap | `top_k` | `top_k` | `0`: unset, and box routes fail on it (see Pitfalls) | The most detections one frame can return. It also sizes the output tensor: 4 + 24 × `top_k` bytes for plain boxes. | Always set it on a box route, to the most objects you expect in one frame: 50 in the YOLO26 Object Detector, 300 in the PCB Defect Detector for many small defects. For `SuperPoint`, `0` takes Core's default of 600 for every profile. |
 | SuperPoint settings | `superpoint` | `superpoint` | `SuperPointOptions{}`: profile `Auto`, `nms_radius = -1`, `border_margin = -1`, Float32 descriptors, `FeaturePointsV1` output | Settings of the `SuperPoint` decoder. See [SuperPoint and YOLOX settings](#superpoint-and-yolox-settings). | Only with `decode_type = SuperPoint`. The SuperPoint Feature Extractor sets the `A65V1` profile explicitly. |
@@ -228,8 +231,7 @@ pixels as the route wrote them, except `decode_superpoint`'s; see Pitfalls.
 - `read_detection_format(tensor)` (Python
   `pyneat.detections.read_detection_format`) returns the tag, and
   `detection_format_is_bbox(format)` (Python
-  `pyneat.detections.format_is_bbox`) checks it, as the PCB Defect Detector
-  does before it decodes.
+  `pyneat.detections.format_is_bbox`) checks it.
 
 ### `Box` and `BoxDecodeResult`
 

@@ -1,314 +1,153 @@
-// Unit test for pcb-defect-detector: CLI handling and configuration validation.
-// Runs without a model, a board, or input images.
-#include "sima_examples/testing/test_process.h"
+// Unit tests for the PCB defect detector: the checks the application leaves to its config, and
+// its own logic. tests/python/test_unit.py runs the same checks in Python.
+
+#include "../../src/cpp/utils/images.h"
+#include "../../src/cpp/utils/overlay.h"
+#include "sima_examples/config.h"
+#include "sima_examples/image_folder.h"
+#include "sima_examples/labels.h"
+#include "sima_examples/testing/test_checks.h"
+
+#include <opencv2/core.hpp>
 
 #include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <iterator>
-#include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::create_test_scratch_dir;
-using sima_examples::testing::remove_dir;
-using sima_examples::testing::spawn_and_wait;
+using sima_examples::testing::expect_true;
 
 namespace {
 
-constexpr char kShippedConfig[] =
-    "examples/object-detection/pcb-defect-detector/src/common/config.yaml";
-constexpr char kShippedLabels[] =
-    "examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt";
+const fs::path kExampleDir = "examples/object-detection/pcb-defect-detector";
+const fs::path kCommonDir = kExampleDir / "src" / "common";
 
-bool expect_true(bool condition, const std::string& message) {
-  if (!condition) {
-    std::cerr << "[FAIL] " << message << "\n";
-    return false;
+simaai::neat::Box box(float x1, float y1, float x2, float y2, int class_id) {
+  simaai::neat::Box result;
+  result.x1 = x1;
+  result.y1 = y1;
+  result.x2 = x2;
+  result.y2 = y2;
+  result.score = 0.9f;
+  result.class_id = class_id;
+  return result;
+}
+
+// The checks the application leaves to its config: the values it reads are usable.
+bool test_shipped_config_names_the_model_labels_and_folders() {
+  const auto config = sima_examples::Config::load(kCommonDir / "config.yaml");
+  const fs::path model_path = kCommonDir / config.string("model.path");
+  bool ok = expect_true(model_path.filename() == "yolo26n_plc_mpk.tar.gz",
+                        "model.path names the PCB defect package");
+  // The packaged path reaches prebuilt-apps/models from the config file.
+  ok &=
+      expect_true(fs::weakly_canonical(model_path).parent_path() == fs::weakly_canonical("models"),
+                  "model.path reaches the models folder of the apps root");
+  // The model's class IDs index the labels, and each class has a color.
+  const auto labels = sima_examples::load_labels(config.string("model.labels"));
+  ok &= expect_true(labels == std::vector<std::string>{"missing_hole", "mouse_bite", "open_circuit",
+                                                       "short", "spur", "spurious_copper"},
+                    "model.labels lists the six defect classes in the model's order");
+  ok &= expect_true(pcb::kClassColors.size() == labels.size(), "each class has a color");
+  // The shipped sample boards run as soon as the model is in place.
+  ok &= expect_true(!sima_examples::image_paths(config.string("input.source")).empty(),
+                    "input.source holds the sample boards");
+  const std::string output_dir = config.string("output.dir");
+  // An annotated image written into input.source would be read as a board on the next run.
+  ok &= expect_true(output_dir.rfind("sandbox/", 0) == 0 &&
+                        fs::path(output_dir) != fs::path(config.string("input.source")),
+                    "output.dir is under sandbox/ and is not input.source");
+  ok &= expect_true(
+      config.number("inference.min_score") >= 0.0 && config.number("inference.min_score") < 1.0 &&
+          config.number("inference.nms_iou") >= 0.0 && config.number("inference.nms_iou") <= 1.0,
+      "the shipped score threshold is from 0 up to 1, and the IoU threshold from 0 to 1");
+  ok &= expect_true(config.integer("inference.max_detections") > 0 &&
+                        config.integer("app.input_max_width") > 0 &&
+                        config.integer("app.input_max_height") > 0,
+                    "the shipped detection cap and largest image size are positive");
+  return ok;
+}
+
+// CI downloads the package the shipped config names.
+bool test_test_scope_downloads_the_configured_model() {
+  const auto config = sima_examples::Config::load(kCommonDir / "config.yaml");
+  const auto scope = sima_examples::Config::load(kExampleDir / "tests" / "test-scope.yaml");
+  return expect_true(scope.string("models.yolo26n_plc.file") ==
+                         fs::path(config.string("model.path")).filename().string(),
+                     "test-scope.yaml downloads the model the config names");
+}
+
+bool test_image_problem_names_what_the_model_cannot_take() {
+  const pcb::ImageSize max_size{640, 480};
+  bool ok = expect_true(pcb::image_problem(cv::Mat(), max_size) == "not a readable image",
+                        "an unreadable image is named");
+  ok &= expect_true(pcb::image_problem(cv::Mat::zeros(480, 640, CV_8UC3), max_size).empty(),
+                    "an image of the largest size fits");
+  ok &=
+      expect_true(pcb::image_problem(cv::Mat::zeros(480, 641, CV_8UC3), max_size) ==
+                      "641x480 is larger than app.input_max_width x app.input_max_height (640x480)",
+                  "a wider image is named with both sizes");
+  ok &= expect_true(!pcb::image_problem(cv::Mat::zeros(481, 640, CV_8UC3), max_size).empty(),
+                    "a taller image is named");
+  return ok;
+}
+
+bool test_save_image_reports_a_failed_write_instead_of_throwing() {
+  const fs::path folder = fs::temp_directory_path() / "pcb-save-image-test";
+  fs::remove_all(folder);
+  fs::create_directories(folder);
+  const cv::Mat image = cv::Mat::zeros(8, 8, CV_8UC3);
+  bool ok = expect_true(pcb::save_image(folder / "board_pcb.png", image), "a PNG is saved");
+  // OpenCV throws for an encoder failure, such as an extension it has no writer for; one image
+  // that cannot be saved must not stop the batch.
+  bool unknown_saved = true;
+  try {
+    unknown_saved = pcb::save_image(folder / "board_pcb.unknown", image);
+  } catch (const std::exception&) {
   }
-  std::cout << "[OK] " << message << "\n";
-  return true;
-}
-
-bool expect_contains(const std::string& haystack, const std::string& needle,
-                     const std::string& message) {
-  return expect_true(haystack.find(needle) != std::string::npos, message);
-}
-
-fs::path write_config(const std::string& test_name, const std::string& body) {
-  const std::string temp_dir = create_test_scratch_dir("pcb-defect-detector", test_name);
-  if (temp_dir.empty()) {
-    throw std::runtime_error("failed to create temp directory");
-  }
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << body;
-  return config_path;
-}
-
-// A minimal valid config with one overridden line appended.
-std::string config_body(const std::string& extra_decode = "", const std::string& extra_runtime = "",
-                        const std::string& labels = kShippedLabels) {
-  return std::string("model:\n")
-      .append("  path: models/yolo26n_plc_mpk.tar.gz\n")
-      .append("  labels: " + labels + "\n")
-      .append("io:\n")
-      .append("  input_dir: assets/datasets/pcb\n")
-      .append("  output_dir: sandbox/pcb-defect-detector\n")
-      .append("decode:\n")
-      .append("  score_threshold: 0.25\n")
-      .append("  nms_iou: 0.45\n")
-      .append("  max_detections: 300\n")
-      .append(extra_decode)
-      .append("runtime:\n")
-      .append("  num_runs: 1\n")
-      .append("  queue_depth: 8\n")
-      .append(extra_runtime)
-      .append("output:\n")
-      .append("  overlay: true\n");
-}
-
-bool validate_rejects(const std::string& binary, const std::string& test_name,
-                      const std::string& body, const std::string& expected_error,
-                      const std::string& message) {
-  const fs::path config_path = write_config(test_name, body);
-  const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  const bool ok =
-      expect_true(result.exit_code == 2, message + " is rejected") &&
-      expect_contains(result.stderr_text, expected_error, message + " names the setting");
-  remove_dir(config_path.parent_path().string());
+  ok &= expect_true(!unknown_saved, "an encoder failure is reported as not saved");
+  ok &= expect_true(!pcb::save_image(folder / "missing" / "board_pcb.png", image),
+                    "a missing folder is reported as not saved");
+  fs::remove_all(folder);
   return ok;
 }
 
-bool test_help_runs(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--help"}, 20000);
-  return expect_true(result.exit_code == 0, "help exits with code 0") &&
-         expect_contains(result.stdout_text, "Usage", "help prints usage") &&
-         expect_contains(result.stdout_text, "--config", "help mentions --config") &&
-         expect_contains(result.stdout_text, "--validate-config-only",
-                         "help mentions --validate-config-only");
+bool test_pixel_rounds_half_up_and_stays_in_the_image() {
+  return expect_true(pcb::pixel(2.5f, 10) == 3 && pcb::pixel(2.49f, 10) == 2 &&
+                         pcb::pixel(-3.0f, 10) == 0 && pcb::pixel(12.0f, 10) == 9,
+                     "pixel rounds half up and clamps to the image");
 }
 
-bool test_unknown_flag_is_rejected(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--bogus"}, 20000);
-  return expect_true(result.exit_code != 0, "unknown flag exits nonzero") &&
-         expect_contains(result.stderr_text, "unknown argument",
-                         "unknown flag error names the argument");
-}
-
-bool test_missing_config_value_is_rejected(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--config"}, 20000);
-  return expect_true(result.exit_code == 2, "bare --config exits with code 2") &&
-         expect_contains(result.stderr_text, "--config requires a path",
-                         "bare --config explains the missing value");
-}
-
-bool test_missing_config_file_fails_cleanly(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--config", "/nonexistent/pcb-config.yaml"}, 20000);
-  return expect_true(result.exit_code == 2, "missing config exits with code 2") &&
-         expect_contains(result.stderr_text, "config file not found",
-                         "missing config error mentions config file not found");
-}
-
-bool test_non_numeric_score_is_rejected(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--score", "high"}, 20000);
-  return expect_true(result.exit_code == 2, "non-numeric --score exits with code 2") &&
-         expect_contains(result.stderr_text, "--score requires a number",
-                         "non-numeric --score explains the expected value");
-}
-
-// The harness writes process logs next to the --config file, so the shipped config is
-// validated through a scratch copy rather than in place.
-bool test_shipped_config_validates(const std::string& binary) {
-  std::ifstream shipped(kShippedConfig);
-  if (!shipped.good()) {
-    std::cerr << "[FAIL] shipped config is missing: " << kShippedConfig << "\n";
-    return false;
-  }
-  const std::string body((std::istreambuf_iterator<char>(shipped)),
-                         std::istreambuf_iterator<char>());
-
-  const fs::path config_path = write_config("test_shipped_config_validates", body);
-  const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  const bool ok = expect_true(result.exit_code == 0, "shipped config validates") &&
-                  expect_contains(result.stdout_text, "classes=6",
-                                  "validate output reports the six defect classes") &&
-                  expect_contains(result.stdout_text, "max_detections=300",
-                                  "validate output reports the decode cap") &&
-                  expect_contains(result.stdout_text, "configuration OK",
-                                  "validate output confirms the configuration");
-  remove_dir(config_path.parent_path().string());
+bool test_draw_boxes_draws_each_box_in_its_class_color() {
+  cv::Mat image = cv::Mat::zeros(100, 100, CV_8UC3);
+  pcb::draw_boxes(image, {box(10, 30, 60, 80, 2)}, {"missing_hole", "mouse_bite", "open_circuit"});
+  // The left edge, below the label, is the class's color; the inside stays untouched.
+  const cv::Vec3b edge = image.at<cv::Vec3b>(60, 10);
+  const cv::Scalar& color = pcb::kClassColors[2];
+  bool ok = expect_true(edge[0] == color[0] && edge[1] == color[1] && edge[2] == color[2],
+                        "the box edge has its class's color");
+  ok &= expect_true(image.at<cv::Vec3b>(55, 35) == cv::Vec3b(0, 0, 0),
+                    "the inside of the box is untouched");
   return ok;
 }
 
-bool test_cli_overrides_apply(const std::string& binary) {
-  const fs::path config_path = write_config("test_cli_overrides_apply", config_body());
-  const auto result = spawn_and_wait(binary,
-                                     {"--config", config_path.string(), "--score", "0.40", "--nms",
-                                      "0.55", "--validate-config-only"},
-                                     20000);
-  const bool ok = expect_true(result.exit_code == 0, "config with CLI overrides validates") &&
-                  expect_contains(result.stdout_text, "score_threshold=0.40",
-                                  "--score override reaches the resolved config") &&
-                  expect_contains(result.stdout_text, "nms_iou=0.55",
-                                  "--nms override reaches the resolved config");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_out_of_range_score_override_is_rejected(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_out_of_range_score_override_is_rejected", config_body());
-  const auto result = spawn_and_wait(
-      binary, {"--config", config_path.string(), "--score", "1.5", "--validate-config-only"},
-      20000);
-  const bool ok = expect_true(result.exit_code == 2, "out-of-range --score override is rejected") &&
-                  expect_contains(result.stderr_text, "decode.score_threshold",
-                                  "override error names decode.score_threshold");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_missing_model_path_is_rejected(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_missing_model_path_is_rejected",
-                   std::string("model:\n")
-                       .append("  labels: " + std::string(kShippedLabels) + "\n")
-                       .append("io:\n")
-                       .append("  input_dir: assets/datasets/pcb\n"));
-  const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  const bool ok =
-      expect_true(result.exit_code == 2, "config without model.path is rejected") &&
-      expect_contains(result.stderr_text, "model.path", "missing model error names model.path");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_missing_labels_file_is_rejected(const std::string& binary) {
-  const fs::path config_path = write_config("test_missing_labels_file_is_rejected",
-                                            config_body("", "", "/nonexistent/pcb_label.txt"));
-  const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  const bool ok =
-      expect_true(result.exit_code == 2, "config with a missing labels file is rejected") &&
-      expect_contains(result.stderr_text, "labels file does not exist",
-                      "missing labels error names the labels file");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_empty_labels_file_is_rejected(const std::string& binary) {
-  const std::string temp_dir =
-      create_test_scratch_dir("pcb-defect-detector", "test_empty_labels_file_is_rejected");
-  if (temp_dir.empty()) {
-    std::cerr << "[FAIL] failed to create temp directory\n";
-    return false;
-  }
-  const fs::path labels_path = fs::path(temp_dir) / "empty_label.txt";
-  std::ofstream(labels_path) << "\n \n";
-
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream(config_path) << config_body("", "", labels_path.string());
-
-  const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  const bool ok =
-      expect_true(result.exit_code == 2, "config with an empty labels file is rejected") &&
-      expect_contains(result.stderr_text, "labels file is empty",
-                      "empty labels error names the labels file");
-  remove_dir(temp_dir);
-  return ok;
-}
-
-bool test_missing_input_dir_is_reported(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_missing_input_dir_is_reported",
-                   std::string("model:\n")
-                       .append("  path: models/yolo26n_plc_mpk.tar.gz\n")
-                       .append("  labels: " + std::string(kShippedLabels) + "\n")
-                       .append("io:\n")
-                       .append("  input_dir: /nonexistent/pcb-images\n"));
-  const auto result = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-  const bool ok = expect_true(result.exit_code == 2, "missing input directory exits with code 2") &&
-                  expect_contains(result.stderr_text, "Input directory does not exist",
-                                  "missing input directory is reported before model load");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_empty_input_dir_is_reported(const std::string& binary) {
-  const std::string temp_dir =
-      create_test_scratch_dir("pcb-defect-detector", "test_empty_input_dir_is_reported");
-  if (temp_dir.empty()) {
-    std::cerr << "[FAIL] failed to create temp directory\n";
-    return false;
-  }
-  const fs::path empty_input = fs::path(temp_dir) / "images";
-  fs::create_directories(empty_input);
-
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream(config_path) << std::string("model:\n")
-                                    .append("  path: models/yolo26n_plc_mpk.tar.gz\n")
-                                    .append("  labels: " + std::string(kShippedLabels) + "\n")
-                                    .append("io:\n")
-                                    .append("  input_dir: " + empty_input.string() + "\n");
-
-  const auto result = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
-  const bool ok = expect_true(result.exit_code == 3, "empty input directory exits with code 3") &&
-                  expect_contains(result.stderr_text, "No images found",
-                                  "empty input directory is reported before model load");
-  remove_dir(temp_dir);
-  return ok;
+bool test_draw_boxes_skips_a_box_with_no_area() {
+  cv::Mat image = cv::Mat::zeros(100, 100, CV_8UC3);
+  pcb::draw_boxes(image, {box(40, 30, 40.2f, 80, 0), box(120, 30, 150, 80, 0)}, {"missing_hole"});
+  return expect_true(cv::countNonZero(image.reshape(1)) == 0,
+                     "a box with no width or height inside the image draws nothing");
 }
 
 } // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
-    return 2;
-  }
-
-  const std::string binary = argv[1];
-  bool ok = true;
-  ok &= test_help_runs(binary);
-  ok &= test_unknown_flag_is_rejected(binary);
-  ok &= test_missing_config_value_is_rejected(binary);
-  ok &= test_missing_config_file_fails_cleanly(binary);
-  ok &= test_non_numeric_score_is_rejected(binary);
-  ok &= test_shipped_config_validates(binary);
-  ok &= test_cli_overrides_apply(binary);
-  ok &= test_out_of_range_score_override_is_rejected(binary);
-  ok &= test_missing_model_path_is_rejected(binary);
-  ok &= test_missing_labels_file_is_rejected(binary);
-  ok &= test_empty_labels_file_is_rejected(binary);
-  ok &= test_missing_input_dir_is_reported(binary);
-  ok &= test_empty_input_dir_is_reported(binary);
-
-  ok &= validate_rejects(binary, "test_rejects_out_of_range_nms", config_body("  nms_iou: 1.20\n"),
-                         "decode.nms_iou", "out-of-range decode.nms_iou");
-  ok &= validate_rejects(binary, "test_rejects_zero_max_detections",
-                         config_body("  max_detections: 0\n"), "decode.max_detections",
-                         "zero decode.max_detections");
-  ok &= validate_rejects(binary, "test_rejects_zero_num_runs",
-                         config_body("", "  num_runs: 0\n"), "runtime.num_runs",
-                         "zero runtime.num_runs");
-  ok &= validate_rejects(binary, "test_rejects_zero_queue_depth",
-                         config_body("", "  queue_depth: 0\n"), "runtime.queue_depth",
-                         "zero runtime.queue_depth");
-  // The Python twin mirrors both rules; its unit tests cover the same values.
-  ok &= validate_rejects(binary, "test_rejects_trailing_space_in_quoted_integer",
-                         config_body("", "  queue_depth: \"8 \"\n"), "runtime.queue_depth",
-                         "trailing whitespace in a quoted runtime.queue_depth");
-  std::string null_model_path = config_body();
-  const std::string shipped_path = "path: models/yolo26n_plc_mpk.tar.gz";
-  null_model_path.replace(null_model_path.find(shipped_path), shipped_path.size(), "path: null");
-  ok &= validate_rejects(binary, "test_rejects_null_model_path", null_model_path, "model.path",
-                         "null model.path");
-
+int main() {
+  bool ok = test_shipped_config_names_the_model_labels_and_folders();
+  ok &= test_test_scope_downloads_the_configured_model();
+  ok &= test_image_problem_names_what_the_model_cannot_take();
+  ok &= test_save_image_reports_a_failed_write_instead_of_throwing();
+  ok &= test_pixel_rounds_half_up_and_stays_in_the_image();
+  ok &= test_draw_boxes_draws_each_box_in_its_class_color();
+  ok &= test_draw_boxes_skips_a_box_with_no_area();
   return ok ? 0 : 1;
 }
