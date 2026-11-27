@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,9 @@ TYPE_CHECKS = {
         isinstance(value, str)
         or (isinstance(value, list) and all(isinstance(item, str) for item in value))
     ),
+    "mapping_list": lambda value: (
+        isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)
+    ),
 }
 
 # Examples that still use their own key names. Remove an example from this list in the pull
@@ -34,7 +38,6 @@ PENDING_EXAMPLES = {
     "image-classification-explorer",
     "mipi-multi-model",
     "multi-stream-blazepose3d",
-    "multi-stream-multi-model",
     "multi-stream-object-detector",
     "multi-stream-pose-estimator",
     "multi-stream-tracker",
@@ -70,7 +73,26 @@ def key_paths(mapping: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     return paths
 
 
-def naming_problems(config_file: Path, keys: dict[str, dict[str, str]]) -> list[str]:
+def entry_problems(
+    name: Path, path: str, entries: list[dict[str, Any]], keys: dict[str, dict[str, Any]]
+) -> list[str]:
+    """Each field of each entry of the mapping_list at `path` is a field the key lists, of the
+    type of the registered key it names."""
+    problems = []
+    for index, entry in enumerate(entries):
+        for field, value in key_paths(entry).items():
+            key = f"{path}.{field}"
+            if key not in keys[path]["fields"]:
+                problems.append(f"{name}: {path}[{index}].{field} is not a field of {path}")
+            elif not TYPE_CHECKS[keys[key]["type"]](value):
+                problems.append(
+                    f"{name}: {path}[{index}].{field} must be a {keys[key]['type']}, "
+                    f"got {value!r}"
+                )
+    return problems
+
+
+def naming_problems(config_file: Path, keys: dict[str, dict[str, Any]]) -> list[str]:
     config = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
     problems = []
     for path, value in key_paths(config).items():
@@ -86,6 +108,8 @@ def naming_problems(config_file: Path, keys: dict[str, dict[str, str]]) -> list[
             problems.append(
                 f"{name}: {path} must be a {keys[path]['type']}, got {value!r}"
             )
+        elif keys[path]["type"] == "mapping_list":
+            problems += entry_problems(name, path, value, keys)
     return problems
 
 
@@ -95,6 +119,38 @@ def test_every_shared_key_has_a_type_and_a_meaning():
             f"{key}: unknown type {entry.get('type')!r}"
         )
         assert entry.get("meaning"), f"{key}: missing meaning"
+
+
+def test_every_mapping_list_field_is_a_registered_key_under_it():
+    keys = shared_keys()
+    lists = {key: entry for key, entry in keys.items() if entry["type"] == "mapping_list"}
+    assert lists, "no mapping_list key, so this check would pass without checking"
+    for key, entry in lists.items():
+        assert entry.get("fields"), f"{key}: a mapping_list lists its fields"
+        for field in entry["fields"]:
+            assert field.startswith(f"{key}.") and field in keys, (
+                f"{key}: field {field} is not a registered {key}.<field> key"
+            )
+            assert keys[field]["type"] != "mapping_list", f"{key}: field {field} is a list"
+
+
+def test_a_list_of_entries_is_checked_field_by_field(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "APPS_ROOT", tmp_path)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model:\n"
+        "  - id: yolov8\n    path: a.tar.gz\n    labels: coco.txt\n"
+        "  - id: 5\n    path: b.tar.gz\n    size: 640\n",
+        encoding="utf-8",
+    )
+    assert naming_problems(config_file, shared_keys()) == [
+        "config.yaml: model[1].id must be a string, got 5",
+        "config.yaml: model[1].size is not a field of model",
+    ]
+    config_file.write_text("model: []\n", encoding="utf-8")
+    assert naming_problems(config_file, shared_keys()) == [
+        "config.yaml: model must be a mapping_list, got []"
+    ]
 
 
 def test_converted_examples_use_the_shared_key_names():

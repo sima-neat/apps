@@ -24,7 +24,7 @@ A module in both columns has the same file name, function names, and behavior in
 
 | Module | What it does | Python | C++ |
 | --- | --- | --- | --- |
-| `config` | Reads `config.yaml` by dotted key, such as `input.rtsp.tcp`. A missing key or a value of the wrong type raises with the key's name. `choice(key, table)` returns the table entry the key's value names, and `lookup(key, value, table)` does the same for a value `main` derives; an unknown value raises with the key, the value, and the choices. Keys the example does not read are ignored | `config.py` | `config.h` |
+| `config` | Reads `config.yaml` by dotted key, such as `input.rtsp.tcp`. A missing key or a value of the wrong type raises with the key's name. `choice(key, table)` returns the table entry the key's value names, and `lookup(key, value, table)` does the same for a value `main` derives. An unknown value raises with the key, the value, and the choices. `mapping_list(key)` reads a list of mappings, such as one `model` entry per stream, as one `Config` per entry. An entry's getters take a field, such as `string("path")`, and its errors name the entry, such as `<config> is missing model[1].path`. A key that is not a non-empty list of mappings raises with its name. Keys the example does not read are ignored. In C++, `string()` reads any scalar, so `id: 5` reads as `"5"`, while Python raises | `config.py` | `config.h` |
 | `image_folder` | Helpers for the examples that read a folder of images and save annotated copies. `image_paths(folder)` lists the `.jpg`, `.jpeg`, `.png`, and `.bmp` files directly in it, in file-name order; a suffix matches in any case, such as `.PNG`, and subfolders are skipped; a missing folder, or one with no images, raises with the folder's path. `read_image(path)` reads a BGR image and raises with the path when OpenCV cannot read it. `output_name(image_path, suffix)` returns the annotated PNG's name, the image's stem then the suffix then `.png`, such as `street_detr.png`. `draw_detections(image, boxes, labels)` returns a copy of the image with each box, its label, and its score drawn in a per-class color. | `image_folder.py` | `image_folder.h` |
 | `labels` | Reads a class-label file with one label per line | `labels.py` | `labels.h` |
 | `rtsp_probe` | Reads an RTSP stream's frame size and frame rate before the graph is built, for each value the config leaves at 0 or below. `probe_rtsp_streams` reads every stream that shares one model and fails unless all have the same frame size | `rtsp_probe.py` | `rtsp_probe.h` |
@@ -36,7 +36,8 @@ A module in both columns has the same file name, function names, and behavior in
 | `asset_utils` | Downloads sample files | | `asset_utils.h` |
 
 Test helpers live in `support/cpp/sima_examples/testing/` for C++ and `tests/utils/` for
-Python. `validate_config_body` runs an example with `--validate-config-only`, so only the
+Python. C++ `write_e2e_config` writes an e2e config from the shipped one: its scalars, and
+only the lists and lists of mappings the test passes, such as the `model` entries. C++ `MetadataJsonListener::read_ready` reads every datagram already queued on its ports, so a test that reads during the run keeps up with a message sent as several chunks. `validate_config_body` runs an example with `--validate-config-only`, so only the
 examples that still read their config into an `AppConfig` use it. It goes away with the last
 of them.
 
@@ -50,7 +51,7 @@ its label file in its `src/common/`.
 
 | File | Classes | Used by |
 | --- | --- | --- |
-| `coco80.txt` | The 80 COCO classes as IDs 0 to 79, as YOLO models score them | single-stream, high-density, PCIe high-density, YOLO26 |
+| `coco80.txt` | The 80 COCO classes as IDs 0 to 79, as YOLO models score them | single-stream, high-density, PCIe high-density, multi-stream multi-model, YOLO26 |
 | `coco91.txt` | The COCO class IDs 0 to 90, with `N/A` for the 11 IDs that name no class, as DETR models score them | DETR, RF-DETR |
 
 ## Changing the library

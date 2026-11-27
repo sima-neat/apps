@@ -47,7 +47,11 @@ share one model:
 
 - `max_inflight_per_stream`: frames of one stream the model holds at once. `-1` uses Core's
   default of 4. Lower it to share the model more evenly and keep each stream fresh. The
-  high-density example uses `1` for 20 and 60 streams.
+  high-density example uses `1` for 20 and 60 streams. When each stream's decoder feeds its
+  own model graph, the cap did not bound that model's frames on Neat Core 0.6.2: the link
+  registered no frame credit, and a second consumer of the decoder output released each credit
+  when it pulled the frame. Bound those frames with `SimaDecodeOptions::num_buffers`. A model
+  that several streams share was not measured this way, so the caps here still apply to it.
 - `max_inflight_total`: frames of all streams the model holds at once. `-1` uses
   `min(max_inflight_per_stream * stream_count, 8)`. Set it explicitly, as the example does, so
   the cap does not depend on the default. Raise it above 8 when `max_inflight_per_stream *

@@ -186,7 +186,7 @@ does.
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) (BGR or NV12 frames to Insight, named endpoints)
 - [face-detector](../../../examples/face-detection/face-detector/) (`model.input_appsrc_options(true)`)
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/) (`model.input_appsrc_options(true)`)
-- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (NV12 model input with `max_width`, encoded input)
+- [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (`model.input_appsrc_options(false)`, one input per model)
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) (`max_bytes`, `pool_max_buffers`, `block`)
 - [mipi-multi-model](../../../examples/benchmarking/mipi-multi-model/) (`memory_policy = Ev74`, Python only)
 - [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/) (named endpoints)

@@ -25,6 +25,10 @@ option and show each default. Set only the options whose default does not fit. C
 - `url` and `codec` (`RtspCodec::H264`, `H265`, or `MJPEG`) for every stream.
 - `tcp` (default `true`) and `latency_ms`, the jitter buffer (default `200`). The high-density
   example sets `latency_ms = 100`.
+- `payload_type` filters the RTP packets by payload type. The default, `-1`, accepts only the
+  codec's default: 96 for H.264 and H.265, 26 for MJPEG. `0` accepts any type. Set `0` when a
+  camera may announce another dynamic type: Core puts the type in the caps before the
+  depayloader, so a stream of another type is never linked to it.
 - `drop_on_latency` (default `true`) drops late packets. Turn it off only when every frame
   matters more than freshness.
 - `buffer_mode = "none"` keeps the RTP timestamps as sent. The RF-DETR example sets it for TCP
@@ -115,6 +119,14 @@ stream. Do not raise it to add buffering. Use `OutputOptions` on the `Output`, o
   decoder and to a `VideoSender`. Neat reads the stream once and feeds both.
   [Application output](application-output.md) owns the sender options and the link to it.
 - **Many streams, one model:** see [Many streams, one model](#many-streams-one-model).
+- **Many streams, a different model on each:** build one parent graph and run it with one `Run`.
+  For each stream, connect `RtspEncodedInput → SimaDecode → model graph → Output("results_<i>")`
+  with a `RealtimeLatestByStream` link from the decoder to the model. Pull every `results_<i>` in
+  one loop. A slowed model slows only its own stream: on a DevKit with Neat Core 0.6.2, MLA at
+  1 GHz, and four 1280x720@30 H.264 streams, one model held to 10 or 1 results/s left the other
+  three at 30 results/s. An oversubscribed MLA was not measured. Bound each model's frames with
+  `SimaDecodeOptions::num_buffers`, because the link's in-flight cap does not, as the optimizer
+  skill's tuning reference ("Share the model across streams") says.
 - **Results joined by frame:** before a `graphs::Combine` with `CombinePolicy::ByFrame` or
   `ByPts`, use plain links. A latest-by-stream link drops frames, and the join then waits for
   frames that never arrive.
