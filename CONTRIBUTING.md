@@ -241,8 +241,8 @@ When adding C++:
 - keep C++ test filenames aligned with `cmake/ExampleModule.cmake`
 
 When changing layout, commands, models, or tests, inspect `build.sh`,
-`tests/test.sh`, `tests/utils/test_scope.py`, README validation, catalog
-generation, and affected CI workflows.
+`scripts/ci/package-apps.sh`, `tests/test.sh`, `tests/utils/test_scope.py`,
+README validation, catalog generation, and affected CI workflows.
 
 ## Installed Layout
 
