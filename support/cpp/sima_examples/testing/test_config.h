@@ -11,6 +11,8 @@ namespace sima_examples::testing {
 
 using ConfigScalars = std::map<std::string, std::string>;
 using ConfigLists = std::map<std::string, std::vector<std::string>>;
+// A list of mappings by key, such as one "model" entry per stream, each entry by field.
+using ConfigEntries = std::map<std::string, std::vector<ConfigScalars>>;
 
 // Locate examples/*/<example_name>/src/common/config.yaml from the apps root.
 std::filesystem::path example_common_config_path(const std::string& example_name);
@@ -38,10 +40,12 @@ std::string model_case_label(const std::string& case_name, const std::string& mo
 int e2e_int(const std::string& example_name, const std::string& section, const std::string& key);
 
 // Write an e2e runtime config by starting from src/common/config.yaml and applying
-// only test-harness overrides. The generated config omits testing.* keys.
+// only test-harness overrides. The generated config omits testing.* keys. It holds the
+// scalars of src/common/config.yaml, and a list or a list of mappings only when given here.
 std::filesystem::path write_e2e_config(const std::string& example_name,
                                        const std::filesystem::path& config_path,
                                        const ConfigScalars& overrides,
-                                       const ConfigLists& list_overrides = {});
+                                       const ConfigLists& list_overrides = {},
+                                       const ConfigEntries& entry_overrides = {});
 
 } // namespace sima_examples::testing

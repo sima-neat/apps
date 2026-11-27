@@ -1,66 +1,106 @@
-"""E2E tests for fastflow-anomaly-detector (Python).
-
-Runs the single-stream RTSP pipeline against a live RTSP H.264 source
-(SIMANEAT_TEST_RTSP_H264_URL) and checks that it writes the annotated frames it also
-sends to Insight.
-"""
+"""End-to-end tests: each RTSP codec reaches Insight as video and defect-region metadata."""
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import socket
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from tests.utils.process_assertions import assert_exited_cleanly
-from tests.utils.output_assertions import assert_streamed_frames_are_usable
+from tests.utils.metadata_json_listener import MetadataJsonListener
 
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-E2E_INSIGHT_HOST = "127.0.0.1"
+FRAMES = 60
+# Every map pixel reaches a threshold of 0, so every frame sends one segment, whatever the
+# test stream shows.
+THRESHOLD = 0.0
+MIN_REGION_PX = 1
 
 
-def _env_int_or_default(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    return int(raw) if raw else default
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    return int(value) if value else default
 
 
 @pytest.mark.e2e
-class TestE2E:
-    def test_rtsp_h264_to_insight(
-        self,
-        rtsp_h264_url,
-        e2e_model_path,
-        tmp_output_dir,
-        test_timeout_ms,
-        e2e_config_section,
-        e2e_config_writer,
-        run_until_output_files,
+@pytest.mark.parametrize("codec", ["h264", "h265", "mjpeg"])
+def test_publishes_insight_video_and_regions(
+    request, codec, e2e_model_path, test_timeout_ms, e2e_config_writer
+):
+    rtsp_url = request.getfixturevalue(f"rtsp_{codec}_url")
+    metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
+    video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
+    config_path = e2e_config_writer(
+        {
+            # Absolute, because the example resolves a relative model.path from its config.
+            "model": {"path": str(Path(e2e_model_path).resolve())},
+            "input": {"source": rtsp_url, "codec": codec},
+            "inference": {"frames": FRAMES},
+            # This test is the Insight receiver, so the example publishes to loopback.
+            "output": {
+                "insight": {
+                    "host": "127.0.0.1",
+                    "video_port_base": video_port,
+                    "metadata_port_base": metadata_port,
+                }
+            },
+            "app": {"anomaly_threshold": THRESHOLD, "min_region_px": MIN_REGION_PX},
+        }
+    )
+
+    with (
+        MetadataJsonListener(
+            "127.0.0.1",
+            metadata_port,
+            num_ports=1,
+            metadata_type="segmentation",
+            data_array_key="segments",
+            require_all_ports=True,
+        ) as listener,
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video,
     ):
-        output_cfg = e2e_config_section("fastflow-anomaly-detector", "testing.e2e.output")
-        config_path = e2e_config_writer(
-            {
-                "model": {"path": str(e2e_model_path)},
-                "source": {"rtsp_url": rtsp_h264_url},
-                "output": {
-                    "save_dir": str(tmp_output_dir),
-                    "insight": {
-                        "host": E2E_INSIGHT_HOST,
-                        "video_port": _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000),
-                    },
-                },
-            }
-        )
-        cmd = [sys.executable, str(MAIN_PY), "--config", str(config_path)]
-
-        result = run_until_output_files(
-            cmd,
-            tmp_output_dir,
-            int(output_cfg["total_saved_frames"]),
-            test_timeout_ms / 1000,
+        video.bind(("127.0.0.1", video_port))
+        video.settimeout(5.0)
+        result = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True,
+            text=True,
+            timeout=test_timeout_ms / 1000,
             cwd=str(EXAMPLE_DIR),
+            check=False,
         )
+        assert result.returncode == 0, (
+            f"exited with {result.returncode}\nstdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+        metadata = listener.wait_for_messages(5.0)
+        following = listener.wait_for_messages(5.0)
+        # The rest of the run's messages, so the checks below see every frame it sent.
+        rest = listener.drain_pending()
+        video_packet = video.recv(65536)
 
-        assert_exited_cleanly(result)
-        assert_streamed_frames_are_usable(tmp_output_dir, int(output_cfg["total_saved_frames"]))
+    assert f"processed={FRAMES} flagged={FRAMES} " in result.stdout, result.stdout
+    assert metadata.success, metadata.error
+    assert following.success, following.error
+    first, last = metadata.messages[-1], following.messages[-1]
+    assert int(last.frame_id) > int(first.frame_id)
+    width, height = (int(value) for value in re.search(r"stream=(\d+)x(\d+)@", result.stdout).groups())
+    for message in metadata.messages + following.messages + rest.messages:
+        segments = json.loads(message.payload)["data"]["segments"]
+        assert segments, message.payload
+        for segment in segments:
+            assert segment["label"] == "anomaly", segment
+            assert THRESHOLD <= segment["confidence"] <= 1.0, segment
+            x, y, box_width, box_height = segment["bbox"]
+            assert 0 <= x and 0 <= y and x + box_width <= width and y + box_height <= height
+            assert segment["mask_format"] == "polygon"
+            assert all(0 <= px < width and 0 <= py < height for px, py in segment["mask"])
+    # VideoSender forwards the stream as received: RTP H.264 (96), H.265 (98), or JPEG (26).
+    assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
+    assert video_packet[1] & 0x7F == {"h264": 96, "h265": 98, "mjpeg": 26}[codec]
