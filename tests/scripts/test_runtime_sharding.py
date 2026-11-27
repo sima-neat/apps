@@ -828,6 +828,22 @@ def test_a_full_fleet_drops_a_shard_whose_set_the_incoming_runner_also_covers(sc
     assert plan["unmet_runner_labels"] == {}
 
 
+def test_a_full_fleet_swaps_a_shard_when_the_incoming_runner_covers_more_sets(scope):
+    scope = without_runner_labels(scope)
+    e2e = [s["id"] for s in planner.enumerate_suites(scope, {}) if ":e2e:" in s["id"]][:10]
+    for i, suite in enumerate(e2e):
+        language, _, example = suite.split(":", 2)
+        scope["examples"][example]["e2e"][language]["runner_labels"] = [f"label-{i}"]
+    fleet = [runner(f"runner-{i}", extra=(f"label-{i}",)) for i in range(8)]
+    fleet.append(runner("runner-x", extra=("label-8", "label-9")))
+    plan = planner.make_plan(scope, fleet, BASE_LABELS, {}, "abc")
+    assert candidates(plan) == [f"runner-{i}" for i in range(7)] + ["runner-x"]
+    assert plan["unmet_runner_labels"] == {e2e[7]: ["label-7"]}
+    assert planner.unmet_reason(fleet, BASE_LABELS, [], ["label-7"]) == (
+        "other label sets take every shard the fleet cap allows"
+    )
+
+
 @pytest.mark.parametrize("unavailable", ["unready", "offline"])
 def test_missing_16_gib_runner_falls_back_to_any_shard_and_records_it(constrained, unavailable):
     status = "offline" if unavailable == "offline" else "online"

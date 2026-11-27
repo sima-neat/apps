@@ -86,8 +86,8 @@ def select_fleet(runners, required, maximum, excluded_names=(), suites=()):
     safe = safe_candidates(runners, required, excluded_names)
     idle = [candidate for candidate in safe if not candidate[0]["busy"]]
     selected = idle[:maximum]
-    uncovered = sorted({tuple(s["runner_labels"]) for s in suites if s["runner_labels"]})
-    uncovered = [need for need in uncovered if not covers(selected, need)]
+    needs = sorted({tuple(s["runner_labels"]) for s in suites if s["runner_labels"]})
+    uncovered = [need for need in needs if not covers(selected, need)]
 
     def generality(candidate):
         # A selector that more runners match lets GitHub start the job on any of them.
@@ -111,12 +111,13 @@ def select_fleet(runners, required, maximum, excluded_names=(), suites=()):
             ),
         )
         if len(selected) == maximum:
-            spare = spare_shard(selected, suites, best)
+            spare = spare_shard(selected, needs, best, uncovered)
             if spare is None:
                 break
             selected.remove(spare)
         selected.append(best)
-        uncovered = [need for need in uncovered if not has_labels(best[1], need)]
+        # Each step covers more label sets than before, so the loop ends.
+        uncovered = [need for need in needs if not covers(selected, need)]
     # With every runner busy and no shard chosen to cover a label set, one queued shard
     # takes all suites.
     return [
@@ -137,17 +138,22 @@ def covers(candidates, need):
     return any(has_labels(labels, need) for _, labels in candidates)
 
 
-def spare_shard(selected, suites, incoming):
-    """The last shard whose removal leaves every covered set covered once incoming joins."""
-    needs = {tuple(s["runner_labels"]) for s in suites if s["runner_labels"]}
+def spare_shard(selected, needs, incoming, uncovered):
+    """The shard to drop so that incoming can join, or None when the swap covers less."""
     covered = [need for need in needs if covers(selected, need)]
+
+    def lost(candidate, joining):
+        rest = [c for c in selected if c is not candidate] + joining
+        return sum(not covers(rest, need) for need in covered)
+
     # Drop a shard the rest already covers first, so idle shards keep their label sets.
-    for joining in ([], [incoming]):
-        for candidate in reversed(selected):
-            rest = [c for c in selected if c is not candidate] + joining
-            if all(covers(rest, need) for need in covered):
-                return candidate
-    return None
+    for candidate in reversed(selected):
+        if not lost(candidate, []):
+            return candidate
+    # Otherwise swap only when incoming covers more sets than the drop loses.
+    gained = sum(has_labels(incoming[1], need) for need in uncovered)
+    candidate = min(reversed(selected), key=lambda c: lost(c, [incoming]))
+    return candidate if lost(candidate, [incoming]) < gained else None
 
 
 def unmet_reason(runners, required, excluded_names, need):
