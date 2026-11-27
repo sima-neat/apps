@@ -313,6 +313,17 @@ jobs:
           rm -rf _vulcan-test neat-apps neat-apps-* sima-neat-*-Linux-extras
           rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh
 
+      - name: Remove scratch left in /tmp by interrupted runs
+        run: |
+          shopt -s nullglob
+          leftovers=(/tmp/neat-apps-* /tmp/sima-neat-* /tmp/neat-sysroot-deps-* /tmp/core-scheduler-admission-*
+            /tmp/sima-cli-artifact-install.* /tmp/install-neat-from-a-branch.* /tmp/pytest-of-*)
+          df -h /tmp
+          if (( ${#leftovers[@]} > 0 )); then
+            rm -rf -- "${leftovers[@]}" || echo "::warning::Could not remove every leftover in /tmp"
+            df -h /tmp
+          fi
+
       - name: Download shard plan
         uses: actions/download-artifact@v7
         with:
