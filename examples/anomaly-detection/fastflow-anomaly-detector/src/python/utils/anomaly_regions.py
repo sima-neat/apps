@@ -45,31 +45,33 @@ def defect_regions(anomaly_map: np.ndarray, options: RegionOptions) -> list[Regi
             member.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
         x, y, width, height = (int(value) for value in stats[index, :4])
-        outline = [
-            (int(point[0][0]), int(point[0][1]))
-            for point in cv2.approxPolyDP(contours[0], 1.0, True)
-        ]
-        # A polygon needs three points; a dot or a line is sent as its box instead.
-        if len(outline) < 3:
-            outline = [(x, y), (x, y + height), (x + width, y + height), (x + width, y)]
         # Integer scaling, the same in both languages: map pixel m covers frame pixels from
         # m * width // map_width.
         x0, y0 = x * options.width // map_width, y * options.height // map_height
         x1 = (x + width) * options.width // map_width
         y1 = (y + height) * options.height // map_height
+        outline = cv2.approxPolyDP(contours[0], 1.0, True)
+        if len(outline) >= 3:
+            # Contour points are map pixels, so they scale to points inside the frame.
+            polygon = [
+                [
+                    int(point[0][0]) * options.width // map_width,
+                    int(point[0][1]) * options.height // map_height,
+                ]
+                for point in outline
+            ]
+        else:
+            # A polygon needs three points and an area; a dot or a line is sent as its box,
+            # kept at least one pixel wide and high and inside the frame.
+            left, top = min(x0, options.width - 2), min(y0, options.height - 2)
+            right = min(max(x1, left + 1), options.width - 1)
+            bottom = min(max(y1, top + 1), options.height - 1)
+            polygon = [[left, top], [left, bottom], [right, bottom], [right, top]]
         regions.append(
             Region(
                 bbox=(x0, y0, x1 - x0, y1 - y0),
                 score=float(anomaly_map[member].max()),
-                # A box that touches the map's right or bottom edge would scale to the frame
-                # size; Insight needs every point inside the frame.
-                polygon=[
-                    [
-                        min(px * options.width // map_width, options.width - 1),
-                        min(py * options.height // map_height, options.height - 1),
-                    ]
-                    for px, py in outline
-                ],
+                polygon=polygon,
             )
         )
     regions.sort(key=lambda region: region.score, reverse=True)

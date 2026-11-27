@@ -36,14 +36,6 @@ std::vector<Region> defect_regions(const cv::Mat& anomaly_map, const RegionOptio
     cv::findContours(member, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
     const int x = stat[cv::CC_STAT_LEFT];
     const int y = stat[cv::CC_STAT_TOP];
-    std::vector<cv::Point> outline;
-    cv::approxPolyDP(contours.front(), outline, 1.0, true);
-    // A polygon needs three points; a dot or a line is sent as its box instead.
-    if (outline.size() < 3) {
-      const int right = x + stat[cv::CC_STAT_WIDTH];
-      const int bottom = y + stat[cv::CC_STAT_HEIGHT];
-      outline = {{x, y}, {x, bottom}, {right, bottom}, {right, y}};
-    }
     // Integer scaling, the same in both languages: map pixel m covers frame pixels from
     // m * width / map_width.
     const int x0 = x * options.width / map_width;
@@ -53,12 +45,22 @@ std::vector<Region> defect_regions(const cv::Mat& anomaly_map, const RegionOptio
     Region region;
     region.bbox = {x0, y0, x1 - x0, y1 - y0};
     cv::minMaxLoc(anomaly_map, nullptr, &region.score, nullptr, nullptr, member);
-    // A box that touches the map's right or bottom edge would scale to the frame size; Insight
-    // needs every point inside the frame.
-    for (const cv::Point& point : outline) {
-      region.polygon.push_back(
-          {std::min(point.x * options.width / map_width, options.width - 1),
-           std::min(point.y * options.height / map_height, options.height - 1)});
+    std::vector<cv::Point> outline;
+    cv::approxPolyDP(contours.front(), outline, 1.0, true);
+    if (outline.size() >= 3) {
+      // Contour points are map pixels, so they scale to points inside the frame.
+      for (const cv::Point& point : outline) {
+        region.polygon.push_back(
+            {point.x * options.width / map_width, point.y * options.height / map_height});
+      }
+    } else {
+      // A polygon needs three points and an area; a dot or a line is sent as its box, kept at
+      // least one pixel wide and high and inside the frame.
+      const int left = std::min(x0, options.width - 2);
+      const int top = std::min(y0, options.height - 2);
+      const int right = std::min(std::max(x1, left + 1), options.width - 1);
+      const int bottom = std::min(std::max(y1, top + 1), options.height - 1);
+      region.polygon = {{left, top}, {left, bottom}, {right, bottom}, {right, top}};
     }
     regions.push_back(std::move(region));
   }

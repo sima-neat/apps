@@ -5,7 +5,7 @@
     python3 scripts/compile_model.py --model model.onnx --calib-images /data/my_product/train/good
 
 Converts an anomalib 2.6 export (ONNX opset 14) to bfloat16 and writes ``build/<name>/<name>_mpk.tar.gz``.
-Set ``model.path`` to it and ``model.normalize`` to mean 0 and stddev 1.
+Set ``model.path`` to it and ``model.id`` to ``anomalib``.
 
 The export's per-image LayerNorm and 5-D map average are patched first, because the Model
 Compiler mishandles both. Use photos of real good parts for ``--calib-images``, even though
@@ -134,7 +134,7 @@ def main() -> int:
     package = output_dir / f"{name}_mpk.tar.gz"
     if not package.exists():
         sys.exit("the Model Compiler wrote no package; see its log above")
-    print(f"\nPackage: {package}\nSet model.path to it and model.normalize to mean [0, 0, 0], stddev [1, 1, 1]")
+    print(f"\nPackage: {package}\nSet model.path to it and model.id to anomalib")
     return 0
 
 

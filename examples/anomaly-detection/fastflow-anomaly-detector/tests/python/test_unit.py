@@ -106,6 +106,12 @@ def test_a_box_on_the_map_edge_stays_inside_the_frame():
     )
     (region,) = anomaly_regions.defect_regions(anomaly_map, options)
     assert region.polygon == [[30, 45], [30, 47], [31, 47], [31, 45]]
+    # At 1:1 scaling the box still keeps an area.
+    same_size = anomaly_regions.RegionOptions(
+        width=16, height=16, threshold=0.5, min_region_px=1, max_regions=10
+    )
+    (region,) = anomaly_regions.defect_regions(anomaly_map, same_size)
+    assert region.polygon == [[14, 14], [14, 15], [15, 15], [15, 14]]
 
 
 def test_segments_carry_the_box_outline_and_score():

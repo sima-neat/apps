@@ -241,7 +241,7 @@ int run_app(const fs::path& config_path) {
             << " codec=" << config.string("input.codec") << " stream=" << stream.width << "x"
             << stream.height << "@" << stream.fps << " map=" << map_side << "x" << map_side
             << " insight=" << host << " video=" << video_port
-            << " metadata=" << config.integer("output.insight.metadata_port_base") << "\n";
+            << " metadata=" << config.integer("output.insight.metadata_port_base") << std::endl;
   const RegionCounts counts =
       send_regions(run, metadata_sender, map_side, region_options(config, stream),
                    config.integer("inference.frames"), stop);

@@ -133,8 +133,18 @@ bool test_a_box_on_the_map_edge_stays_inside_the_frame() {
       .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
   const auto regions = fastflow::defect_regions(map, edge_options);
   const std::vector<std::array<int, 2>> outline = {{30, 45}, {30, 47}, {31, 47}, {31, 45}};
-  return expect_true(regions.size() == 1U && regions[0].polygon == outline,
-                     "a box on the map edge stays inside the frame");
+  bool ok = expect_true(regions.size() == 1U && regions[0].polygon == outline,
+                        "a box on the map edge stays inside the frame");
+  // At 1:1 scaling the box still keeps an area.
+  const fastflow::RegionOptions same_size = {
+      .width = 16, .height = 16, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
+  const auto same_size_regions = fastflow::defect_regions(map, same_size);
+  const std::vector<std::array<int, 2>> same_size_outline = {
+      {14, 14}, {14, 15}, {15, 15}, {15, 14}};
+  ok &= expect_true(same_size_regions.size() == 1U &&
+                        same_size_regions[0].polygon == same_size_outline,
+                    "a box on the map edge keeps an area at 1:1 scaling");
+  return ok;
 }
 
 bool test_segments_carry_the_box_outline_and_score() {
