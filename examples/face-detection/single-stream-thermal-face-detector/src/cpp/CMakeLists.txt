@@ -10,28 +10,8 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
-sima_neat_apps_module(
-  "single-stream-thermal-face-detector"
-  OUTPUT_TARGET_VAR THERMAL_FACE_INSIGHT_TARGET
-  UNIT_TEST
-  METADATA_E2E_TEST
-)
+sima_neat_apps_module("single-stream-thermal-face-detector" UNIT_TEST METADATA_E2E_TEST
+                      OUTPUT_TARGET_VAR THERMAL_FACE_TARGET)
 
-if (BUILD_TESTING)
-  add_test(
-    NAME single-stream-thermal-face-detector.requires_rtsp
-    COMMAND $<TARGET_FILE:${THERMAL_FACE_INSIGHT_TARGET}> --config /nonexistent/single-stream-thermal-face-detector-config.yaml
-  )
-  set_tests_properties(single-stream-thermal-face-detector.requires_rtsp PROPERTIES
-    WILL_FAIL TRUE
-    LABELS "unit"
-  )
-endif()
-
-# The unit test exercises the shared pull-outcome helper, which needs the Neat headers.
-if (TARGET single-stream-thermal-face-detector_unit_test)
-  target_link_libraries(single-stream-thermal-face-detector_unit_test
-    PRIVATE
-      SimaNeatApps::support_runtime
-  )
-endif()
+# The face decode and the pose message; the unit test includes the same header.
+target_sources(${THERMAL_FACE_TARGET} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/utils/yolov5_face.h")

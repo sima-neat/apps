@@ -44,7 +44,6 @@ PENDING_EXAMPLES = {
     "pcb-defect-detector",
     "pcie-high-density-multi-stream-object-detector",
     "single-stream-instance-segmenter",
-    "single-stream-thermal-face-detector",
     "ssd-mobilenet-object-detector",
 }
 

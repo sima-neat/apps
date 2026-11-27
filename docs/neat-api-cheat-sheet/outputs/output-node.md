@@ -45,8 +45,7 @@ C++
 
 ```cpp
 simaai::neat::Graph detections_graph("detections");
-detections_graph.add(
-    simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
+detections_graph.add(simaai::neat::nodes::Output("detections"));
 runtime.graph.connect(model_graph, detections_graph);
 
 simaai::neat::Sample sample;
@@ -58,9 +57,7 @@ Python
 
 ```python
 detections_graph = pyneat.Graph("detections")
-detections_graph.add(
-    pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4))
-)
+detections_graph.add(pyneat.nodes.output("detections"))
 graph.connect(model_graph, detections_graph)
 
 sample = runtime.run.pull("detections", 20000)
@@ -75,7 +72,7 @@ Complete flow: [single-stream-thermal-face-detector](../../../examples/face-dete
 | Form | C++ | Python | What it does |
 |---|---|---|---|
 | Unnamed | `nodes::Output(opt)` | `pyneat.nodes.output(opt)` | Output read with `pull()` without a name. Options default to `OutputOptions{}` |
-| Named | `nodes::Output("name", opt)` | `pyneat.nodes.output("name", opt)` | Output read with `pull("name", ...)`. Other fragments can connect to it by name, see the Links page |
+| Named | `nodes::Output("name", opt)` | `pyneat.nodes.output("name", opt)` | Output read with `pull("name", ...)`. Other fragments can connect to it by name, see the Links page. `opt` is optional and defaults to `OutputOptions{}` |
 
 `OutputOptions` presets. Pick one and change a field only when the preset is
 close but not right.
@@ -127,7 +124,7 @@ close but not right.
 
 ## Used in
 
-- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/): one named output, `EveryFrame(4)`
+- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/): one named output, default `OutputOptions`
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `Latest()` with `CombinePolicy::ByFrame`
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/): two named outputs joined with `graphs::Combine`
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/): `drop = true` on a frame output

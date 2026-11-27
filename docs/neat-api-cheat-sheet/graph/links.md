@@ -79,7 +79,7 @@ graph.connect(branch, model_graph, live_link_options)
 graph.connect(model_graph, detections_graph)
 ```
 
-Complete flow: [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/)
+Complete flow, with the same policy on the encoded video and the decoded frames of each stream instead of a `Branch`: [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/)
 
 ## Options
 
@@ -137,7 +137,6 @@ None. Python has every field and both policy values.
 
 ## Used in
 
-- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/)
 - [single-stream-object-detector](../../../examples/object-detection/single-stream-object-detector/)
 - [multi-stream-pose-estimator](../../../examples/pose-estimation/multi-stream-pose-estimator/) (`stream_id`, `max_inflight_per_stream`, `max_inflight_total`)
 - [multi-stream-blazepose3d](../../../examples/pose-estimation/multi-stream-blazepose3d/)

@@ -190,7 +190,6 @@ does.
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/) (NV12 model input with `max_width`, encoded input)
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) (`max_bytes`, `pool_max_buffers`, `block`)
 - [mipi-multi-model](../../../examples/benchmarking/mipi-multi-model/) (`memory_policy = Ev74`, Python only)
-- [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/) (named endpoints)
 
 ## Source
 

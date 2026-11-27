@@ -281,10 +281,10 @@ change them.
   (Python),
   [Multi-Stream BlazePose 3D](../../../examples/pose-estimation/multi-stream-blazepose3d/)
   (Python),
-  [RF-DETR Detection and Segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/)
-- A `Model` passed to `Graph::add` or `connect`:
-  [Face Recognizer](../../../examples/face-recognition/face-recognizer/),
+  [RF-DETR Detection and Segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/),
   [Single-Stream Thermal Face Detector](../../../examples/face-detection/single-stream-thermal-face-detector/)
+- A `Model` passed to `Graph::add` or `connect`:
+  [Face Recognizer](../../../examples/face-recognition/face-recognizer/)
 - `RouteOptions` passed to `build`:
   [Depth Estimator](../../../examples/depth-estimation/depth-estimator/),
   [PCB Defect Detector](../../../examples/object-detection/pcb-defect-detector/),
