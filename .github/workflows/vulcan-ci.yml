@@ -183,7 +183,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install test dependencies
-        run: python3 -m pip install pytest PyYAML
+        run: python3 -m pip install pytest PyYAML numpy "opencv-python-headless<4.12"
 
       - name: Run repository contract tests
         run: python3 -m pytest -c tests/pytest.ini --rootdir=. -v tests/scripts

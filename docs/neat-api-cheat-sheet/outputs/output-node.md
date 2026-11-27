@@ -93,7 +93,7 @@ close but not right.
 | Max buffers | `max_buffers` | `max_buffers` | `4` | Most samples that can wait for `pull()`. `0` means no limit. A negative value counts as `0` | Raise it when the pull loop pauses now and then, for example to write a file, and frames must not be lost. Use `1` for the lowest latency |
 | Drop | `drop` | `drop` | `false` | What happens when `max_buffers` samples are waiting. `false`: the graph waits until the application pulls. `true`: the oldest waiting sample is thrown away | Set `true` for a live camera or RTSP stream. With `false`, an application that is slower than the stream sees the delay to live video grow until the stream stalls |
 | Sync | `sync` | `sync` | `false` | `true` holds each sample until the pipeline clock reaches its PTS. The pipeline clock is the running time Core uses to schedule media | A video file that should play at its recorded speed. Leave it `false` for live sources, which already arrive at video speed |
-| Combine policy | `combine_policy` | `combine_policy` | `CombinePolicy::None` (`pyneat.CombinePolicy.None_`) | How a named output merges samples when two or more fragments connect to it: `ByFrame`, `ByPts` or `RoundRobin`. The values are explained on the Branch and Combine page | Several producers connect to one output without realtime links, see Pitfalls. [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) sets it here. Most examples use `graphs::Combine` instead |
+| Combine policy | `combine_policy` | `combine_policy` | `CombinePolicy::None` (`pyneat.CombinePolicy.None_`) | How a named output merges samples when two or more fragments connect to it: `ByFrame`, `ByPts` or `RoundRobin`. The values are explained on the Branch and Combine page | Several producers connect to one output without realtime links, see Pitfalls. The examples use `graphs::Combine` instead |
 
 ## Language differences
 
@@ -128,10 +128,10 @@ close but not right.
 ## Used in
 
 - [single-stream-thermal-face-detector](../../../examples/face-detection/single-stream-thermal-face-detector/): one named output, `EveryFrame(4)`
-- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `Latest()` with `CombinePolicy::ByFrame`
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/): two named outputs joined with `graphs::Combine`
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/): one named output per stream, and `Latest()` on an output of decoded frames
 - [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `Latest()` on decoded frames the application pulls
+- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `Latest()` on RTSP model features the host scores
 
 ## Source
 

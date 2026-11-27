@@ -133,6 +133,12 @@ When the user names a model, look for a compiled package in the
   some outputs, such as the RF-DETR transformer's `Owned` results. In Python,
   `to_numpy(copy=False)` reads a CPU result in place. `copy_payload_bytes()` makes another
   copy.
+- **Keep a result, copy it:** a `to_numpy(copy=False)` view holds the output's zero-copy loan
+  while any array sharing its memory lives, and `np.ascontiguousarray` of a matching array is
+  the same memory. When an application keeps results, such as features collected over many
+  images, read each with `to_numpy(copy=True)`, because the run stops delivering once its
+  loan credits are used: `zero-copy output loan credits are exhausted`, after six
+  `Model.run` results with the default options.
 - `Tensor.from_numpy` rejects a read-only array, such as a NumPy view over the bytes from
   `copy_payload_bytes()`, with `BufferError: Cannot export readonly array`. Pass a writable
   array, for example a `.copy()` of only the plane you need.

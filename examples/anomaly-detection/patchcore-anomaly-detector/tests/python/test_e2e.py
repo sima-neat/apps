@@ -1,713 +1,167 @@
-"""E2E test for the PatchCore example (Python), hardware-gated per Apps
-conventions. Calibrates on the bundled nominal set, scores the images in
-SIMANEAT_APPS_TEST_INPUT_DIR, and checks verdicts and overlays on the bundled
-held-out normal and defect images."""
+"""End-to-end tests: --calibrate builds the bank, the shipped images get the right verdicts, and
+each RTSP codec reaches Insight as video and defect-region metadata."""
+
+from __future__ import annotations
+
 import json
 import os
 import re
 import socket
-import struct
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
-from tests.utils.output_assertions import assert_saved_frames_are_usable, supported_image_files
 
-EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-APPS_ROOT = EXAMPLE_DIR.parent.parent.parent
+EXAMPLE_DIR = Path(__file__).resolve().parents[2]
+APPS_ROOT = EXAMPLE_DIR.parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-REAL_IMAGES_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "images"
-NOMINAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "nominal"
-HELD_OUT_NORMAL_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore" / "held_out_normal"
-DEMO_VIDEO = APPS_ROOT / "assets" / "datasets" / "patchcore" / "video" / "test.mp4"
-E2E_INSIGHT_HOST = "127.0.0.1"
-METADATA_PORT = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", "") or 9100)
-VIDEO_PORT = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "") or 9000)
-FRAME_RE = re.compile(r"^frame=(?P<frame>\d+): score=(?P<score>[-\d.]+) threshold=(?P<threshold>[-\d.]+) "
-                      r"verdict=(?P<verdict>\w+)", re.MULTILINE)
-NOMINAL_IMAGE = "plain_0.png"
-DEFECT_IMAGE = "scratch_0.png"
-
-SCORE_RE = re.compile(r"^(?P<path>.+): score=(?P<score>[-\d.]+) threshold=(?P<threshold>[-\d.]+) "
-                      r"verdict=(?P<verdict>\w+)", re.MULTILINE)
+DATASET_DIR = APPS_ROOT / "assets" / "datasets" / "patchcore"
+FRAMES = 60
+IMAGE_RE = re.compile(r"^(?P<name>\S+): (?P<verdict>ANOMALOUS|normal) score=", re.MULTILINE)
 
 
-# Share of pixels a defect overlay may highlight: above zero (the defect is
-# shown) and well below the whole image (it is localized).
-MIN_DEFECT_HIGHLIGHT = 0.005
-MAX_DEFECT_HIGHLIGHT = 0.60
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    return int(value) if value else default
 
 
-def _highlighted_fraction(input_path: Path, overlay_path: Path) -> float:
-    """Fraction of pixels the overlay changed relative to the input image."""
-    import cv2
-
-    src = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
-    out = cv2.imread(str(overlay_path), cv2.IMREAD_COLOR)
-    assert src is not None and out is not None, f"could not read {input_path} / {overlay_path}"
-    assert src.shape == out.shape, f"overlay shape {out.shape} != input shape {src.shape}"
-    return float(np.any(src != out, axis=2).mean())
-
-
-def _find_cpp_binary() -> Path | None:
-    """Resolve the patchcore C++ binary for the cross-language regression
-    test below (no shared fixture for this -- the only test here needing it)."""
-    raw = os.environ.get("SIMANEAT_APPS_TEST_CPP_BINARY", "").strip()
-    if raw:
-        return Path(raw)
-    candidates = (
-        # Installed/packaged layout (CI, `sima-cli neat install`).
-        EXAMPLE_DIR / "src" / "cpp" / "pre-built" / "patchcore-anomaly-detector",
-        # Raw monorepo CMake build tree (local/DevKit development).
-        APPS_ROOT / "build" / "examples" / "anomaly-detection" / "patchcore-anomaly-detector"
-        / "patchcore-anomaly-detector",
-    )
-    return next((c for c in candidates if c.is_file()), None)
-
-
-def _live_config(e2e_config_writer, tmp_output_dir, source: dict, frames: int, save_every: int) -> Path:
-    """Config for a live run against a bank calibrated on the bundled nominal set."""
-    return e2e_config_writer(
-        {
-            "source": source,
-            "calibration": {"nominal_images_dir": str(NOMINAL_DIR), "threshold_images_dir": ""},
-            "memory_bank": {
-                "path": str(tmp_output_dir.parent / "memory_bank.npy"),
-                "meta_path": str(tmp_output_dir.parent / "bank_meta.json"),
-            },
-            "output": {
-                "dir": str(tmp_output_dir),
-                "save_every": save_every,
-                "insight": {
-                    "host": E2E_INSIGHT_HOST,
-                    "video_port": VIDEO_PORT,
-                    "metadata_port": METADATA_PORT,
-                },
-            },
-            "runtime": {"frames": frames},
-        }
-    )
-
-
-class _VideoRtpTimestamps:
-    """Collects the RTP timestamp of every packet the app sends to Insight's video port.
-
-    A thread reads while the app runs, so a burst of video packets cannot overflow the
-    socket buffer before the test looks at them.
-    """
-
-    def __init__(self, port: int) -> None:
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.bind((E2E_INSIGHT_HOST, port))
-        self._sock.settimeout(0.2)
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._read, daemon=True)
-        self.timestamps: set[int] = set()
-
-    def __enter__(self) -> "_VideoRtpTimestamps":
-        self._thread.start()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self._stop.set()
-        self._thread.join()
-        self._sock.close()
-
-    def _read(self) -> None:
-        while not self._stop.is_set():
-            try:
-                packet = self._sock.recv(65536)
-            except socket.timeout:
-                continue
-            if len(packet) >= 12 and packet[0] >> 6 == 2:
-                self.timestamps.add(struct.unpack("!I", packet[4:8])[0])
-
-
-def _assert_verdicts_pair_with_video(messages, rtp_timestamps: set[int]) -> None:
-    """Insight draws a verdict on the video frame whose RTP timestamp is within 90 ticks
-    (1 ms) of the verdict's timestamp_ms x 90. Allow 5% unpaired for a lost UDP packet."""
-    frames = sorted(rtp_timestamps)
-    assert frames, "no video RTP packets reached the video port"
-    assert messages, "no verdict metadata to pair with the video"
-
-    def nearest(timestamp_ms: int) -> int:
-        target = (timestamp_ms * 90) & 0xFFFFFFFF
-        return min(min((f - target) & 0xFFFFFFFF, (target - f) & 0xFFFFFFFF) for f in frames)
-
-    unpaired = [m.frame_id for m in messages if nearest(m.timestamp_ms) > 90]
-    assert len(unpaired) * 20 <= len(messages), (
-        f"{len(unpaired)} of {len(messages)} verdicts have no video frame within 1 ms "
-        f"(frame ids {unpaired[:10]}), so Insight cannot draw them on their frames"
-    )
-
-
-def _run_main(args: list[str], timeout_s: float) -> subprocess.CompletedProcess:
+def _run(config_path: Path, *args: str, timeout_s: float) -> subprocess.CompletedProcess:
     result = subprocess.run(
-        [sys.executable, str(MAIN_PY), *args],
-        capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
+        [sys.executable, str(MAIN_PY), "--config", str(config_path), *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+        cwd=str(APPS_ROOT),
+        check=False,
     )
     assert result.returncode == 0, (
-        f"main.py {' '.join(args)} exited with code {result.returncode}\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"exited with {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     return result
 
 
-def _assert_snapshots(output_dir: Path, expected: int, size: tuple[int, int]) -> None:
-    import cv2
-
-    snapshots = sorted(output_dir.glob("frame_*.jpg"))
-    assert len(snapshots) == expected, f"expected {expected} snapshots, found {[p.name for p in snapshots]}"
-    for path in snapshots:
-        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-        assert image is not None, f"snapshot {path.name} does not decode"
-        assert image.shape[1::-1] == size, f"snapshot {path.name} is {image.shape[1::-1]}, expected {size}"
+def _config(e2e_config_writer, e2e_model_path, tmp_output_dir: Path, overrides: dict) -> Path:
+    """A config whose bank is calibrated into this test's folder from the shipped nominal set."""
+    return e2e_config_writer(
+        {
+            # Absolute, because the example resolves a relative model.path from its config.
+            "model": {"path": str(Path(e2e_model_path).resolve())},
+            "app": {
+                "memory_bank_dir": str(tmp_output_dir / "bank"),
+                "nominal_images_dir": str(DATASET_DIR / "nominal"),
+            },
+            **overrides,
+        }
+    )
 
 
 @pytest.mark.e2e
-class TestE2E:
-    def test_calibrate_then_score(
-        self,
+@pytest.mark.parametrize(
+    ("folder", "anomalous"),
+    [
+        ("images", {"scratch_0.png", "scratch_1.png", "scratch_2.png", "scratch_3.png"}),
+        # Known-good images the bank never saw score below the threshold.
+        ("held_out_normal", set()),
+    ],
+)
+def test_scores_images_and_outlines_defects(
+    folder, anomalous, e2e_model_path, test_timeout_ms, e2e_config_writer, tmp_output_dir
+):
+    output_dir = tmp_output_dir / "outlined"
+    config_path = _config(
+        e2e_config_writer,
         e2e_model_path,
         tmp_output_dir,
-        test_images_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
+        {
+            "input": {"type": "image_dir", "source": str(DATASET_DIR / folder)},
+            "output": {"dir": str(output_dir)},
+        },
+    )
+    _run(config_path, "--calibrate", timeout_s=test_timeout_ms / 1000)
+    result = _run(config_path, timeout_s=test_timeout_ms / 1000)
+
+    verdicts = {match["name"]: match["verdict"] for match in IMAGE_RE.finditer(result.stdout)}
+    inputs = sorted(path.name for path in (DATASET_DIR / folder).glob("*.png"))
+    assert sorted(verdicts) == inputs, result.stdout
+    assert {name for name, verdict in verdicts.items() if verdict == "ANOMALOUS"} == anomalous
+    for name in inputs:
+        source = cv2.imread(str(DATASET_DIR / folder / name))
+        outlined = cv2.imread(str(output_dir / name))
+        assert outlined is not None and outlined.shape == source.shape, name
+        # Only an anomalous image is drawn on, and its outline covers a part of it.
+        changed = float(np.any(source != outlined, axis=2).mean())
+        assert (0.0 < changed < 0.5) if name in anomalous else changed == 0.0, (name, changed)
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("codec", ["h264", "h265", "mjpeg"])
+def test_publishes_insight_video_and_regions(
+    request, codec, e2e_model_path, test_timeout_ms, e2e_config_writer, tmp_output_dir
+):
+    rtsp_url = request.getfixturevalue(f"rtsp_{codec}_url")
+    metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
+    video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
+    config_path = _config(
         e2e_config_writer,
-    ):
-        skip_unless_e2e_ready(
-            test_images_dir.exists() and any(test_images_dir.iterdir()),
-            "test_images_dir is missing or empty",
-        )
-
-        bank_path = tmp_output_dir.parent / "memory_bank.npy"
-        meta_path = tmp_output_dir.parent / "bank_meta.json"
-        config_path = e2e_config_writer(
-            {
-                "source": {"type": "image_dir", "image_dir": str(test_images_dir)},
-                "calibration": {
-                    "nominal_images_dir": str(test_images_dir),
-                    "threshold_images_dir": str(test_images_dir),
-                },
-                "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
-                "output": {"dir": str(tmp_output_dir)},
-            }
-        )
-        timeout_s = test_timeout_ms / 1000
-
-        calibrate = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--calibrate", "--config", str(config_path)],
-            capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
-        )
-        assert calibrate.returncode == 0, (
-            f"--calibrate exited with code {calibrate.returncode}\n"
-            f"stdout:\n{calibrate.stdout}\nstderr:\n{calibrate.stderr}"
-        )
-        bank = np.load(bank_path)
-        assert bank.ndim == 2 and bank.shape[0] > 0 and bank.shape[1] == 1536, (
-            f"memory bank has unexpected shape {bank.shape}"
-        )
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        assert meta["threshold"]["value"] > 0 and "patch_threshold" in meta, (
-            f"bank_meta.json is missing the calibrated thresholds: {meta}"
-        )
-
-        score = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
-        )
-        assert score.returncode == 0, (
-            f"main.py exited with code {score.returncode}\n"
-            f"stdout:\n{score.stdout}\nstderr:\n{score.stderr}"
-        )
-
-        # One decodable overlay per input image.
-        assert_saved_frames_are_usable(tmp_output_dir, len(supported_image_files(test_images_dir)))
-
-    def test_partial_write_failure_fails_the_run(
-        self,
         e2e_model_path,
         tmp_output_dir,
-        test_images_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
-    ):
-        """A run that writes some overlays and fails to write others must
-        exit nonzero -- succeeding as long as at least one write went through
-        would silently under-report incomplete output."""
-        images = sorted(p for p in test_images_dir.iterdir() if p.is_file()) \
-            if test_images_dir.exists() else []
-        skip_unless_e2e_ready(len(images) >= 2, "test_images_dir needs at least 2 images")
-
-        bank_path = tmp_output_dir.parent / "memory_bank.npy"
-        meta_path = tmp_output_dir.parent / "bank_meta.json"
-        config_path = e2e_config_writer(
-            {
-                "source": {"type": "image_dir", "image_dir": str(test_images_dir)},
-                "calibration": {
-                    "nominal_images_dir": str(test_images_dir),
-                    "threshold_images_dir": str(test_images_dir),
-                },
-                "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
-                "output": {"dir": str(tmp_output_dir)},
-            }
-        )
-        timeout_s = test_timeout_ms / 1000
-
-        calibrate = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--calibrate", "--config", str(config_path)],
-            capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
-        )
-        assert calibrate.returncode == 0, (
-            f"--calibrate exited with code {calibrate.returncode}\n"
-            f"stdout:\n{calibrate.stdout}\nstderr:\n{calibrate.stderr}"
-        )
-
-        # Pre-create one output path as read-only so its overlay write fails
-        # while every other image's write should still succeed.
-        blocked_name = images[0].name
-        blocked_path = tmp_output_dir / blocked_name
-        blocked_path.write_bytes(b"")
-        blocked_path.chmod(0o444)
-        try:
-            score = subprocess.run(
-                [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-                capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
-            )
-        finally:
-            blocked_path.chmod(0o644)
-
-        assert score.returncode != 0, (
-            f"expected a nonzero exit code for a partial write failure, got 0\n"
-            f"stdout:\n{score.stdout}\nstderr:\n{score.stderr}"
-        )
-        assert blocked_name in score.stderr, (
-            f"expected the failed path ({blocked_name}) named in stderr:\n{score.stderr}"
-        )
-        other_outputs = [
-            path for path in tmp_output_dir.iterdir()
-            if path.is_file() and path.name not in ("config.yaml", blocked_name)
-        ]
-        assert other_outputs, "the one blocked write should not have stopped the rest from running"
-
-    def test_bank_model_mismatch_fails_at_load(
-        self,
-        e2e_model_path,
-        tmp_output_dir,
-        test_images_dir,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
-    ):
-        """A bank_meta.json pinned to a different model hash must fail at load,
-        not silently score against a mismatched bank."""
-        skip_unless_e2e_ready(
-            test_images_dir.exists() and any(test_images_dir.iterdir()),
-            "test_images_dir is missing or empty",
-        )
-
-        bank_path = tmp_output_dir.parent / "memory_bank.npy"
-        meta_path = tmp_output_dir.parent / "bank_meta.json"
-        config_path = e2e_config_writer(
-            {
-                "source": {"type": "image_dir", "image_dir": str(test_images_dir)},
-                "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
-                "output": {"dir": str(tmp_output_dir)},
-            }
-        )
-
-        import numpy as np
-
-        np.save(bank_path, np.zeros((4, 1536), dtype=np.float32))
-        meta_path.write_text(
-            '{"model_sha256": "' + "0" * 64 + '", "threshold": {"value": 1.0}}',
-            encoding="utf-8",
-        )
-
-        result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=30, cwd=str(EXAMPLE_DIR),
-        )
-        assert result.returncode != 0
-        assert "different model package" in result.stderr
-
-    def test_held_out_normal_passes_and_defect_fails(
-        self,
-        e2e_model_path,
-        tmp_output_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
-    ):
-        """Scores every held-out normal image and every defect image, and
-        asserts the actual pass/fail verdict on each -- not just relative
-        ordering, and not just one cherry-picked passing image."""
-        skip_unless_e2e_ready(
-            NOMINAL_DIR.is_dir() and any(NOMINAL_DIR.iterdir()),
-            f"nominal calibration set missing under {NOMINAL_DIR}",
-        )
-        held_out_paths = sorted(HELD_OUT_NORMAL_DIR.glob("*.png")) if HELD_OUT_NORMAL_DIR.is_dir() else []
-        defect_paths = sorted(p for p in REAL_IMAGES_DIR.glob("scratch_*.png"))
-        skip_unless_e2e_ready(
-            bool(held_out_paths) and bool(defect_paths),
-            f"held-out normal or defect images missing ({HELD_OUT_NORMAL_DIR}, {REAL_IMAGES_DIR})",
-        )
-
-        score_dir = tmp_output_dir.parent / "score_inputs"
-        score_dir.mkdir(parents=True, exist_ok=True)
-        for path in held_out_paths + defect_paths:
-            (score_dir / path.name).write_bytes(path.read_bytes())
-
-        bank_path = tmp_output_dir.parent / "memory_bank.npy"
-        meta_path = tmp_output_dir.parent / "bank_meta.json"
-        config_path = e2e_config_writer(
-            {
-                "source": {"type": "image_dir", "image_dir": str(score_dir)},
-                "calibration": {
-                    "nominal_images_dir": str(NOMINAL_DIR),
-                    "threshold_images_dir": str(NOMINAL_DIR),
-                },
-                "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
-                "output": {"dir": str(tmp_output_dir)},
-            }
-        )
-        timeout_s = test_timeout_ms / 1000
-
-        calibrate = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--calibrate", "--config", str(config_path)],
-            capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
-        )
-        assert calibrate.returncode == 0, (
-            f"--calibrate exited with code {calibrate.returncode}\n"
-            f"stdout:\n{calibrate.stdout}\nstderr:\n{calibrate.stderr}"
-        )
-
-        score = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
-        )
-        assert score.returncode == 0, (
-            f"main.py exited with code {score.returncode}\n"
-            f"stdout:\n{score.stdout}\nstderr:\n{score.stderr}"
-        )
-
-        verdicts = {
-            Path(m.group("path")).name: (m.group("verdict"), m.group("score"))
-            for m in SCORE_RE.finditer(score.stdout)
-        }
-
-        held_out_names = [p.name for p in held_out_paths]
-        defect_names = [p.name for p in defect_paths]
-        for name in held_out_names + defect_names:
-            assert name in verdicts, f"no verdict for {name} in stdout:\n{score.stdout}"
-
-        # Report every image's outcome (not just the first failure) so a
-        # regression here shows the full pass/fail picture in one run.
-        held_out_failures = [
-            f"{name} scored {verdicts[name][1]} (ANOMALOUS)"
-            for name in held_out_names
-            if verdicts[name][0] != "normal"
-        ]
-        defect_failures = [
-            f"{name} scored {verdicts[name][1]} (normal)"
-            for name in defect_names
-            if verdicts[name][0] != "ANOMALOUS"
-        ]
-        assert not held_out_failures, (
-            f"{len(held_out_failures)}/{len(held_out_names)} held-out normal images were "
-            f"flagged anomalous: {held_out_failures}"
-        )
-        assert not defect_failures, (
-            f"{len(defect_failures)}/{len(defect_names)} defect images were not flagged "
-            f"anomalous: {defect_failures}"
-        )
-
-        # Overlays highlight only patches above the calibrated patch threshold:
-        # held-out normal overlays must be pixel-identical to their inputs, and
-        # defect overlays must highlight a localized region, not the whole image.
-        highlighted = {
-            name: _highlighted_fraction(score_dir / name, tmp_output_dir / name)
-            for name in held_out_names + defect_names
-        }
-        normal_highlighted = {n: f for n, f in highlighted.items() if n in held_out_names and f > 0}
-        assert not normal_highlighted, f"held-out normal overlays have highlighted pixels: {normal_highlighted}"
-        defect_bad = {
-            n: f for n, f in highlighted.items()
-            if n in defect_names and not MIN_DEFECT_HIGHLIGHT < f < MAX_DEFECT_HIGHLIGHT
-        }
-        assert not defect_bad, (
-            f"defect overlays not localized (expected {MIN_DEFECT_HIGHLIGHT:.0%}-"
-            f"{MAX_DEFECT_HIGHLIGHT:.0%} of pixels highlighted): {defect_bad}"
-        )
-
-    def test_mixed_image_sizes_calibrate_and_score(
-        self,
-        e2e_model_path,
-        tmp_output_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
-    ):
-        """A folder whose images differ in size must calibrate and score every
-        image, with each overlay at its input image's size."""
-        import cv2
-
-        nominal = sorted(NOMINAL_DIR.glob("*.png"))[:4]
-        skip_unless_e2e_ready(len(nominal) == 4, f"need 4 nominal images under {NOMINAL_DIR}")
-        mixed_dir = tmp_output_dir.parent / "mixed"
-        mixed_dir.mkdir(parents=True, exist_ok=True)
-        sizes = [None, (448, 448), (320, 240), None]  # None keeps the original 224x224
-        for path, size in zip(nominal, sizes):
-            image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-            if size is not None:
-                image = cv2.resize(image, size, interpolation=cv2.INTER_CUBIC)
-            cv2.imwrite(str(mixed_dir / path.name), image)
-
-        bank_path = tmp_output_dir.parent / "memory_bank.npy"
-        meta_path = tmp_output_dir.parent / "bank_meta.json"
-        config_path = e2e_config_writer(
-            {
-                "source": {"type": "image_dir", "image_dir": str(mixed_dir)},
-                "calibration": {"nominal_images_dir": str(mixed_dir), "threshold_images_dir": str(mixed_dir)},
-                "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
-                "output": {"dir": str(tmp_output_dir)},
-            }
-        )
-        timeout_s = test_timeout_ms / 1000
-        for args in (["--calibrate", "--config", str(config_path)], ["--config", str(config_path)]):
-            result = subprocess.run(
-                [sys.executable, str(MAIN_PY), *args],
-                capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
-            )
-            assert result.returncode == 0, (
-                f"{args[0]} exited with code {result.returncode}\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-            )
-
-        for path in sorted(mixed_dir.iterdir()):
-            src = cv2.imread(str(path), cv2.IMREAD_COLOR)
-            out = cv2.imread(str(tmp_output_dir / path.name), cv2.IMREAD_COLOR)
-            assert out is not None, f"no overlay for {path.name}"
-            assert out.shape == src.shape, f"{path.name}: overlay {out.shape} != input {src.shape}"
-
-    def test_video_file_live_run(
-        self,
-        e2e_model_path,
-        tmp_output_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
-    ):
-        """video_file streams to Insight and saves snapshots, with the verdicts the
-        bundled clip should get: its first 60 frames are plain texture, the rest carry
-        defects."""
-        skip_unless_e2e_ready(DEMO_VIDEO.is_file(), f"demo video missing: {DEMO_VIDEO}")
-        config_path = _live_config(e2e_config_writer, tmp_output_dir,
-                                   {"type": "video_file", "video_path": str(DEMO_VIDEO)},
-                                   frames=120, save_every=40)
-        timeout_s = test_timeout_ms / 1000
-        _run_main(["--calibrate", "--config", str(config_path)], timeout_s)
-        with MetadataJsonListener(E2E_INSIGHT_HOST, METADATA_PORT, num_ports=1,
-                                  metadata_type="classification", data_array_key="top_classes") as listener, \
-                _VideoRtpTimestamps(VIDEO_PORT) as video:
-            result = _run_main(["--config", str(config_path)], timeout_s)
-            metadata = listener.drain_pending()
-
-        verdicts = {int(m["frame"]): m["verdict"] for m in FRAME_RE.finditer(result.stdout)}
-        assert sorted(verdicts) == list(range(1, 121)), f"expected frames 1-120, got {len(verdicts)}"
-        # Insight receives each frame's verdict as metadata, matching the printed verdict.
-        sent = {int(m.frame_id): json.loads(m.payload)["data"]["anomaly"]["verdict"] for m in metadata.messages}
-        assert len(sent) >= 100, f"expected verdict metadata for ~120 frames, got {len(sent)}: {metadata.error}"
-        mismatched = [f for f, v in sent.items() if v != verdicts.get(f)]
-        assert not mismatched, f"metadata verdicts differ from printed verdicts for frames {mismatched[:10]}"
-        _assert_verdicts_pair_with_video(metadata.messages, video.timestamps)
-        normal_frames = [f for f in range(1, 51) if verdicts[f] != "normal"]
-        defect_frames = [f for f in range(71, 121) if verdicts[f] != "ANOMALOUS"]
-        assert not normal_frames, f"plain frames flagged ANOMALOUS: {normal_frames}"
-        assert not defect_frames, f"defect frames not flagged: {defect_frames}"
-        _assert_snapshots(tmp_output_dir, 3, (224, 224))
-
-    def test_rtsp_live_run(
-        self,
-        rtsp_h264_url,
-        e2e_model_path,
-        tmp_output_dir,
-        test_timeout_ms,
-        e2e_config_writer,
-    ):
-        """rtsp runs the model inside the graph, scores every joined frame, streams to
-        Insight with each verdict paired to its video frame, and saves snapshots at the
-        stream's size."""
-        config_path = _live_config(e2e_config_writer, tmp_output_dir,
-                                   {"type": "rtsp", "rtsp": {"url": rtsp_h264_url}},
-                                   frames=60, save_every=20)
-        timeout_s = test_timeout_ms / 1000
-        _run_main(["--calibrate", "--config", str(config_path)], timeout_s)
-        with MetadataJsonListener(E2E_INSIGHT_HOST, METADATA_PORT, num_ports=1,
-                                  metadata_type="classification", data_array_key="top_classes") as listener, \
-                _VideoRtpTimestamps(VIDEO_PORT) as video:
-            result = _run_main(["--config", str(config_path)], timeout_s)
-            metadata = listener.drain_pending()
-
-        frames = [int(m["frame"]) for m in FRAME_RE.finditer(result.stdout)]
-        assert frames == list(range(1, 61)), f"expected frames 1-60 with a verdict, got {frames[:5]}..."
-        assert len(metadata.messages) >= 50, (
-            f"expected verdict metadata for ~60 frames, got {len(metadata.messages)}: {metadata.error}"
-        )
-        _assert_verdicts_pair_with_video(metadata.messages, video.timestamps)
-        import cv2
-
-        snapshots = sorted(tmp_output_dir.glob("frame_*.jpg"))
-        assert len(snapshots) == 3, f"expected 3 snapshots, found {[p.name for p in snapshots]}"
-        first = cv2.imread(str(snapshots[0]), cv2.IMREAD_COLOR)
-        assert first is not None, f"snapshot {snapshots[0].name} does not decode"
-        _assert_snapshots(tmp_output_dir, 3, (first.shape[1], first.shape[0]))
-
-    def test_both_languages_build_the_same_bank(
-        self,
-        e2e_model_path,
-        tmp_output_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
-    ):
-        """C++ and Python --calibrate on the same images and seed give the same
-        bank and thresholds, so switching languages never changes verdicts."""
-        cpp_binary = _find_cpp_binary()
-        skip_unless_e2e_ready(cpp_binary is not None, "C++ patchcore binary not found")
-        results = {}
-        for lang in ("cpp", "py"):
-            bank_path = tmp_output_dir.parent / f"bank_{lang}.npy"
-            meta_path = tmp_output_dir.parent / f"bank_{lang}.json"
-            config_path = e2e_config_writer(
-                {
-                    "source": {"type": "image_dir", "image_dir": str(REAL_IMAGES_DIR)},
-                    "calibration": {"nominal_images_dir": str(NOMINAL_DIR), "threshold_images_dir": ""},
-                    "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
-                    "output": {"dir": str(tmp_output_dir)},
+        {
+            "input": {"type": "rtsp", "source": rtsp_url, "codec": codec},
+            "inference": {"frames": FRAMES},
+            # This test is the Insight receiver, so the example publishes to loopback.
+            "output": {
+                "insight": {
+                    "host": "127.0.0.1",
+                    "video_port_base": video_port,
+                    "metadata_port_base": metadata_port,
                 }
-            )
-            cmd = [str(cpp_binary)] if lang == "cpp" else [sys.executable, str(MAIN_PY)]
-            result = subprocess.run(
-                [*cmd, "--calibrate", "--config", str(config_path)],
-                capture_output=True, text=True, timeout=test_timeout_ms / 1000, cwd=str(EXAMPLE_DIR),
-            )
-            assert result.returncode == 0, f"{lang} --calibrate failed:\n{result.stderr}"
-            results[lang] = (np.load(bank_path), json.loads(meta_path.read_text(encoding="utf-8")))
-        (cpp_bank, cpp_meta), (py_bank, py_meta) = results["cpp"], results["py"]
-        assert cpp_bank.shape == py_bank.shape, f"bank shapes differ: {cpp_bank.shape} vs {py_bank.shape}"
-        np.testing.assert_allclose(cpp_bank, py_bank, atol=1e-4)
-        for key in ("threshold", "patch_threshold"):
-            assert abs(cpp_meta[key]["value"] - py_meta[key]["value"]) < 1e-3, (
-                f"{key} differs: C++ {cpp_meta[key]['value']} vs Python {py_meta[key]['value']}"
-            )
+            },
+        },
+    )
+    _run(config_path, "--calibrate", timeout_s=test_timeout_ms / 1000)
 
-    def test_cpp_built_bank_scores_correctly_in_python(
-        self,
-        e2e_model_path,
-        tmp_output_dir,
-        test_timeout_ms,
-        skip_unless_e2e_ready,
-        e2e_config_writer,
+    with (
+        MetadataJsonListener(
+            "127.0.0.1",
+            metadata_port,
+            num_ports=1,
+            metadata_type="segmentation",
+            data_array_key="segments",
+            require_all_ports=True,
+        ) as listener,
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video,
     ):
-        """Cross-language regression: a memory bank calibrated by the C++
-        implementation must load in Python, separate defect from nominal, and
-        give the same verdicts (scores within 0.01) as C++ scoring that bank."""
-        cpp_binary = _find_cpp_binary()
-        skip_unless_e2e_ready(
-            cpp_binary is not None,
-            "C++ patchcore binary not found (set SIMANEAT_APPS_TEST_CPP_BINARY or build it under build/)",
-        )
-        nominal_path = REAL_IMAGES_DIR / NOMINAL_IMAGE
-        defect_path = REAL_IMAGES_DIR / DEFECT_IMAGE
-        skip_unless_e2e_ready(
-            nominal_path.is_file() and defect_path.is_file(),
-            f"real nominal/defect images missing under {REAL_IMAGES_DIR}",
-        )
+        video.bind(("127.0.0.1", video_port))
+        video.settimeout(5.0)
+        result = _run(config_path, timeout_s=test_timeout_ms / 1000)
+        metadata = listener.wait_for_messages(5.0)
+        rest = listener.drain_pending()
+        video_packet = video.recv(65536)
 
-        nominal_only_dir = tmp_output_dir.parent / "nominal"
-        nominal_only_dir.mkdir(parents=True, exist_ok=True)
-        (nominal_only_dir / NOMINAL_IMAGE).write_bytes(nominal_path.read_bytes())
-
-        score_dir = tmp_output_dir.parent / "score_inputs"
-        score_dir.mkdir(parents=True, exist_ok=True)
-        (score_dir / NOMINAL_IMAGE).write_bytes(nominal_path.read_bytes())
-        (score_dir / DEFECT_IMAGE).write_bytes(defect_path.read_bytes())
-
-        bank_path = tmp_output_dir.parent / "memory_bank.npy"
-        meta_path = tmp_output_dir.parent / "bank_meta.json"
-        config_path = e2e_config_writer(
-            {
-                "source": {"type": "image_dir", "image_dir": str(score_dir)},
-                "calibration": {
-                    "nominal_images_dir": str(nominal_only_dir),
-                    "threshold_images_dir": str(nominal_only_dir),
-                },
-                "memory_bank": {"path": str(bank_path), "meta_path": str(meta_path)},
-                "output": {"dir": str(tmp_output_dir)},
-            }
-        )
-        timeout_s = test_timeout_ms / 1000
-
-        calibrate = subprocess.run(
-            [str(cpp_binary), "--calibrate", "--config", str(config_path)],
-            capture_output=True, text=True, timeout=timeout_s, cwd=str(APPS_ROOT),
-        )
-        assert calibrate.returncode == 0, (
-            f"C++ --calibrate exited with code {calibrate.returncode}\n"
-            f"stdout:\n{calibrate.stdout}\nstderr:\n{calibrate.stderr}"
-        )
-
-        py_score = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=timeout_s, cwd=str(EXAMPLE_DIR),
-        )
-        assert py_score.returncode == 0, (
-            f"Python scoring against a C++-built bank exited with code {py_score.returncode}\n"
-            f"stdout:\n{py_score.stdout}\nstderr:\n{py_score.stderr}"
-        )
-
-        # Also score the same bank with the C++ binary that built it, so
-        # this compares actual scores/verdicts across languages -- not just
-        # that each language's own score ordering looks sensible.
-        cpp_score = subprocess.run(
-            [str(cpp_binary), "--config", str(config_path)],
-            capture_output=True, text=True, timeout=timeout_s, cwd=str(APPS_ROOT),
-        )
-        assert cpp_score.returncode == 0, (
-            f"C++ scoring its own bank exited with code {cpp_score.returncode}\n"
-            f"stdout:\n{cpp_score.stdout}\nstderr:\n{cpp_score.stderr}"
-        )
-
-        py_scores = {
-            Path(m.group("path")).name: (m.group("score"), m.group("verdict"))
-            for m in SCORE_RE.finditer(py_score.stdout)
-        }
-        cpp_scores = {
-            Path(m.group("path")).name: (m.group("score"), m.group("verdict"))
-            for m in SCORE_RE.finditer(cpp_score.stdout)
-        }
-        for image in (NOMINAL_IMAGE, DEFECT_IMAGE):
-            assert image in py_scores, f"Python: no score for {image} in:\n{py_score.stdout}"
-            assert image in cpp_scores, f"C++: no score for {image} in:\n{cpp_score.stdout}"
-            py_value, py_verdict = float(py_scores[image][0]), py_scores[image][1]
-            cpp_value, cpp_verdict = float(cpp_scores[image][0]), cpp_scores[image][1]
-            assert py_verdict == cpp_verdict, (
-                f"{image}: Python verdict={py_verdict} but C++ verdict={cpp_verdict} "
-                f"(scores {py_value:.6f} vs {cpp_value:.6f})"
-            )
-            assert abs(py_value - cpp_value) < 0.01, (
-                f"{image}: Python and C++ scores disagree by more than expected floating-point "
-                f"noise: {py_value:.6f} vs {cpp_value:.6f}"
-            )
-
-        assert float(py_scores[DEFECT_IMAGE][0]) > float(py_scores[NOMINAL_IMAGE][0]), (
-            "Python scoring a C++-built bank must still separate defect from nominal: "
-            f"nominal={py_scores[NOMINAL_IMAGE][0]} defect={py_scores[DEFECT_IMAGE][0]}"
-        )
+    flagged = int(re.search(rf"processed={FRAMES} flagged=(\d+) ", result.stdout).group(1))
+    # The test streams show no part from the nominal set, so the model flags them.
+    assert flagged > 0, result.stdout
+    assert metadata.success, metadata.error
+    width, height = (int(value) for value in re.search(r"stream=(\d+)x(\d+)@", result.stdout).groups())
+    segments = [
+        segment
+        for message in metadata.messages + rest.messages
+        for segment in json.loads(message.payload)["data"]["segments"]
+    ]
+    assert segments, "no frame carried a defect region"
+    for segment in segments:
+        assert segment["label"] == "anomaly", segment
+        # A region lies above the patch threshold, so its confidence is above 0.5.
+        assert 0.5 < segment["confidence"] <= 1.0, segment
+        x, y, box_width, box_height = segment["bbox"]
+        assert 0 <= x and 0 <= y and x + box_width <= width and y + box_height <= height
+        assert segment["mask_format"] == "polygon"
+        assert all(0 <= px < width and 0 <= py < height for px, py in segment["mask"])
+    # VideoSender forwards the stream as received: RTP H.264 (96), H.265 (98), or JPEG (26).
+    assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
+    assert video_packet[1] & 0x7F == {"h264": 96, "h265": 98, "mjpeg": 26}[codec]

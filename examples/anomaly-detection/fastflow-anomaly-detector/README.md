@@ -42,7 +42,7 @@ How does a frame move through fastflow-anomaly-detector?
 ╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   │
               ▼ pull                                                  │
    ┌────────────────────────────┐                                     │
-   │ defect regions (utils/)    │                                     │
+   │ defect regions (support/)  │                                     │
    └────────────────────────────┘                                     │
               │ polygons, scores                                      │
               ▼                                                       ▼
@@ -195,8 +195,8 @@ For `app.min_region_px`, run the application on good parts and raise the value u
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`, with the region extraction in `src/cpp/utils/anomaly_regions.cpp`
-- Python implementation: `src/python/main.py`, with the region extraction in `src/python/utils/anomaly_regions.py`
+- C++ reference source: `src/cpp/main.cpp`, with the region extraction in the shared `support/cpp/sima_examples/anomaly_regions.cpp`
+- Python implementation: `src/python/main.py`, with the region extraction in the shared `support/python/sima_examples/anomaly_regions.py`
 - Shared configuration: `src/common/config.yaml`
 - Helpers shared with other examples, with no Neat API calls: `support/python/sima_examples/` in `prebuilt-apps/`, and their C++ reference source in `support/cpp/sima_examples/`
 

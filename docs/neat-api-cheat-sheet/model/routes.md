@@ -41,18 +41,15 @@ route, C++ has `stages::BoxDecode`; see [decoding.md](decoding.md).
 
 C++, from
 [`patchcore-anomaly-detector/src/cpp/main.cpp`](../../../examples/anomaly-detection/patchcore-anomaly-detector/src/cpp/main.cpp)
-(lines 795–797 and 814–817, de-indented). A branch splits the RTSP source
-into `"model"` and `"frame"`. The model's route sits behind a named `Input`
-endpoint, and its output feeds the `"embedding"` graph:
+(`features_graph` and `run_app`, de-indented). The model's default route takes
+the decoder's NV12 frames, and a named output after it is where the
+application pulls the patch features:
 
 ```cpp
-simaai::neat::Graph model_graph("model");
-model_graph.connect(simaai::neat::nodes::Input("model"),
-                    model.graph(simaai::neat::Model::RouteOptions{}));
-rt.graph = simaai::neat::Graph("patchcore");
-rt.graph.connect(source, branch);
-rt.graph.connect(branch, model_graph);
-rt.graph.connect(model_graph, embedding_graph);
+neat::Graph extractor("extractor");
+extractor.add(model.graph());
+extractor.add(neat::nodes::Output("features"));
+graph.connect(decoder, extractor);
 ```
 
 Python, from
@@ -289,7 +286,6 @@ change them.
   [Depth Estimator](../../../examples/depth-estimation/depth-estimator/),
   [PCB Defect Detector](../../../examples/object-detection/pcb-defect-detector/),
   [SSD-MobileNet Object Detector](../../../examples/object-detection/ssd-mobilenet-object-detector/),
-  [PatchCore Anomaly Detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/),
   [RF-DETR Detection and Segmentation](../../../examples/object-detection/rfdetr-detection-segmentation/),
   [EfficientSAM3 Promptable Segmenter](../../../examples/segmentation/efficientsam3-promptable-segmenter/)
   (C++),

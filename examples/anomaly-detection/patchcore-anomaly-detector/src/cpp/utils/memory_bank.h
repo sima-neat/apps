@@ -6,7 +6,7 @@
 /// anomaly scoring -- non-parametric, so it runs host-side rather than in
 /// the compiled graph. On-disk pair: `memory_bank.npy` (float32 (N,
 /// embed_dim) coreset, numpy.save layout) and `bank_meta.json` (model hash,
-/// calibration params, threshold). patchcore_scoring.py is the Python
+/// calibration params, threshold). utils/memory_bank.py is the Python
 /// implementation of the same format.
 
 #include <cstddef>
@@ -73,9 +73,15 @@ public:
   [[nodiscard]] AnomalyResult score(const PatchEmbeddings& embeddings, int num_neighbors) const;
   [[nodiscard]] AnomalyResult score(const cv::Mat& patches, int num_neighbors) const;
 
-  [[nodiscard]] std::size_t size() const { return num_vectors_; }
-  [[nodiscard]] std::size_t embed_dim() const { return embed_dim_; }
-  [[nodiscard]] bool empty() const { return num_vectors_ == 0; }
+  [[nodiscard]] std::size_t size() const {
+    return num_vectors_;
+  }
+  [[nodiscard]] std::size_t embed_dim() const {
+    return embed_dim_;
+  }
+  [[nodiscard]] bool empty() const {
+    return num_vectors_ == 0;
+  }
 
 private:
   std::vector<float> vectors_; // row-major (num_vectors_, embed_dim_)
@@ -86,6 +92,10 @@ private:
 /// `p`-th percentile (linear interpolation, matching numpy.percentile's default)
 /// of a list of per-image anomaly scores. Throws if `scores` is empty.
 float percentile_threshold(std::vector<float> scores, double percentile);
+
+/// A patch distance as the 0 to 1 confidence Insight shows as a percentage: 0.5 at the
+/// calibrated threshold, 1 at twice the threshold or more.
+double confidence(double score, double threshold);
 
 /// The `bank_meta.json` sidecar: everything a scoring run needs to trust and
 /// interpret `memory_bank.npy` without hard-coding it in application source.
@@ -109,17 +119,19 @@ struct BankMeta {
   double threshold_value = 0.0;
   double threshold_percentile = 0.0;
   int threshold_num_images = 0;
-  // Overlay highlight: pixels above scale_max are highlighted, colored over the span
-  // scale_max - scale_min. Separate from threshold_value. If absent, recalibrate.
+  // Map value at which a region is outlined, separate from threshold_value. If absent,
+  // recalibrate.
   bool has_patch_threshold = false;
   double patch_threshold_value = 0.0;
-  double patch_threshold_scale_min = 0.0;
-  double patch_threshold_scale_max = 0.0;
   std::string created_at;
 };
 
 BankMeta load_bank_meta(const std::filesystem::path& path);
 void save_bank_meta(const std::filesystem::path& path, const BankMeta& meta);
+
+/// The per-patch scores of `result`, a grid_h x grid_w map, upsampled to a side x side
+/// CV_32FC1 map and smoothed with `sigma`; the map covers the whole frame.
+cv::Mat anomaly_map(const AnomalyResult& result, int grid_h, int grid_w, int side, double sigma);
 
 /// Current UTC time as "%Y-%m-%dT%H:%M:%SZ", for `BankMeta::created_at`.
 std::string current_utc_timestamp();

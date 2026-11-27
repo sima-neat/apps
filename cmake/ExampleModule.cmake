@@ -73,6 +73,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
   sima_neat_apps_ensure_yaml_cpp()
 
   add_library(sima_neat_apps_support_runtime STATIC
+    "${apps_root}/support/cpp/sima_examples/anomaly_regions.cpp"
     "${apps_root}/support/cpp/sima_examples/asset_utils.cpp"
     "${apps_root}/support/cpp/sima_examples/config.cpp"
     "${apps_root}/support/cpp/sima_examples/example_utils.cpp"

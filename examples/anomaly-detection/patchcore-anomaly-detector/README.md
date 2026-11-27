@@ -6,7 +6,7 @@
 | --- | --- |
 | Category | anomaly-detection |
 | Difficulty | Advanced |
-| Tags | anomaly-detection, patchcore, wide-resnet50-2, memory-bank, calibration |
+| Tags | anomaly-detection, patchcore, wide-resnet50-2, memory-bank, calibration, rtsp, insight |
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | patchcore-anomaly-detector |
@@ -14,18 +14,50 @@
 
 ## Concept
 
-Detects visual anomalies in industrial images or video using a compiled WideResNet-50 patch-feature extractor and a host-side coreset memory bank calibrated from your own known-good images.
+Flags surface defects on parts in an H.264, H.265, or MJPEG RTSP stream or a folder of images by comparing each patch with a memory bank of your known-good images, and outlines each defect in Insight.
 
-PatchCore learns only what normal looks like. The MLA turns every frame into a 28x28 grid of patch descriptions (1,536 values each, from `wide_resnet50_2` with torchvision `IMAGENET1K_V1` weights). `--calibrate` keeps a small, diverse set of descriptions from your known-good images as the memory bank. At run time each patch is compared with its nearest bank entry on the host: patches far from everything normal are highlighted, and the worst patch decides the frame's `normal` / `ANOMALOUS` verdict.
+```text
+How does a frame move through patchcore-anomaly-detector?
 
+╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN                                                             ┆
+┆  ┌──────────────────────┐  encoded, as received ┌─────────────┐ ┆
+┆  │ RtspEncodedInput     │──────────────────────►│ VideoSender │─────┐
+┆  └──────────────────────┘                       └─────────────┘ ┆   │
+┆             │ encoded frames                                    ┆   │ video
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ SimaDecode           │                                       ┆   │
+┆  └──────────────────────┘                                       ┆   │
+┆             │ NV12 frames                                       ┆   │
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ PatchCore Model      │                                       ┆   │
+┆  └──────────────────────┘                                       ┆   │
+┆             │ patch features                                    ┆   │
+┆             ▼                                                   ┆   │
+┆  ┌──────────────────────┐                                       ┆   │
+┆  │ Output "features"    │                                       ┆   │
+┆  └──────────────────────┘                                       ┆   │
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   │
+              ▼ pull                                                  │
+   ┌────────────────────────────┐                                     │
+   │ bank scores, regions       │                                     │
+   └────────────────────────────┘                                     │
+              │ polygons, scores                                      │
+              ▼                                                       ▼
+   ┌────────────────────────────┐  JSON                        ┌──────────────┐
+   │ MetadataSender             │─────────────────────────────►│ Insight      │
+   └────────────────────────────┘                              └──────────────┘
 ```
-image_dir / video_file:  decode on host --> letterbox to 224x224 --> model (MLA) --> patch descriptions
-rtsp:                    RTSP decode --> branch --> model (CVU preprocess + MLA) --> "embedding" --+
-                                               \--> "frame" ----------------------------------------+--> joined per frame
-patch descriptions + frame --> nearest bank entry per patch (host) --> verdict + heatmap --> Insight / saved overlays
-```
 
-The bank is built from the compiled model's own descriptions, not from a float PyTorch model: the compiled model's values differ slightly, and a bank from another model shifts every distance and weakens the separation between normal and defective. `bank_meta.json` records the model package's hash, so a bank built for a different package is rejected at load.
+- `RtspEncodedInput` feeds both `VideoSender`, which passes the video to Insight as received, and `SimaDecode`, whose NV12 frames EV74 converts, stretches to the 224x224 model input, and normalizes as ImageNet.
+- The PatchCore model, `wide_resnet50_2` with torchvision `IMAGENET1K_V1` weights, turns each frame into a 28x28 grid of patch features, 1,536 values each.
+- On the host, each patch is scored by its distance to the nearest patch of the memory bank, and the worst patch, reweighted as the PatchCore paper does, decides the frame's score. A frame above the calibrated threshold is anomalous: its scores are upsampled to 224x224 and smoothed, and connected regions above the calibrated patch threshold are its defects. The `features` output keeps only the newest frame's features, so scoring slower than the stream skips frames instead of delaying the video.
+- Each frame's defects go to Insight as `segmentation` metadata, one polygon per region labelled `anomaly`, at most `inference.max_detections` per frame. A normal frame sends no polygon. A region's confidence is its highest score divided by twice the patch threshold, capped at 1: 50% at the threshold, 100% at twice it.
+- With `input.type: image_dir`, the host reads each image, stretches it to 224x224, and runs the same model and scoring; it writes each image to `output.dir` with its defects outlined in red.
+
+PatchCore learns only what a good part looks like. `--calibrate` runs the model on your known-good images, keeps a small, diverse set of their patch features as the memory bank, and measures both thresholds on the images it keeps out of the bank. `bank_meta.json` records the model package's hash, so a bank built for another package is rejected at load.
 
 ## Preview
 
@@ -33,11 +65,14 @@ The bank is built from the compiled model's own descriptions, not from a float P
 
 ## Prerequisites
 
-- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- For `source.type: rtsp`, an RTSP H.264, H.265, or MJPEG source reachable from the target.
-- For `source.type: video_file` or `rtsp`, [Insight](https://developer.sima.ai/software/tools/insight/) (or another RTP receiver) to view the live annotated stream. Insight can also serve a video file or a webcam as the RTSP source; see [Prepare Insight](#prepare-insight).
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on the Modalix DevKit, or in a Neat SDK container paired with it.
+- An RTSP source and an [Insight endpoint](https://developer.sima.ai/software/tools/insight/) reachable from the target, or a folder of images for `input.type: image_dir`.
 
 ## Install Apps
+
+Install on the Modalix DevKit, or under `/workspace` in a Neat SDK container paired with it. Only the example itself must run on the DevKit. `sima-cli neat install apps` also offers to install the compatible Neat Library and Insight, and skips them when they are up to date. To keep the Neat Library and Insight you have without being asked, run the install as `NEAT_APPS_SKIP_DEPENDENCIES=1 sima-cli neat install apps`. See [Install Apps](https://github.com/sima-neat/apps/blob/main/README.md#install-apps).
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
 sima-cli neat install apps
@@ -47,154 +82,120 @@ APP_DIR=examples/anomaly-detection/patchcore-anomaly-detector
 
 Run the remaining commands from `prebuilt-apps/`.
 
-## Set Up Python
-
-Skip this section if you only run the C++ variant. The Python variant runs in the `pyneat` Python environment that the Apps installer sets up with Neat Core (`~/pyneat` by default). Activate it in every new shell, install the example's Python dependencies once, and confirm `pyneat` imports:
-
-```bash
-source ~/pyneat/bin/activate
-pip install -r ${APP_DIR}/src/python/requirements.txt
-python3 -c "import pyneat"
-```
-
 ## Prepare the Model
 
-Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Model Zoo downloads need your SiMa Developer Portal login: run `sima-cli login` once, or follow the device-login prompt the first download prints.
 
 ```bash
+export MODELZOO_VERSION="3.0.0"
 mkdir -p models
 cd models
-export MODELZOO_VERSION="3.0.0"
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/patchcore_wide_resnet50_2_bf16_mla.tar.gz"
 cd ..
 ```
 
-Set `model.path` in the example config to the downloaded package.
+The packaged config already points `model.path` at `models/patchcore_wide_resnet50_2_bf16_mla.tar.gz`.
 
-## Prepare the memory bank
+## Prepare the Memory Bank
 
-Before scoring anything, build a memory bank from a directory of known-good ("nominal") images of your own inspection target. The bundled `assets/datasets/patchcore/` set exists only to make this demo reproducible without your own images, and is not a substitute for your own target's data:
+The bundled `assets/datasets/patchcore/` set makes the demo reproducible; for your own part, use images of it:
 
-- `nominal/` -- 16 real known-good reference images. `calibration.nominal_images_dir` points here by default; `--calibrate` below builds the memory bank from 13 of them and measures the threshold on the other 3.
-- `held_out_normal/` -- 4 further real known-good images, deliberately excluded from calibration, used only by this example's own test suite to check that genuinely normal images the bank never saw still score below the threshold.
-- `images/` -- an image-directory scoring input: one normal-looking image (`plain_0.png`) and four images with synthetic scratch defects (`scratch_0.png`-`scratch_3.png`), for exercising `source.type: image_dir` end to end.
+- `nominal/`: 16 known-good images. `app.nominal_images_dir` points here; `--calibrate` builds the bank from 13 of them and measures the thresholds on the other 3.
+- `held_out_normal/`: 4 more known-good images that calibration never sees.
+- `images/`: one plain image, `plain_0.png`, and four with synthetic scratches, `scratch_0.png` to `scratch_3.png`.
 
-To calibrate against your own inspection target instead, point `calibration.nominal_images_dir` at a directory of your own known-good images (a few dozen is a reasonable starting point) before running `--calibrate`. Capture them with the same camera, framing, and lighting you will run with.
-
-The model input is 224x224. Every image, video frame, and RTSP frame is letterboxed into it the same way: scaled to fit with its aspect ratio kept, and centered between gray bars. The whole frame is inspected, but a wide frame gets fewer model pixels than a square one (a 16:9 frame fills 224x126), so keep the part large in the frame. Calibrate with images from the same camera and resolution you will run with.
-
-`--calibrate` keeps every 5th nominal image out of the bank and measures the threshold on those, so the threshold reflects images the bank has not memorized. Set `calibration.threshold_images_dir` to use a separate set instead.
-
-`calibration.coreset_ratio` sets how many nominal patches the bank keeps. The default 0.0004 keeps 4 of the 10,192 patches from the demo's 13 bank images, which is enough for its uniform texture and keeps scoring fast. On a busy or varied scene a bank this small matches normal clutter poorly, which raises the threshold until real defects can go unflagged; raise the ratio (the PatchCore paper keeps 1-10%) and check that a known defect is caught. Scoring cost grows with the bank: measured on a Modalix DevKit (Platform 3.0), host scoring takes about 1-2 ms, 30 ms, and 400 ms per frame for 5, 125, and 1,254 vectors (C++ and Python are similar).
+For your own part, point `app.nominal_images_dir` at a folder of its known-good images, a few dozen to start, taken with the camera, framing, and lighting you run with. Then build the bank:
 
 ```bash
-./${APP_DIR}/src/cpp/pre-built/patchcore-anomaly-detector --calibrate --config ${APP_DIR}/src/common/config.yaml
+"$APP_DIR/src/cpp/pre-built/patchcore-anomaly-detector" --calibrate --config "$APP_DIR/src/common/config.yaml"
 ```
 
-or, with the Python variant (after [Set Up Python](#set-up-python)):
+The Python variant builds the same bank, and a bank built by one loads in the other:
 
 ```bash
-python3 ${APP_DIR}/src/python/main.py --calibrate --config ${APP_DIR}/src/common/config.yaml
+source ~/pyneat/bin/activate
+pip install -r "$APP_DIR/src/python/requirements.txt"
+python3 "$APP_DIR/src/python/main.py" --calibrate --config "$APP_DIR/src/common/config.yaml"
 ```
 
-Both write `memory_bank.path` / `memory_bank.meta_path` from `calibration.nominal_images_dir`, and share the same on-disk format -- a bank built with one binary loads and scores in the other. Re-run `--calibrate` whenever `model.path` changes, the inspection target or camera changes, or you change any `calibration` setting.
+Both print the bank and its thresholds, and write `memory_bank.npy` and `bank_meta.json` to `app.memory_bank_dir`:
 
-## Prepare Insight
-
-`video_file` and `rtsp` send the annotated video to Insight. Insight installs with the Apps runtime; start it on the board and leave it running:
-
-```bash
-source ~/.simaai/neat-insight/venv/bin/activate && neat-insight
+```text
+bank=4 patches from 13 images threshold=20.5151 patch_threshold=20.3819 (3 held-out images) saved=sandbox/patchcore-anomaly-detector/bank
 ```
 
-The first start installs `mkcert` with `sudo apt-get`, so run it from an interactive shell and enter the board password when asked. Open `https://<board-ip>:9900` in a browser and accept the self-signed certificate. When Insight runs on the board, set `output.insight.host` to `127.0.0.1`.
+Build the bank again whenever `model.path`, the part, the camera, or an `app.` setting changes.
 
-For `rtsp`, Insight can also provide the stream: under *RTSP Source*, upload a clip (for example `assets/datasets/patchcore/video/test.mp4`) or select a webcam, start it, and copy its URL (for example `rtsp://<board-ip>:8554/src1`) into `source.rtsp.url`.
+## Prepare an RTSP source
+
+1. In Insight, open **Media Sources** and import a clip of the part you calibrated on, taken with the same camera, framing, and lighting as the bank's images.
+2. Assign the video under **Streaming Sources** and start the source.
+3. Copy its RTSP URL into `input.source` and set `input.codec` to match the video. Use a host and published port reachable from the target, not `localhost`.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.type` and its matching source fields, `memory_bank.path` / `memory_bank.meta_path`, and `calibration.nominal_images_dir` before the first `--calibrate` run. The shipped config uses `source.type: video_file` with the bundled clip. For `source.type: video_file` or `rtsp`, also set `output.insight.host` to the machine running Insight. For `source.type: rtsp` with `codec: h265` or `mjpeg`, also set `source.rtsp.width`/`height` (see Troubleshooting).
+Edit `$APP_DIR/src/common/config.yaml`:
+
+- Set `input.source`, and `input.codec` to `h264`, `h265`, or `mjpeg`.
+- Leave `input.width`, `input.height`, and `input.fps` at 0 to read the frame size and rate from the stream.
+- Set `output.insight.host`, `video_port_base`, and `metadata_port_base` to the values reported by Insight.
+- Keep `inference.frames: 0` to run until Ctrl-C, or set a frame count.
+- To score a folder of images instead, set `input.type: image_dir` and `input.source` to the folder, such as `assets/datasets/patchcore/images`, and `output.dir` to the folder for the outlined images.
+- Raise `app.coreset_ratio` for a busy or varied scene, where a small bank matches good parts poorly; the PatchCore paper keeps 1 to 10%. Scoring time per frame grows with the bank.
 
 ## Run
 
 ### C++
 
 ```bash
-./${APP_DIR}/src/cpp/pre-built/patchcore-anomaly-detector \
-  --config ${APP_DIR}/src/common/config.yaml
+"$APP_DIR/src/cpp/pre-built/patchcore-anomaly-detector" --config "$APP_DIR/src/common/config.yaml"
 ```
 
 ### Python
 
-After [Set Up Python](#set-up-python):
-
 ```bash
-python3 ${APP_DIR}/src/python/main.py \
-  --config ${APP_DIR}/src/common/config.yaml
+source ~/pyneat/bin/activate
+python3 "$APP_DIR/src/python/main.py" --config "$APP_DIR/src/common/config.yaml"
 ```
 
 ## Expected Result
 
-Every processed image or frame prints its score, the calibrated threshold, and the verdict. Only regions scoring above the calibrated patch threshold are highlighted (yellow to red); normal regions are left unchanged.
+With an RTSP source, the output is the Insight stream plus a startup line and a closing line, the same from C++ and Python. The lines have this format; the stream size, the bank size, and the counts depend on your clip and bank:
 
-With the shipped config (`video_file`, the bundled clip), the app plays the clip once and streams it to Insight. In the Insight video viewer (channel 0), the first 60 frames show plain texture with no highlight and `verdict=normal`; from frame 61 the scratches and colored dots are highlighted and every frame is `ANOMALOUS`:
-
+```text
+source=rtsp://<host>:<port>/<stream> codec=h264 stream=<width>x<height>@<fps> bank=<patches> insight=<insight-host-ip> video=9000 metadata=9100
+processed=<frames> flagged=<anomalous-frames> video_sender=<insight-host-ip>:9000
 ```
-frame=1: score=17.0073 threshold=20.5151 verdict=normal (mla=...ms host=...ms)
+
+In the Insight viewer, each defect is outlined and labelled `anomaly` with its confidence, such as `anomaly (75%)`. The closing line counts the frames processed and the anomalous frames, and prints after Ctrl-C too. When the nonblocking metadata sender dropped messages because the socket buffer was full, a further line counts them.
+
+With `input.type: image_dir` and the bundled `images/`, each image prints its verdict, and the outlined images go to `output.dir`:
+
+```text
+plain_0.png: normal score=16.80 threshold=20.52 regions=0
+scratch_0.png: ANOMALOUS score=34.67 threshold=20.52 regions=3
 ...
-frame=61: score=35.3749 threshold=20.5151 verdict=ANOMALOUS (mla=...ms host=...ms)
-...
-Done: 450 frames processed  video_sender=127.0.0.1:9000
+processed=5 flagged=4 output=sandbox/patchcore-anomaly-detector
 ```
-
-With `source.type: image_dir` and the bundled `images/`, overlays are written to `output.dir`:
-
-```
-assets/datasets/patchcore/images/plain_0.png: score=16.8013 threshold=20.5151 verdict=normal (mla=2022.1ms host=7.9ms)
-assets/datasets/patchcore/images/scratch_0.png: score=34.6679 threshold=20.5151 verdict=ANOMALOUS (mla=32.3ms host=18.1ms)
-...
-Done: 5 images processed -- overlays written to sandbox/patchcore-anomaly-detector
-```
-
-For `video_file` and `rtsp`, each frame's verdict is also sent to Insight as `classification` metadata on `output.insight.metadata_port` (default 9100): Insight draws it as a label on the video (for example `ANOMALOUS score=34.7 thr=20.5`), and `data.anomaly` carries the raw `score`, `threshold`, and `verdict` for other consumers.
-
-`mla` is the model time per image (the first one includes setup); `host` is the nearest-neighbor scoring and overlay drawing. In `rtsp` mode the model runs inside the graph, so `mla` there is the wait for the next frame. `video_file` and `rtsp` save every Nth overlay frame to `output.dir` only when `output.save_every` is above 0 (off by default; saving has no limit, so keep N large on long runs).
-
-Measured on a Modalix DevKit (Platform 3.0, build B2499), RTSP at 30 fps with the default bank:
-
-| Stream | C++ | Python |
-| --- | --- | --- |
-| 720x720 | about 30 fps | about 30 fps |
-
-`rtsp` renders directly into NV12; `image_dir` and `video_file` use OpenCV’s BGR frames. Heatmaps are smoothed at model resolution. The bounded output queue drops older frames if processing falls behind. Larger memory banks increase host scoring time.
 
 ## Troubleshooting
 
-- `ModuleNotFoundError: No module named 'pyneat'`: activate the `pyneat` environment (see [Set Up Python](#set-up-python)).
-- `ModuleNotFoundError: No module named 'yaml'`: install the example's dependencies with `pip install -r ${APP_DIR}/src/python/requirements.txt` (see [Set Up Python](#set-up-python)).
-- `memory bank not found`: run `--calibrate` first.
-- `memory bank was built against a different model package`: `model.path` changed since the last `--calibrate`; rebuild the bank.
-- `bank_meta.json is missing patch_threshold`: rerun `--calibrate` to regenerate the bank.
-- Confirm `source.image_dir` / `source.video_path` / `source.rtsp.url` matches the configured `source.type`.
-- `rtsp`: `failed to resolve source geometry` -- the stream wasn't reachable, or (for `codec: h265`/`mjpeg`) didn't expose probeable width/height; set `source.rtsp.width`/`height` explicitly.
-- Nothing appears in Insight: confirm Insight is running (see [Prepare Insight](#prepare-insight)), `output.insight.host` is reachable, and Insight is listening on the configured `video_port`/`channel`.
-- Every frame of a new camera is `ANOMALOUS`: calibrate on known-good images from that camera, at the resolution and framing you run with.
-- `--calibrate` looks stalled on a large nominal set: it prints progress every 10 images; lowering `calibration.coreset_ratio` reduces both build time and per-frame scoring cost.
+- `no memory bank in <dir>; run with --calibrate first` means `app.memory_bank_dir` holds no bank. Run `--calibrate`.
+- `memory bank was built against a different model package` means `model.path` changed since the last `--calibrate`. Build the bank again.
+- `input.type: unknown value '<type>' (expected image_dir, rtsp)` or `input.codec: unknown value '<codec>' (expected h264, h265, mjpeg)` names a value this example does not support.
+- `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config.
+- `failed to probe RTSP frame size: <url>` appears when the source is unreachable from the board or does not report its size. Verify the URL from the board itself, or set `input.width`, `input.height`, and `input.fps`.
+- Insight shows `Metadata late` and no outlines: the defect regions arrive after their video frame was shown. Open the badge and raise the channel's video sync buffer to the value it suggests.
+- Every frame of a new camera is anomalous: calibrate on known-good images from that camera, at the framing you run with. PatchCore expects a fixed camera and a steady scene; camera motion and lighting changes raise every score.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`, `src/cpp/patchcore_memory_bank.h`/`.cpp`, `src/cpp/patchcore_overlay.h`
-- Python source: `src/python/main.py`, `src/python/patchcore_scoring.py`
-- Shared config: `src/common/config.yaml`
+- C++ reference source: `src/cpp/main.cpp`, with the memory bank in `src/cpp/utils/memory_bank.h` and `.cpp`, and the region extraction in the shared `support/cpp/sima_examples/anomaly_regions.cpp`
+- Python implementation: `src/python/main.py`, with the memory bank in `src/python/utils/memory_bank.py`, and the region extraction in the shared `support/python/sima_examples/anomaly_regions.py`
+- Shared configuration: `src/common/config.yaml`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
-
-## Known limitations
-
-- MVTec AD is not vendored into this repo or used for the shipped memory bank (its license is non-commercial research use); build your own bank from a nominal set captured on your own target.
-- There is no direct MIPI or USB camera source; stream a camera over RTSP instead (Insight can publish a webcam).
-- PatchCore expects a fixed camera and a consistent scene: camera motion, lighting changes, or a scene that differs from the calibration images all raise scores.

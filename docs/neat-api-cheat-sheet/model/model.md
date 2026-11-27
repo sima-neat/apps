@@ -37,40 +37,33 @@ To measure how fast the model runs on its own, use `Model::benchmark`; see
 
 ## Minimal example
 
-Both blocks come from the PatchCore example's video-file mode. The first frame
-seeds `build`, so the pipeline is planned for that input, and the loop then
-calls `runner.run` once per frame. `image_model_options()` and
-`make_image_model()` fill `Options::preprocess` for RGB image input (see
-[preprocessing.md](preprocessing.md)), and `model_input_tensor` letterboxes a
-frame (scales it to fit the model input and pads the rest) into an RGB tensor.
+Both blocks come from the PatchCore example's calibration and `image_dir`
+mode, which run one host-decoded image at a time. `image_model_options()`
+fills `Options::preprocess` for RGB image input (see
+[preprocessing.md](preprocessing.md)), and `image_input` stretches the image to
+the model input as an RGB tensor.
 
 C++, from
 [`patchcore-anomaly-detector/src/cpp/main.cpp`](../../../examples/anomaly-detection/patchcore-anomaly-detector/src/cpp/main.cpp)
-(lines 623–624, 638, 674, de-indented):
+(`calibrate` and `patch_features`, de-indented):
 
 ```cpp
-simaai::neat::Model model(cfg.model_path, image_model_options());
-auto runner = model.build(simaai::neat::TensorList{model_input_tensor(frame)});
-auto tensors = runner.run(simaai::neat::TensorList{model_input_tensor(frame)});
-runner.close();
+neat::Model model(model_path.string(), image_model_options());
+const neat::Tensor features = model.run(neat::TensorList{image_input(bgr)}).front();
 ```
 
 Python, from
 [`patchcore-anomaly-detector/src/python/main.py`](../../../examples/anomaly-detection/patchcore-anomaly-detector/src/python/main.py)
-(lines 542–545, 560, 594, de-indented):
+(`calibrate` and `patch_features`, de-indented):
 
 ```python
-model = make_image_model(cfg.model_path)
-runner = model.build(
-    [model_input_tensor(frame)], route_options=pyneat.ModelRouteOptions(), run_options=pyneat.RunOptions()
-)
-outputs = runner.run([model_input_tensor(frame)])
-runner.close()
+model = pyneat.Model(str(model_path), image_model_options())
+# A view of the output holds its zero-copy loan, and the run stalls once six are held.
+features = model.run([image_input(bgr)])[0].to_numpy(copy=True)
 ```
 
-For single calibration images the same example skips the runner and calls
-`model.run(simaai::neat::TensorList{model_input_tensor(bgr)})` in C++
-(line 319) and `model.run([model_input_tensor(bgr)])` in Python (line 279).
+For a loop over many frames, `model.build(seed)` returns a runner instead; the
+Depth Estimator uses one.
 
 Complete flow: [PatchCore Anomaly Detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/)
 
@@ -314,11 +307,9 @@ These calls ask a loaded model about itself. All of them except
 - One-shot `run`:
   [Image Classification Explorer](../../../examples/classification/image-classification-explorer/),
   [PatchCore Anomaly Detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/)
-  (calibration)
+  (calibration and `image_dir`)
 - `build` and a runner:
   [Depth Estimator](../../../examples/depth-estimation/depth-estimator/),
-  [PatchCore Anomaly Detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/)
-  (video file),
   [YOLO26 Object Detector](../../../examples/object-detection/yolo26-object-detector/),
   [SSD-MobileNet Object Detector](../../../examples/object-detection/ssd-mobilenet-object-detector/),
   [DETR Object Detector](../../../examples/object-detection/detr-object-detector/),

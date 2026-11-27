@@ -1,7 +1,9 @@
 // Unit tests for the FastFlow anomaly detector: the checks the application leaves to its config,
-// and the defect regions it sends. tests/python/test_unit.py runs the same checks in Python.
+// and the shared sima_examples::anomaly_regions it sends, whose C++ test lives here as the first
+// example that uses it. tests/python/test_unit.py and tests/scripts/test_anomaly_regions.py run
+// the same checks in Python.
 
-#include "../../src/cpp/utils/anomaly_regions.h"
+#include "sima_examples/anomaly_regions.h"
 #include "sima_examples/config.h"
 #include "sima_examples/testing/test_checks.h"
 
@@ -64,7 +66,7 @@ cv::Mat three_region_map() {
 }
 
 // A 32x48 frame scales map x by 2 and map y by 3.
-fastflow::RegionOptions options(int max_regions = 10) {
+sima_examples::RegionOptions options(int max_regions = 10) {
   return {
       .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 5, .max_regions = max_regions};
 }
@@ -73,7 +75,7 @@ const std::vector<std::array<int, 2>> kFirstOutline = {{4, 6}, {4, 15}, {10, 15}
 
 // The 4-pixel region is dropped; the others come best first, scaled to the frame.
 bool test_regions_below_min_region_px_are_speckle() {
-  const auto regions = fastflow::defect_regions(three_region_map(), options());
+  const auto regions = sima_examples::defect_regions(three_region_map(), options());
   bool ok = expect_true(regions.size() == 2U, "two regions reach min_region_px");
   if (!ok) {
     return false;
@@ -89,16 +91,16 @@ bool test_regions_below_min_region_px_are_speckle() {
 }
 
 bool test_max_regions_keeps_the_highest_scores() {
-  const auto regions = fastflow::defect_regions(three_region_map(), options(1));
+  const auto regions = sima_examples::defect_regions(three_region_map(), options(1));
   return expect_true(regions.size() == 1U && regions[0].bbox == std::array<int, 4>{4, 6, 8, 12},
                      "max_regions keeps the best region");
 }
 
 bool test_a_map_below_the_threshold_has_no_region() {
   const cv::Mat good_part(16, 16, CV_32FC1, cv::Scalar(0.49F));
-  bool ok = expect_true(fastflow::defect_regions(good_part, options()).empty(),
+  bool ok = expect_true(sima_examples::defect_regions(good_part, options()).empty(),
                         "a good part has no region");
-  ok &= expect_true(nlohmann::json::parse(fastflow::segments_json({})) ==
+  ok &= expect_true(nlohmann::json::parse(sima_examples::segments_json({})) ==
                         nlohmann::json{{"segments", nlohmann::json::array()}},
                     "a good part sends no segments");
   return ok;
@@ -110,9 +112,9 @@ bool test_a_dot_or_a_line_is_outlined_by_its_box() {
   cv::Mat map = cv::Mat::zeros(16, 16, CV_32FC1);
   map.at<float>(9, 7) = 0.9F;
   map(cv::Rect(2, 14, 5, 1)).setTo(0.8F);
-  const fastflow::RegionOptions dot_options = {
+  const sima_examples::RegionOptions dot_options = {
       .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
-  const auto regions = fastflow::defect_regions(map, dot_options);
+  const auto regions = sima_examples::defect_regions(map, dot_options);
   if (!expect_true(regions.size() == 2U, "the dot and the line are regions")) {
     return false;
   }
@@ -129,16 +131,16 @@ bool test_a_dot_or_a_line_is_outlined_by_its_box() {
 bool test_a_box_on_the_map_edge_stays_inside_the_frame() {
   cv::Mat map = cv::Mat::zeros(16, 16, CV_32FC1);
   map.at<float>(15, 15) = 0.9F;
-  const fastflow::RegionOptions edge_options = {
+  const sima_examples::RegionOptions edge_options = {
       .width = 32, .height = 48, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
-  const auto regions = fastflow::defect_regions(map, edge_options);
+  const auto regions = sima_examples::defect_regions(map, edge_options);
   const std::vector<std::array<int, 2>> outline = {{30, 45}, {30, 47}, {31, 47}, {31, 45}};
   bool ok = expect_true(regions.size() == 1U && regions[0].polygon == outline,
                         "a box on the map edge stays inside the frame");
   // At 1:1 scaling the box still keeps an area.
-  const fastflow::RegionOptions same_size = {
+  const sima_examples::RegionOptions same_size = {
       .width = 16, .height = 16, .threshold = 0.5, .min_region_px = 1, .max_regions = 10};
-  const auto same_size_regions = fastflow::defect_regions(map, same_size);
+  const auto same_size_regions = sima_examples::defect_regions(map, same_size);
   const std::vector<std::array<int, 2>> same_size_outline = {
       {14, 14}, {14, 15}, {15, 15}, {15, 14}};
   ok &= expect_true(same_size_regions.size() == 1U &&
@@ -148,8 +150,8 @@ bool test_a_box_on_the_map_edge_stays_inside_the_frame() {
 }
 
 bool test_segments_carry_the_box_outline_and_score() {
-  const auto regions = fastflow::defect_regions(three_region_map(), options(1));
-  const auto segments = nlohmann::json::parse(fastflow::segments_json(regions)).at("segments");
+  const auto regions = sima_examples::defect_regions(three_region_map(), options(1));
+  const auto segments = nlohmann::json::parse(sima_examples::segments_json(regions)).at("segments");
   if (!expect_true(segments.size() == 1U, "one segment per region")) {
     return false;
   }

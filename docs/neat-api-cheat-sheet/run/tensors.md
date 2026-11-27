@@ -61,7 +61,7 @@ run.push([tensor])
 arr = np.frombuffer(out_tensor.copy_dense_bytes_tight(), dtype=np.float32)
 ```
 
-Complete flow: [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/)
+Complete flow: [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/)
 
 ## Options
 
@@ -117,7 +117,7 @@ value.
 | Copy dense bytes | `copy_dense_bytes_tight()` | `copy_dense_bytes_tight()` | — | Returns a tight copy of a dense tensor's bytes. | The simple read path, and the only one in Python. Pair with `dense_bytes_tight()` to size a buffer. |
 | Copy payload bytes | `copy_payload_bytes()` | `copy_payload_bytes()` | — | Copies the payload including composite planes. | NV12 or I420 output you want as one block. |
 | Copy into your buffer | `copy_dense_bytes_tight_to(dst, n)`, `copy_payload_bytes_to(dst, n)` | not available | — | Same, into memory you own. | Avoiding an allocation per frame in C++. |
-| To numpy | not available | `to_numpy(copy=False)` | `copy=False` | Views the tensor as a numpy array through DLPack. | The idiomatic Python read. Pass `copy=True` when the array must outlive the tensor. |
+| To numpy | not available | `to_numpy(copy=False)` | `copy=False` | Views the tensor as a numpy array through DLPack. The view holds the tensor's zero-copy loan for as long as any array sharing its memory lives, and `np.ascontiguousarray` or `astype(copy=False)` of an array that already has the layout and dtype returns that memory. | The idiomatic Python read. Pass `copy=True` when the array must outlive the tensor: a run whose outputs are still viewed stops delivering once its loan credits are used, with `zero-copy output loan credits are exhausted`, after six `Model.run` results with the default options. |
 | From numpy | not available | `Tensor.from_numpy(array, copy=False, layout=None, image_format=None, memory=None, byte_format=None)` | `copy=False` | Builds a tensor from an array. | The idiomatic Python push path. `copy=True` when the array is transient. `copy` matters only for `CPU` and `A65`: `EV74`, the default for `memory=None`, and `MLA` always copy. |
 | From torch | not available | `Tensor.from_torch(...)` / `from_pytorch(...)`, `to_torch(...)` | `copy=False` | PyTorch interop through DLPack; a non-CPU torch tensor is moved to CPU first. | Feeding a model from an existing torch pipeline. |
 | From a Python list | not available | `Tensor.from_list(data, shape=None, dtype=None, ...)` | copies | Builds from a sequence, routed through `from_numpy`. Int lists become `int32`, since `int64` is not a device dtype. | Small hand-written inputs and tests. |
@@ -185,12 +185,12 @@ directly.
 **A retained zero-copy tensor stalls the pipeline.** Under
 `OutputMemory::ZeroCopy`, a pulled tensor and any `Mapping` over it hold a loan
 on the producer's buffer pool. Hold several frames' worth and the pool runs
-out, the producer blocks, and throughput collapses — with no error message.
-Symptom: frame rate drops to near zero after a few seconds, and nothing in the
-logs. Fix: scope the mapping tightly and copy out what you need to keep. Patchcore
-says so in a comment where it does it: it scores while the read mapping owns
-the loan and releases it before drawing. If you must
-keep tensors, use `OutputMemory::Owned`, or `clone()` them.
+out and the producer blocks. Symptom: no output arrives, and after 5 seconds
+`Run::pull` logs `zero-copy output loan credits are exhausted` with the credit
+limit, six for `Model.run` with the default options. A Python
+`to_numpy(copy=False)` view holds the loan the same way. Fix: scope the
+mapping tightly and copy out what you need to keep. If you must keep tensors,
+use `OutputMemory::Owned`, `clone()` them, or in Python `to_numpy(copy=True)`.
 
 **`strides_bytes` being empty does not mean "contiguous unknown".** It means
 compact row-major derived from `shape` and `dtype`. Code that checks
@@ -223,7 +223,7 @@ not. Cast before pushing.
 
 ## Used in
 
-- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) — `map_read()` guarded by `is_contiguous()` and `dense_bytes_tight()`, loan released before drawing
+- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) — `to_numpy(copy=True)` on `Model::run` outputs it keeps, C++ `copy_dense_bytes_tight_to`
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — `map_read()` with a copy fallback, `ZeroCopy` output
 - [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — the Y plane of a pulled NV12 frame (C++ a `cv::Mat` view over `map_nv12_read()`, Python `planes` and `copy_payload_bytes`) as a `GRAY8` tensor in the default `TensorMemory::EV74`
 - [image-classification-explorer](../../../examples/classification/image-classification-explorer/) — Python `copy_dense_bytes_tight()` with an explicit dtype

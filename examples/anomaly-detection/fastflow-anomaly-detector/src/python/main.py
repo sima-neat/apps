@@ -24,10 +24,10 @@ for apps_root in Path(__file__).resolve().parents:
 else:
     raise SystemExit("support/python not found above this example; reinstall the Apps package")
 
+from sima_examples import anomaly_regions
 from sima_examples.config import Config
 from sima_examples.rtsp_probe import RtspStreamInfo, probe_rtsp_stream_info
 from sima_examples.stop_signals import stop_on_signals
-from utils import anomaly_regions
 
 RTSP_CODECS = {
     "h264": pyneat.RtspCodec.H264,
