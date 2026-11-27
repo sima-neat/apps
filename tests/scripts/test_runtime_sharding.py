@@ -18,6 +18,9 @@ import run_runtime_shard as execution
 
 from tests.utils.test_scope import discover_scope, validate_scope
 
+SOM_16 = "modalix-som-16gig"
+HIGH_DENSITY = "object-detection/high-density-multi-stream-object-detector"
+
 
 def runner(name, *, rtsp=False, busy=False, status="online", extra=(),
            firmware="3.0.0_master_B2372"):
@@ -548,3 +551,49 @@ def test_oversized_model_runs_without_persistent_publication(acquisition, monkey
     assert (tmp_path / "models-1/model.tar.gz").is_file()
     prepare(2)
     assert len(downloads) == 2
+
+
+def test_validate_scope_accepts_runner_labels_on_a_disabled_suite(scope):
+    e2e = scope["examples"][HIGH_DENSITY]["e2e"]["python"]
+    e2e["enabled"] = False
+    e2e["runner_labels"] = [SOM_16]
+    assert not validate_scope(scope, ROOT)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize(("value", "message"), [
+    (None, "must be a list"),
+    (SOM_16, "must be a list"),
+    ([], "must not be empty"),
+    ([""], "items must be non-empty strings, not ''"),
+    ([16], "items must be non-empty strings, not 16"),
+    (["  "], "item '  ' must not contain whitespace"),
+    ([f" {SOM_16}"], f"item ' {SOM_16}' must not contain whitespace"),
+    (["modalix som"], "item 'modalix som' must not contain whitespace"),
+    (["modalix-som\t16gig"], "item 'modalix-som\\t16gig' must not contain whitespace"),
+    ([f"{SOM_16}\n"], f"item '{SOM_16}\\n' must not contain whitespace"),
+    ([SOM_16, "Modalix-SOM-16GIG"], "repeats 'Modalix-SOM-16GIG'"),
+    (["Modalix-SOM-16GIG", SOM_16], f"repeats '{SOM_16}'"),
+    (["RTSP"], "must not name the legacy rtsp label"),
+    ([SOM_16, "rtsp"], "must not name the legacy rtsp label"),
+])
+def test_validate_scope_rejects_invalid_runner_labels(scope, value, message, enabled):
+    e2e = scope["examples"][HIGH_DENSITY]["e2e"]["python"]
+    e2e["runner_labels"] = value
+    e2e["enabled"] = enabled
+    assert f"{HIGH_DENSITY}: e2e.python.runner_labels {message}" in validate_scope(scope, ROOT)
+
+
+@pytest.mark.parametrize(("place", "message"), [
+    ("top", "runner_labels belongs under e2e.<language>"),
+    ("e2e", "e2e.runner_labels belongs under e2e.<language>"),
+    ("unit", "unit.runner_labels belongs under e2e.<language>"),
+    ("typo", "e2e.python has unknown key 'runner_label'"),
+])
+def test_validate_scope_rejects_misplaced_runner_labels(scope, place, message):
+    entry = scope["examples"][HIGH_DENSITY]
+    if place == "typo":
+        entry["e2e"]["python"]["runner_label"] = [SOM_16]
+    else:
+        {"top": entry, "e2e": entry["e2e"], "unit": entry["unit"]}[place]["runner_labels"] = [SOM_16]
+    assert f"{HIGH_DENSITY}: {message}" in validate_scope(scope, ROOT)
