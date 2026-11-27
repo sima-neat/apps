@@ -346,7 +346,9 @@ neat::Graph decoder_graph(const sima_examples::Config& config,
 neat::Graph features_graph(neat::Model& model) {
   neat::Graph graph("extractor");
   graph.add(model.graph());
-  graph.add(neat::nodes::Output("features"));
+  // Keeps only the newest features, so host scoring slower than the stream skips frames
+  // instead of holding up the RTSP input and the video Insight shows.
+  graph.add(neat::nodes::Output("features", neat::OutputOptions::Latest()));
   return graph;
 }
 
@@ -404,7 +406,8 @@ RegionCounts send_regions(neat::Run& run, neat::MetadataSender& metadata_sender,
       throw std::runtime_error("metadata send failed: " + send_error);
     }
     ++counts.processed;
-    counts.flagged += result.regions.empty() ? 0 : 1;
+    // An anomalous frame whose smoothed map stays below the patch threshold has no region.
+    counts.flagged += result.score > threshold ? 1 : 0;
   }
   return counts;
 }

@@ -131,6 +131,7 @@ close but not right.
 - [face-recognizer](../../../examples/face-recognition/face-recognizer/): two named outputs joined with `graphs::Combine`
 - [multi-stream-multi-model](../../../examples/multi-model/multi-stream-multi-model/): one named output per stream, and `Latest()` on an output of decoded frames
 - [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/): `Latest()` on decoded frames the application pulls
+- [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/): `Latest()` on RTSP model features the host scores
 
 ## Source
 

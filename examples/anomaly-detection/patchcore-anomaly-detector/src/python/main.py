@@ -271,7 +271,9 @@ def features_graph(model: pyneat.Model) -> pyneat.Graph:
     """Decoded frames -> PatchCore feature extractor -> "features" output."""
     graph = pyneat.Graph("extractor")
     graph.add(model.graph())
-    graph.add(pyneat.nodes.output("features"))
+    # Keeps only the newest features, so host scoring slower than the stream skips frames
+    # instead of holding up the RTSP input and the video Insight shows.
+    graph.add(pyneat.nodes.output("features", pyneat.OutputOptions.latest()))
     return graph
 
 
@@ -321,7 +323,7 @@ def send_regions(
             if run.last_error() or not run.running():
                 raise RuntimeError(f"patch_features output closed: {run.last_error()}")
             continue
-        _, regions = defect_regions(bank, sample_features(sample), threshold, options)
+        score, regions = defect_regions(bank, sample_features(sample), threshold, options)
         # A normal frame sends no segments, which clears the last outline. A nonblocking send
         # drops the message while the socket buffer is full; the drops are counted in the
         # sender's stats and reported when the run ends. Any other failure raises.
@@ -332,7 +334,8 @@ def send_regions(
             str(sample.frame_id) if sample.frame_id >= 0 else "",
         )
         processed += 1
-        flagged += bool(regions)
+        # An anomalous frame whose smoothed map stays below the patch threshold has no region.
+        flagged += score > threshold
     return processed, flagged
 
 
