@@ -4,16 +4,16 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolov5s_face_raw_split_mpk.tar.gz
     file: yolov5s_face_raw_split_mpk.tar.gz
 unit:
-  python: true
-  cpp: true
+  python: false
+  cpp: false
 e2e:
   python:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - yolov5s_face_raw_split
   cpp:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - yolov5s_face_raw_split

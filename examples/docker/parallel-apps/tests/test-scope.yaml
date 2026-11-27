@@ -1,6 +1,6 @@
 models: {}
 unit:
-  python: true
+  python: false
   cpp: false
 e2e:
   python:

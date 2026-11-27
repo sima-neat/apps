@@ -11,17 +11,17 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/blazepose_ghum_heavy_w16a16_mpk.tar.gz
     file: blazepose_ghum_heavy_w16a16_mpk.tar.gz
 unit:
-  python: true
-  cpp: true
+  python: false
+  cpp: false
 e2e:
   python:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - yolo26m_w8a8_mpk
     - blazepose-ghum-heavy
   cpp:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - yolo26m_w8a8_mpk

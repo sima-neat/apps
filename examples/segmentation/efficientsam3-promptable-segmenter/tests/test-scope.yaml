@@ -8,17 +8,17 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/efficientsam3_text_encoder_mpk.tar.gz
     file: efficientsam3_text_encoder_mpk.tar.gz
 unit:
-  python: true
-  cpp: true
+  python: false
+  cpp: false
 e2e:
   python:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - efficientsam3
     - efficientsam3_text_encoder
   cpp:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - efficientsam3

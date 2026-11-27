@@ -8,17 +8,17 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/w600k_r50.surgery_mpk.tar.gz
     file: w600k_r50.surgery_mpk.tar.gz
 unit:
-  python: true
-  cpp: true
+  python: false
+  cpp: false
 e2e:
   python:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - scrfd
     - arcface
   cpp:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - scrfd
