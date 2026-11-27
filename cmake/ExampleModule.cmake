@@ -1,3 +1,5 @@
+include("${CMAKE_CURRENT_LIST_DIR}/YamlCpp.cmake")
+
 function(_sima_neat_apps_find_sources out_var module_dir)
   set(_sources)
   if (EXISTS "${module_dir}/main.cpp")
@@ -68,10 +70,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
   endif()
 
   find_package(nlohmann_json REQUIRED)
-  if (NOT TARGET PkgConfig::YAML_CPP)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
-  endif()
+  sima_neat_apps_ensure_yaml_cpp()
 
   add_library(sima_neat_apps_support_runtime STATIC
     "${apps_root}/support/cpp/sima_examples/asset_utils.cpp"
@@ -87,7 +86,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
       SimaNeatApps::sima_neat
       opencv_videoio
       nlohmann_json::nlohmann_json
-      PkgConfig::YAML_CPP
+      SimaNeatApps::yaml_cpp
   )
 
   target_include_directories(sima_neat_apps_support_runtime
@@ -110,10 +109,7 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
   endif()
-  if (NOT TARGET PkgConfig::YAML_CPP)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
-  endif()
+  sima_neat_apps_ensure_yaml_cpp()
 
   add_library(sima_neat_apps_support_testing STATIC
     "${apps_root}/support/cpp/sima_examples/config.cpp"
@@ -130,7 +126,7 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
       SimaNeatApps::support_runtime
       nlohmann_json::nlohmann_json
       PkgConfig::OPENCV
-      PkgConfig::YAML_CPP
+      SimaNeatApps::yaml_cpp
   )
 
   target_include_directories(sima_neat_apps_support_testing

@@ -284,6 +284,8 @@ the `snap` policy, while a release-preparation branch can select an exact Core
 artifact. Vulcan records the resolved Core target under package metadata and
 the Apps installer uses that same target. Insight is not pinned in the Apps
 manifest.
+`cmake/YamlCpp.cmake` pins the yaml-cpp 0.8.0 source by SHA-256, for the
+headers of the `libyaml-cpp.so.0.8` that Core links.
 
 Builds inherit the sysroot requirement from Core's bundled Scheduler. Official
 releases require a matching cached SDK receipt, package inventory and package
