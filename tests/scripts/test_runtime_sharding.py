@@ -815,6 +815,19 @@ def test_label_sets_beyond_the_fleet_cap_fall_back_with_a_reason(scope):
     )
 
 
+def test_a_full_fleet_drops_a_shard_whose_set_the_incoming_runner_also_covers(scope):
+    scope = without_runner_labels(scope)
+    e2e = [s["id"] for s in planner.enumerate_suites(scope, {}) if ":e2e:" in s["id"]][:9]
+    for i, suite in enumerate(e2e):
+        language, _, example = suite.split(":", 2)
+        scope["examples"][example]["e2e"][language]["runner_labels"] = [f"label-{i}"]
+    fleet = [runner(f"runner-{i}", extra=(f"label-{i}",)) for i in range(8)]
+    fleet.append(runner("runner-x", extra=("label-0", "label-8")))
+    plan = planner.make_plan(scope, fleet, BASE_LABELS, {}, "abc")
+    assert candidates(plan) == [f"runner-{i}" for i in range(1, 8)] + ["runner-x"]
+    assert plan["unmet_runner_labels"] == {}
+
+
 @pytest.mark.parametrize("unavailable", ["unready", "offline"])
 def test_missing_16_gib_runner_falls_back_to_any_shard_and_records_it(constrained, unavailable):
     status = "offline" if unavailable == "offline" else "online"

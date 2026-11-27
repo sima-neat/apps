@@ -111,7 +111,7 @@ def select_fleet(runners, required, maximum, excluded_names=(), suites=()):
             ),
         )
         if len(selected) == maximum:
-            spare = spare_shard(selected, suites)
+            spare = spare_shard(selected, suites, best)
             if spare is None:
                 break
             selected.remove(spare)
@@ -137,14 +137,16 @@ def covers(candidates, need):
     return any(has_labels(labels, need) for _, labels in candidates)
 
 
-def spare_shard(selected, suites):
-    """The last shard whose removal leaves every covered label set covered, if any."""
+def spare_shard(selected, suites, incoming):
+    """The last shard whose removal leaves every covered set covered once incoming joins."""
     needs = {tuple(s["runner_labels"]) for s in suites if s["runner_labels"]}
     covered = [need for need in needs if covers(selected, need)]
-    for candidate in reversed(selected):
-        rest = [c for c in selected if c is not candidate]
-        if all(covers(rest, need) for need in covered):
-            return candidate
+    # Drop a shard the rest already covers first, so idle shards keep their label sets.
+    for joining in ([], [incoming]):
+        for candidate in reversed(selected):
+            rest = [c for c in selected if c is not candidate] + joining
+            if all(covers(rest, need) for need in covered):
+                return candidate
     return None
 
 
