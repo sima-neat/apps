@@ -102,8 +102,7 @@ FAKES = {
         """,
     "sysroot": """\
         #!/usr/bin/env bash
-        printf 'sysroot:SDK_PKG_LIST=%s SYSROOT=%s %s\\n' "${SDK_PKG_LIST-<unset>}" \\
-          "${SYSROOT-<unset>}" "$*" >> "${NEAT_APPS_TEST_EVENTS}"
+        printf 'sysroot:SDK_PKG_LIST=%s %s\\n' "${SDK_PKG_LIST-<unset>}" "$*" >> "${NEAT_APPS_TEST_EVENTS}"
         overlay="${NEAT_APPS_TEST_EVENTS}.overlay"
         case "$1" in
           update)
@@ -198,7 +197,7 @@ def _policy(sysroot_version: str) -> dict[str, object]:
 
 def _select(env: dict[str, str], ref: str, spec: str) -> None:
     """Make deps/neat-core.json and sima-cli name another Core."""
-    core_file = Path(env["NEAT_APPS_TEST_DEPS_DIR"]) / "neat-core.json"
+    core_file = Path(env["NEAT_APPS_TEST_DEPS"]) / "neat-core.json"
     core_file.write_text(json.dumps({"neat-core": {"ref": ref, "spec": spec}}), encoding="utf-8")
     resolve = json.loads(env["NEAT_APPS_TEST_RESOLVE"])
     resolve.update({"ref": ref, "resolved_spec": spec})
@@ -218,6 +217,9 @@ def _sync_env(
         (bin_dir / name).write_text(textwrap.dedent(body), encoding="utf-8")
         (bin_dir / name).chmod(0o755)
 
+    # The script finds deps/ next to its own scripts/ci/, so each test runs a copy.
+    (tmp_path / "scripts/ci").mkdir(parents=True)
+    shutil.copy2(SYNC, tmp_path / "scripts/ci/sync-sdk-sysroot.sh")
     deps = tmp_path / "deps"
     deps.mkdir()
     (deps / "manifest.json").write_text(
@@ -251,7 +253,7 @@ def _sync_env(
     env.update({
         "PATH": f"{bin_dir}:{env['PATH']}",
         "TMPDIR": str(tmp_path / "tmp"),
-        "NEAT_APPS_TEST_DEPS_DIR": str(deps),
+        "NEAT_APPS_TEST_DEPS": str(deps),
         "NEAT_APPS_TEST_CORE_URL": str(tmp_path / "core.git"),
         "NEAT_APPS_TEST_REAL_GIT": shutil.which("git"),
         "ELXR_SDK_RELEASE_FILE": str(sdk_release),
@@ -276,7 +278,8 @@ def _run_sync(
     tmp_path: Path, env: dict[str, str], *args: str
 ) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
-        [str(SYNC), *args], cwd=APPS_ROOT, env=env, text=True, capture_output=True, check=False
+        [str(tmp_path / "scripts/ci/sync-sdk-sysroot.sh"), *args],
+        cwd=APPS_ROOT, env=env, text=True, capture_output=True, check=False,
     )
     # The script removes its downloads and Core checkout on success and on failure.
     assert list((tmp_path / "tmp").iterdir()) == [], proc.stderr
@@ -333,7 +336,7 @@ def test_pin_updates_sysroot_as_root_with_sdk_package_list(tmp_path, version):
     update, status = _events(tmp_path, "sysroot:")
     assert update == (
         "sysroot:SDK_PKG_LIST=libgrpc-dev,protobuf-compiler-grpc "
-        f"SYSROOT={sysroot} update --sysroot {sysroot} {version}"
+        f"update --sysroot {sysroot} {version}"
     )
     assert status.endswith(f" status --sysroot {sysroot}")
     assert (f"Updating the SDK sysroot to {version}, the version Core's Scheduler was built for."
@@ -351,7 +354,7 @@ def test_pin_updates_sysroot_through_sudo_when_not_root(tmp_path):
     _assert_written(tmp_path, proc, env)
     sysroot = env["SYSROOT"]
     assert _events(tmp_path, "sudo:") == [
-        f"sudo:env SDK_PKG_LIST= SYSROOT={sysroot} sysroot update --sysroot {sysroot} {PRE_RELEASE}"
+        f"sudo:env SDK_PKG_LIST= sysroot update --sysroot {sysroot} {PRE_RELEASE}"
     ]
 
 
@@ -440,7 +443,7 @@ def test_validator_runs_from_selected_core_commit_with_apps_manifest(tmp_path, v
     proc = _run_sync(tmp_path, env)
 
     _assert_written(tmp_path, proc, env)
-    manifest = str(Path(env["NEAT_APPS_TEST_DEPS_DIR"]) / "manifest.json")
+    manifest = str(Path(env["NEAT_APPS_TEST_DEPS"]) / "manifest.json")
     assert _validator_calls(tmp_path) == [[
         "--policy-json", env["NEAT_APPS_TEST_POLICY"].rstrip("\n"),
         "--core-manifest", manifest,
@@ -449,11 +452,17 @@ def test_validator_runs_from_selected_core_commit_with_apps_manifest(tmp_path, v
     assert _events(tmp_path, "sima-cli:") == [
         f"sima-cli:neat install --env {vulcan_env} -t minimal --json core@{REF}:{_spec(env)}"
     ]
+    # The cone is set before the checkout, so the checkout writes only tools/ci.
+    git_calls = _events(tmp_path, "git:")
+    sparse = [i for i, call in enumerate(git_calls) if call.endswith(" sparse-checkout set --cone tools/ci")]
+    checkout = [i for i, call in enumerate(git_calls) if " checkout -q " in call]
+    assert len(sparse) == len(checkout) == 1 and sparse[0] < checkout[0]
 
 
 def test_defaults_are_production_the_sdk_sysroot_and_the_public_core(tmp_path):
     env = _sync_env(tmp_path, version=RELEASE)
-    for name in ("NEAT_VULCAN_ENV", "SYSROOT"):
+    # CI runs the script with neither variable set, and finds sima-cli on PATH.
+    for name in ("NEAT_VULCAN_ENV", "SYSROOT", "SIMA_CLI_BIN"):
         del env[name]
 
     proc = _run_sync(tmp_path, env)
@@ -473,14 +482,14 @@ def test_official_release_changes_nothing_after_core_checks_the_sysroot(tmp_path
 
     _assert_written(tmp_path, proc, env)
     policy = env["NEAT_APPS_TEST_POLICY"].rstrip("\n")
-    manifest = str(Path(env["NEAT_APPS_TEST_DEPS_DIR"]) / "manifest.json")
+    manifest = str(Path(env["NEAT_APPS_TEST_DEPS"]) / "manifest.json")
     assert _validator_calls(tmp_path) == [
         ["--policy-json", policy, "--core-manifest", manifest, "--field", "sysroot-version"],
         ["--policy-json", policy, "--core-manifest", manifest,
          "--sysroot", env["SYSROOT"], "--check-release-sdk"],
     ]
     assert "SKIP sysroot installation: stub" in proc.stdout
-    assert [line.split(" ", 2)[-1] for line in _events(tmp_path, "sysroot:")] == [
+    assert [line.split(" ", 1)[-1] for line in _events(tmp_path, "sysroot:")] == [
         f"status --sysroot {env['SYSROOT']}"
     ]
 
@@ -642,7 +651,7 @@ def test_sima_cli_failure_or_identity_mismatch_is_rejected(tmp_path, change, mes
 )
 def test_missing_or_malformed_core_selection_is_rejected(tmp_path, core_json, message):
     env = _sync_env(tmp_path)
-    core_file = Path(env["NEAT_APPS_TEST_DEPS_DIR"]) / "neat-core.json"
+    core_file = Path(env["NEAT_APPS_TEST_DEPS"]) / "neat-core.json"
     if core_json is None:
         core_file.unlink()
     else:
@@ -798,14 +807,16 @@ def test_unknown_argument_is_rejected(tmp_path):
 
     assert proc.returncode == 1
     assert proc.stderr == "Unknown argument: --bogus\n"
-    assert not _policy_output(tmp_path).exists()
+    # A usage error stops before any work and leaves the earlier policy in place.
+    assert _policy_output(tmp_path).read_text(encoding="utf-8") == "{}"
     assert _events(tmp_path) == []
 
 
-def test_help_prints_the_usage_and_changes_nothing(tmp_path):
+@pytest.mark.parametrize("option", ["-h", "--help"])
+def test_help_prints_the_usage_and_keeps_the_policy(tmp_path, option):
     env = _sync_env(tmp_path)
 
-    proc = _run_sync(tmp_path, env, "--help")
+    proc = _run_sync(tmp_path, env, option)
 
     assert proc.returncode == 0
     assert proc.stdout.splitlines() == [
@@ -817,4 +828,5 @@ def test_help_prints_the_usage_and_changes_nothing(tmp_path):
         "before ./build.sh --all, because a sysroot update replaces a Core install in the sysroot.",
         "Needs an eLxr SDK, sima-cli, curl and git.",
     ]
+    assert _policy_output(tmp_path).read_text(encoding="utf-8") == "{}"
     assert _events(tmp_path) == []

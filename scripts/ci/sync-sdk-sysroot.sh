@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DEPS_DIR="${NEAT_APPS_TEST_DEPS_DIR:-${ROOT_DIR}/deps}"
+DEPS_DIR="${ROOT_DIR}/deps"
 APPS_MANIFEST="${DEPS_DIR}/manifest.json"
 NEAT_CORE_METADATA="${DEPS_DIR}/neat-core.json"
 POLICY_OUTPUT="${DEPS_DIR}/scheduler-sdk-policy.json"
@@ -19,14 +19,14 @@ SIMA_CLI_BIN="${SIMA_CLI_BIN:-sima-cli}"
 VULCAN_ENV="${NEAT_VULCAN_ENV:-production}"
 CORE_GIT_URL="https://github.com/sima-neat/core.git"
 
-# A failed run leaves no policy, so runner selection never reads a stale one.
-rm -f "${POLICY_OUTPUT}"
-
 case "${1:-}" in
   "") ;;
   -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "Unknown argument: $1" >&2; exit 1 ;;
 esac
+
+# A run that fails after this point leaves no policy, so runner selection never reads a stale one.
+rm -f "${POLICY_OUTPUT}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -193,8 +193,7 @@ sysroot_version="$(check_policy --field sysroot-version)" ||
 if [[ "${sysroot_version}" == *~* ]]; then
   # Core gap: no Core entry point applies a Scheduler SDK policy, so this copies prepare_scheduler_sdk.sh.
   pkg_list="$(tr -d '[:space:]' <<< "${SDK_PKG_LIST:-}" | sed 's/,,*/,/g; s/^,//; s/,$//')"
-  update=(env "SDK_PKG_LIST=${pkg_list}" "SYSROOT=${SYSROOT_DIR}" sysroot update --sysroot "${SYSROOT_DIR}"
-    "${sysroot_version}")
+  update=(env "SDK_PKG_LIST=${pkg_list}" sysroot update --sysroot "${SYSROOT_DIR}" "${sysroot_version}")
   echo "Updating the SDK sysroot to ${sysroot_version}, the version Core's Scheduler was built for."
   if [[ "$(id -u)" -eq 0 ]]; then
     "${update[@]}" || fail "Failed to update the SDK sysroot to ${sysroot_version}."
