@@ -9,14 +9,17 @@ models:
 unit:
   python: true
   cpp: true
+# The 20-stream e2e throughput floors ask for 16 GiB DevKits.
 e2e:
   python:
     enabled: true
     requires_rtsp: true
+    runner_labels: [modalix-som-16gig]
     models:
       - yolo26n_w8a8_mpk
   cpp:
     enabled: true
     requires_rtsp: true
+    runner_labels: [modalix-som-16gig]
     models:
       - yolo26n_w8a8_mpk

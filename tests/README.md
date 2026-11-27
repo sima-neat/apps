@@ -93,11 +93,13 @@ even if a test file exists.
 ### Adaptive CI fleet
 
 After the build, Vulcan CI queries the existing GitHub App's read-only runner
-inventory in the resolved Modalix runner group. It selects up to eight idle
-DevKits that match the required hardware, environment, and firmware labels.
-If all eligible DevKits are busy, CI queues one shard. Offline registrations
-do not count as available capacity. GitHub assigns each job to a matching runner,
-so availability can change after planning.
+inventory in the resolved Modalix runner group. It selects up to eight DevKits,
+idle ones first, that match the required hardware, environment, and firmware
+labels. If all eligible DevKits are busy, CI queues one shard, or more when
+suites need different runner labels. Offline registrations do not count as
+available capacity.
+GitHub assigns each job to a matching runner, so availability can change after
+planning.
 
 Every enabled example/language/unit-or-e2e suite is assigned exactly once, and
 the harness self-tests run once. The `requires_rtsp` setting in each E2E scope
@@ -105,8 +107,23 @@ controls whether its shard needs live media fixtures. CI assumes live fixtures
 are required when this setting is absent. Each shard that needs them runs the
 shared Colo setup action with the `all` profile. The action reads
 `/etc/colo-services.json` on its DevKit and exports the test environment
-variables from the media catalog. Runner discovery and assignment use the same
-pool for all suites, without requiring an `rtsp` label.
+variables from the media catalog. Runner discovery uses one pool for all suites
+and requires no `rtsp` label.
+
+CI places a suite whose E2E scope sets `runner_labels` on a shard whose runner
+selector has all of those labels. If only a busy DevKit has them, that shard
+queues. It carries only the suites that need its labels, unless every eligible
+DevKit is busy. If no planned shard has the labels, the suite runs on any shard.
+The planner then warns in the log and the step summary with the suite, the
+labels, and one of these reasons:
+
+- No DevKit in the runner group has the labels.
+- Those DevKits are offline or lack this run's platform or firmware labels.
+- Every selector with the labels also matches a DevKit in `APPS_UNREADY_RUNNERS`.
+- The fleet cap is reached.
+
+Local runs and `tests/test.sh` check the key's format but do not use it to choose
+a DevKit.
 
 The optional repository variable `APPS_UNREADY_RUNNERS` is a JSON array of runner
 names temporarily excluded from Apps admission (for example, while model access
@@ -201,7 +218,7 @@ tests/
     testing/           # VS Code / DevKit task helpers
 
 examples/<category>/<example>/
-  tests/test-scope.yaml      # enabled tests and test model download sources
+  tests/test-scope.yaml      # enabled tests, test model download sources, and CI runner labels
 ```
 
 Generated e2e artifacts are written under `sandbox-test` by default:

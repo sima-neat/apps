@@ -18,6 +18,7 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
 VALID_SOURCES = {"modelzoo", "url", "huggingface", "model-registry"}
 VALID_LANGUAGES = {"python", "cpp"}
 VALID_KINDS = {"unit", "e2e"}
+E2E_FIELDS = {"enabled", "requires_rtsp", "models", "variants", "reason", "runner_labels"}
 MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec", "variant")
 SCOPE_FILE_NAME = "test-scope.yaml"
 SCOPE_FILE_SUBPATH = Path("tests") / SCOPE_FILE_NAME
@@ -206,6 +207,33 @@ def downloadable_models(entry: dict[str, Any], language: str) -> list[str]:
     return models
 
 
+def runner_label_errors(entry: dict[str, Any], language: str) -> list[str]:
+    config = e2e_config(entry, language)
+    if "runner_labels" not in config:
+        return []
+    labels = config["runner_labels"]
+    if not isinstance(labels, list):
+        return ["must be a list"]
+    if not labels:
+        return ["must not be empty"]
+    errors: list[str] = []
+    seen: set[str] = set()
+    for label in labels:
+        if not isinstance(label, str) or not label:
+            errors.append(f"items must be non-empty strings, not {label!r}")
+            continue
+        if any(character.isspace() for character in label):
+            errors.append(f"item {label!r} must not contain whitespace")
+            continue
+        if label.casefold() in seen:
+            errors.append(f"repeats {label!r}")
+        seen.add(label.casefold())
+        if label.casefold() == "rtsp":
+            # The planner never puts the legacy RTSP label in a shard selector.
+            errors.append("must not name the legacy rtsp label")
+    return errors
+
+
 def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
     errors: list[str] = []
     scoped_examples = set(scope["examples"])
@@ -261,10 +289,29 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         "be a filename without directory components"
                     )
         selected_registry_models: set[str] = set()
+        if "runner_labels" in entry:
+            errors.append(f"{example_key}: runner_labels belongs under e2e.<language>")
+        for kind in sorted(VALID_KINDS):
+            mapping = entry.get(kind)
+            if isinstance(mapping, dict):
+                errors.extend(
+                    f"{example_key}: {kind} has unknown key {key!r}"
+                    for key in sorted(set(mapping) - VALID_LANGUAGES, key=str)
+                )
         for language in sorted(VALID_LANGUAGES):
             try:
+                errors.extend(
+                    f"{example_key}: e2e.{language} has unknown key {key!r}"
+                    for key in sorted(
+                        set(e2e_config(entry, language)) - E2E_FIELDS, key=str
+                    )
+                )
                 if not isinstance(e2e_config(entry, language).get("requires_rtsp", True), bool):
                     errors.append(f"{example_key}: e2e.{language}.requires_rtsp must be boolean")
+                errors.extend(
+                    f"{example_key}: e2e.{language}.runner_labels {error}"
+                    for error in runner_label_errors(entry, language)
+                )
             except ValueError as exc:
                 errors.append(f"{example_key}: {exc}")
             for kind in sorted(VALID_KINDS):

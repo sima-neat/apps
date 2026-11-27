@@ -154,8 +154,9 @@ Pretty-print structured output examples.
 
 ## Test Scope
 
-`tests/test-scope.yaml` is the source of truth for enabled tests and model
-artifacts required by e2e coverage.
+`tests/test-scope.yaml` is the source of truth for enabled tests, model artifacts
+required by e2e coverage, and CI runner labels. Scope validation rejects any key
+under `e2e.<language>` other than those in the example below and `reason`.
 
 ```yaml
 models:
@@ -177,6 +178,7 @@ e2e:
   python:
     enabled: true
     requires_rtsp: false # true for live-stream suites; omission defaults to true
+    # runner_labels: [<label>] # optional: only when the suite needs DevKits with these labels
     models:
       - model_id
     variants:          # optional: also run the suite with these models when
@@ -184,6 +186,7 @@ e2e:
   cpp:
     enabled: true
     requires_rtsp: false
+    # runner_labels: [<label>] # optional: only when the suite needs DevKits with these labels
     models:
       - model_id
 ```
@@ -191,6 +194,10 @@ e2e:
 The first entry under `models` is the model the suite runs with; every entry is
 downloaded. `variants` are exercised only when `SIMANEAT_APPS_TEST_MODEL_VARIANTS=1`,
 which the nightly workflow sets, so a pull request run stays at one model per suite.
+`runner_labels` lists the GitHub runner labels that CI looks for on the DevKit of
+an enabled e2e suite. Scope validation checks its format on disabled suites too.
+[tests/README.md](tests/README.md#adaptive-ci-fleet) says what happens when no
+DevKit has them.
 
 Disable unsupported coverage in `test-scope.yaml` and include a short reason
 for disabled e2e paths. Enabled coverage must have the matching test file:
