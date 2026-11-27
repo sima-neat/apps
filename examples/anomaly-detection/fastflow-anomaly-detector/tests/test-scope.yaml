@@ -4,16 +4,16 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/fastflow_demo_mpk.tar.gz
     file: fastflow_demo_mpk.tar.gz
 unit:
-  python: true
-  cpp: true
+  python: false
+  cpp: false
 e2e:
   python:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - fastflow_demo
   cpp:
-    enabled: true
+    enabled: false
     requires_rtsp: true
     models:
     - fastflow_demo

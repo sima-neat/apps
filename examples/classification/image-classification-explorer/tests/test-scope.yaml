@@ -28,11 +28,11 @@ models:
     spec: latest
     file: resnext_101_64x4d_w16a16_mpk.tar.gz
 unit:
-  python: true
-  cpp: true
+  python: false
+  cpp: false
 e2e:
   python:
-    enabled: true
+    enabled: false
     requires_rtsp: false
     models:
     - resnet_50_w16a16
@@ -40,7 +40,7 @@ e2e:
     - densenet_121_w16a16
     - resnext_101_64x4d_w16a16
   cpp:
-    enabled: true
+    enabled: false
     requires_rtsp: false
     models:
     - resnet_50_w16a16

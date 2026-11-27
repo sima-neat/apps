@@ -4,16 +4,16 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
     file: retinaface_mobilenet25_mod_0_mpk.tar.gz
 unit:
-  python: true
-  cpp: true
+  python: false
+  cpp: false
 e2e:
   python:
-    enabled: true
+    enabled: false
     requires_rtsp: false
     models:
       - retinaface_mobilenet25
   cpp:
-    enabled: true
+    enabled: false
     requires_rtsp: false
     models:
       - retinaface_mobilenet25

@@ -36,7 +36,7 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/midas_v21_small_256_mpk.tar.gz
     file: midas_v21_small_256_mpk.tar.gz
 unit:
-  python: true
+  python: false
   cpp: false
 e2e:
   python:

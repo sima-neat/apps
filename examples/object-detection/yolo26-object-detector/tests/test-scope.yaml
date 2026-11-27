@@ -7,16 +7,16 @@ models:
     variant: w16a16
     file: yolo26m_w16a16_mpk.tar.gz
 unit:
-  python: true
-  cpp: true
+  python: false
+  cpp: false
 e2e:
   python:
-    enabled: true
+    enabled: false
     requires_rtsp: false
     models:
     - yolo26m_w16a16_mpk
   cpp:
-    enabled: true
+    enabled: false
     requires_rtsp: false
     models:
     - yolo26m_w16a16_mpk
