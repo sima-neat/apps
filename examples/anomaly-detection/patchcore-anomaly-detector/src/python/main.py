@@ -8,6 +8,7 @@ each anomalous frame's defect regions as polygons; image_dir writes the outlined
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 import threading
 from pathlib import Path
@@ -207,7 +208,12 @@ def defect_regions(
     if scored.image_score <= threshold:
         return scored.image_score, []
     side_map = memory_bank.anomaly_map(scored.score_map, MODEL_INPUT_SIDE, MAP_SIGMA)
-    return scored.image_score, anomaly_regions.defect_regions(side_map, options)
+    # Insight reads a segment's confidence as 0 to 1, so the raw distance is scaled to it.
+    regions = [
+        dataclasses.replace(region, score=memory_bank.confidence(region.score, options.threshold))
+        for region in anomaly_regions.defect_regions(side_map, options)
+    ]
+    return scored.image_score, regions
 
 
 def score_images(config: Config, model_path: Path, bank: memory_bank.MemoryBank, meta: dict) -> None:

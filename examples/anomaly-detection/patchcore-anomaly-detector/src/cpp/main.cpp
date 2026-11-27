@@ -275,7 +275,12 @@ FrameResult defect_regions(const patchcore::MemoryBank& bank,
   }
   const cv::Mat map =
       patchcore::anomaly_map(scored, features.height, features.width, kModelInputSide, kMapSigma);
-  return {scored.image_score, sima_examples::defect_regions(map, options)};
+  auto regions = sima_examples::defect_regions(map, options);
+  // Insight reads a segment's confidence as 0 to 1, so the raw distance is scaled to it.
+  for (auto& region : regions) {
+    region.score = patchcore::confidence(region.score, options.threshold);
+  }
+  return {scored.image_score, std::move(regions)};
 }
 
 // Score every image of input.source and write it to output.dir with its regions outlined.

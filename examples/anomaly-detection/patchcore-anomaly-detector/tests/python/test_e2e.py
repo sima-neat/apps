@@ -156,6 +156,8 @@ def test_publishes_insight_video_and_regions(
     assert segments, "no frame carried a defect region"
     for segment in segments:
         assert segment["label"] == "anomaly", segment
+        # A region lies above the patch threshold, so its confidence is above 0.5.
+        assert 0.5 < segment["confidence"] <= 1.0, segment
         x, y, box_width, box_height = segment["bbox"]
         assert 0 <= x and 0 <= y and x + box_width <= width and y + box_height <= height
         assert segment["mask_format"] == "polygon"

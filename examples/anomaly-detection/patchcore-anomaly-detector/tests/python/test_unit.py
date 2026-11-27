@@ -103,6 +103,13 @@ def test_percentile_threshold_interpolates_like_numpy():
     assert memory_bank.percentile_threshold(scores, 99.0) == pytest.approx(99.01, abs=1e-4)
 
 
+def test_confidence_is_half_at_the_threshold_and_capped_at_one():
+    assert memory_bank.confidence(20.0, 20.0) == pytest.approx(0.5)
+    assert memory_bank.confidence(30.0, 20.0) == pytest.approx(0.75)
+    assert memory_bank.confidence(50.0, 20.0) == 1.0
+    assert memory_bank.confidence(-1.0, 20.0) == 0.0
+
+
 def test_extract_hwc_transposes_channel_first_output():
     chw = np.arange(12, dtype=np.float32).reshape(1, 3, 2, 2)
     hwc = memory_bank.extract_hwc(chw, embed_dim=3)

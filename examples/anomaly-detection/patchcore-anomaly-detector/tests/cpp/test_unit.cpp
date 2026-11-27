@@ -145,6 +145,14 @@ bool test_percentile_threshold_interpolates_like_numpy() {
                      "the 99th percentile of 1..100 is 99.01");
 }
 
+bool test_confidence_is_half_at_the_threshold_and_capped_at_one() {
+  return expect_true(std::abs(patchcore::confidence(20.0, 20.0) - 0.5) < 1e-9 &&
+                         std::abs(patchcore::confidence(30.0, 20.0) - 0.75) < 1e-9 &&
+                         patchcore::confidence(50.0, 20.0) == 1.0 &&
+                         patchcore::confidence(-1.0, 20.0) == 0.0,
+                     "confidence is 0.5 at the threshold and stays within 0 to 1");
+}
+
 bool test_extract_hwc_transposes_channel_first_output() {
   std::vector<float> chw(12);
   for (std::size_t i = 0; i < chw.size(); ++i) {
@@ -222,6 +230,7 @@ int main() {
   ok &= test_reweighting_never_raises_the_plain_max_score();
   ok &= test_coreset_keeps_the_ratio_starting_at_the_seed_patch();
   ok &= test_percentile_threshold_interpolates_like_numpy();
+  ok &= test_confidence_is_half_at_the_threshold_and_capped_at_one();
   ok &= test_extract_hwc_transposes_channel_first_output();
   ok &= test_bank_meta_round_trips();
   ok &= test_a_bank_for_another_model_or_bank_file_is_rejected();

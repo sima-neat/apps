@@ -80,6 +80,14 @@ setup belongs to the Insight documentation or the installed Insight skill.
   `multipartdemux` stamps a JPEG part only when it ends in a new HTTP chunk. Send `-1` for
   those frames, and expect some boxes from an HTTP source to show unpaired.
 - `frame_id` is the `Sample`'s `frame_id` as a string. Insight reports it in its statistics.
+- `confidence`, of a box or a `segmentation` segment, is a score from 0 to 1, which Insight
+  shows as a percentage after the label. A raw score, such as a feature distance of 30, shows as
+  `3000%`: scale it to 0 to 1 before sending.
+- Insight holds the video back by a sync buffer and drops each overlay whose metadata arrives
+  after its frame was shown, with a `Metadata late` badge on the channel. The badge shows how
+  late the metadata is and offers a larger buffer for that channel. Scoring on the host can need
+  it: on a Modalix DevKit, the PatchCore example's regions arrived about 240 ms after their
+  frame, and Insight suggested a 600 ms buffer.
 
 ### Track overlay payload
 

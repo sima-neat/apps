@@ -116,8 +116,8 @@ int run_image_case(const std::string& binary, const std::string& model_path,
   return ok ? 0 : 1;
 }
 
-// Every segment is an anomaly with its box and outline in the frame; returns the segment count,
-// or -1 for an invalid one.
+// Every segment is an anomaly with its box and outline in the frame and a confidence above 0.5;
+// returns the segment count, or -1 for an invalid one.
 int valid_segments(const std::vector<MetadataJsonMessage>& messages, int width, int height) {
   int count = 0;
   for (const auto& message : messages) {
@@ -132,7 +132,10 @@ int valid_segments(const std::vector<MetadataJsonMessage>& messages, int width, 
         const int y = point.at(1).get<int>();
         inside &= x >= 0 && x < width && y >= 0 && y < height;
       }
-      if (segment.at("label") != "anomaly" || segment.at("mask_format") != "polygon" || !inside) {
+      // A region lies above the patch threshold, so its confidence is above 0.5.
+      const double confidence = segment.at("confidence").get<double>();
+      if (segment.at("label") != "anomaly" || segment.at("mask_format") != "polygon" || !inside ||
+          confidence <= 0.5 || confidence > 1.0) {
         std::cerr << "[FAIL] unexpected segment: " << segment.dump() << "\n";
         return -1;
       }

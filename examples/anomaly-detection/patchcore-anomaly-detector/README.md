@@ -14,7 +14,7 @@
 
 ## Concept
 
-Flags surface defects on parts in one H.264, H.265, or MJPEG RTSP stream, or in a folder of images, by comparing every patch with a memory bank calibrated from your own known-good images, and outlines each defect in Insight.
+Flags surface defects on parts in an H.264, H.265, or MJPEG RTSP stream or a folder of images by comparing each patch with a memory bank of your known-good images, and outlines each defect in Insight.
 
 ```text
 How does a frame move through patchcore-anomaly-detector?
@@ -54,7 +54,7 @@ How does a frame move through patchcore-anomaly-detector?
 - `RtspEncodedInput` feeds both `VideoSender`, which passes the video to Insight as received, and `SimaDecode`, whose NV12 frames EV74 converts, stretches to the 224x224 model input, and normalizes as ImageNet.
 - The PatchCore model, `wide_resnet50_2` with torchvision `IMAGENET1K_V1` weights, turns each frame into a 28x28 grid of patch features, 1,536 values each.
 - On the host, each patch is scored by its distance to the nearest patch of the memory bank, and the worst patch, reweighted as the PatchCore paper does, decides the frame's score. A frame above the calibrated threshold is anomalous: its scores are upsampled to 224x224 and smoothed, and connected regions above the calibrated patch threshold are its defects.
-- Each frame's defects go to Insight as `segmentation` metadata, one polygon per region labelled `anomaly` with the region's highest score, at most `inference.max_detections` per frame. A normal frame sends no polygon.
+- Each frame's defects go to Insight as `segmentation` metadata, one polygon per region labelled `anomaly`, at most `inference.max_detections` per frame. A normal frame sends no polygon. A region's confidence is its highest score divided by twice the patch threshold, capped at 1: 50% at the threshold, 100% at twice it.
 - With `input.type: image_dir`, the host reads each image, stretches it to 224x224, and runs the same model and scoring; it writes each image to `output.dir` with its defects outlined in red.
 
 PatchCore learns only what a good part looks like. `--calibrate` runs the model on your known-good images, keeps a small, diverse set of their patch features as the memory bank, and measures both thresholds on the images it keeps out of the bank. `bank_meta.json` records the model package's hash, so a bank built for another package is rejected at load.
@@ -167,7 +167,7 @@ source=rtsp://<host>:<port>/<stream> codec=h264 stream=<width>x<height>@<fps> ba
 processed=<frames> flagged=<anomalous-frames> video_sender=<insight-host-ip>:9000
 ```
 
-In the Insight viewer, each defect is outlined and labelled `anomaly` with its highest score. The closing line counts the frames processed and the anomalous frames, and prints after Ctrl-C too. When the nonblocking metadata sender dropped messages because the socket buffer was full, a further line counts them.
+In the Insight viewer, each defect is outlined and labelled `anomaly` with its confidence, such as `anomaly (75%)`. The closing line counts the frames processed and the anomalous frames, and prints after Ctrl-C too. When the nonblocking metadata sender dropped messages because the socket buffer was full, a further line counts them.
 
 With `input.type: image_dir` and the bundled `images/`, each image prints its verdict, and the outlined images go to `output.dir`:
 
@@ -185,6 +185,7 @@ processed=5 flagged=4 output=sandbox/patchcore-anomaly-detector
 - `input.type: unknown value '<type>' (expected image_dir, rtsp)` or `input.codec: unknown value '<codec>' (expected h264, h265, mjpeg)` names a value this example does not support.
 - `<config> is missing <key>` or `<key> must be <type>` names a key the config lacks or sets to the wrong type. Compare it with the packaged config.
 - `failed to probe RTSP frame size: <url>` appears when the source is unreachable from the board or does not report its size. Verify the URL from the board itself, or set `input.width`, `input.height`, and `input.fps`.
+- Insight shows `Metadata late` and no outlines: the defect regions arrive after their video frame was shown. Open the badge and raise the channel's video sync buffer to the value it suggests.
 - Every frame of a new camera is anomalous: calibrate on known-good images from that camera, at the framing you run with. PatchCore expects a fixed camera and a steady scene; camera motion and lighting changes raise every score.
 
 ## Source Files

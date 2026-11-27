@@ -173,6 +173,12 @@ def percentile_threshold(scores: list[float], percentile: float) -> float:
     return float(np.percentile(np.asarray(scores, dtype=np.float64), percentile))
 
 
+def confidence(score: float, threshold: float) -> float:
+    """A patch distance as the 0 to 1 confidence Insight shows as a percentage: 0.5 at the
+    calibrated threshold, 1 at twice the threshold or more."""
+    return min(max(score / (2.0 * threshold), 0.0), 1.0)
+
+
 def build_bank_meta(
     *,
     model_path: str | Path,

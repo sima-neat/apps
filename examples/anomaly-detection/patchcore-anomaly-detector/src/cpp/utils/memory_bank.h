@@ -93,6 +93,10 @@ private:
 /// of a list of per-image anomaly scores. Throws if `scores` is empty.
 float percentile_threshold(std::vector<float> scores, double percentile);
 
+/// A patch distance as the 0 to 1 confidence Insight shows as a percentage: 0.5 at the
+/// calibrated threshold, 1 at twice the threshold or more.
+double confidence(double score, double threshold);
+
 /// The `bank_meta.json` sidecar: everything a scoring run needs to trust and
 /// interpret `memory_bank.npy` without hard-coding it in application source.
 struct BankMeta {

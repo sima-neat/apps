@@ -424,6 +424,10 @@ float percentile_threshold(std::vector<float> scores, double percentile) {
   return static_cast<float>(scores[lo] + frac * (scores[hi] - scores[lo]));
 }
 
+double confidence(double score, double threshold) {
+  return std::clamp(score / (2.0 * threshold), 0.0, 1.0);
+}
+
 BankMeta load_bank_meta(const std::filesystem::path& path) {
   std::ifstream in(path);
   if (!in.good()) {
