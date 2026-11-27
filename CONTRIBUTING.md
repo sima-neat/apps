@@ -287,10 +287,14 @@ manifest.
 `cmake/YamlCpp.cmake` pins the yaml-cpp 0.8.0 source by SHA-256, for the
 headers of the `libyaml-cpp.so.0.8` that Core links.
 
-Builds inherit the sysroot requirement from Core's bundled Scheduler. Official
-releases require a matching cached SDK receipt, package inventory and package
-identity, without overlays; they never run `sysroot update`. Development pins
-retain the update path. CI uses the same Scheduler policy with the shared
+CI builds inherit the sysroot requirement from Core's bundled Scheduler.
+`scripts/ci/sync-sdk-sysroot.sh` aligns the SDK sysroot with that Scheduler
+before `build.sh` installs Core, and local builds skip this step. Core's
+`tools/ci/scheduler_sdk_policy.py`, at the selected Core commit, checks the
+Scheduler policy against `deps/manifest.json`. For an official release, the
+active sysroot must already hold that release, and CI never runs
+`sysroot update`. For a development pin, a version with `~`, CI runs
+`sysroot update`. CI uses the same Scheduler policy with the shared
 compatibility resolver to select and verify DevKit firmware before
 installation, then shards tests using its resolved labels.
 

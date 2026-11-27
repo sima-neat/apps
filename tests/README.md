@@ -367,10 +367,13 @@ MJPEG URLs.
 
 ## Two-Stage Vulcan CI
 
-- Stage 1 (eLxr runner): `./build.sh --all --clean` builds the Apps, then
-  `scripts/ci/package-apps.sh` creates a runtime candidate and an ephemeral test
-  bundle, which the post-build step validates. The published portal builds in
-  its own job on branch pushes.
+- Stage 1 (eLxr runner): `./build.sh --only-resolve-neat-core` selects Core and
+  prints it as `<ref>-<spec>`, which `deps/neat-core.json` also records. Then
+  `scripts/ci/sync-sdk-sysroot.sh` aligns the SDK sysroot with that Core's
+  Scheduler. Then `./build.sh --all --clean --neat-core-version <ref>-<spec>`
+  installs the same Core and builds the Apps. `scripts/ci/package-apps.sh` then
+  creates a runtime candidate and an ephemeral test bundle, which the post-build
+  step validates. The published portal builds in its own job on branch pushes.
 - Stage 2 (Modalix runner): overlays the test bundle, runs
   `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
   every activated test passes.
