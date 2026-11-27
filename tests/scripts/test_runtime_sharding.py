@@ -19,7 +19,10 @@ import run_runtime_shard as execution
 from tests.utils.test_scope import discover_scope, validate_scope
 
 SOM_16 = "modalix-som-16gig"
+SOM_8 = "modalix-som-8gig--single-dram"
 HIGH_DENSITY = "object-detection/high-density-multi-stream-object-detector"
+HIGH_DENSITY_E2E = [f"{language}:e2e:{HIGH_DENSITY}" for language in ("cpp", "python")]
+BASE_LABELS = ["modalix", "vulcan-production"]
 
 
 def runner(name, *, rtsp=False, busy=False, status="online", extra=(),
@@ -47,9 +50,16 @@ def scope():
 
 
 @pytest.fixture
-def plan(scope):
-    fleet = [runner(f"devkit-{i}") for i in range(10)]
-    return planner.make_plan(scope, fleet, ["modalix", "vulcan-production"], {}, "abc")
+def constrained(scope):
+    for language in ("cpp", "python"):
+        scope["examples"][HIGH_DENSITY]["e2e"][language]["runner_labels"] = [SOM_16]
+    return scope
+
+
+@pytest.fixture
+def plan(constrained):
+    fleet = [runner(f"devkit-{i}", extra=(SOM_16,)) for i in range(10)]
+    return planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
 
 
 def test_every_enabled_suite_assigned_once_with_caps(scope, plan):
@@ -90,6 +100,7 @@ def test_planner_keeps_resolver_firmware(tmp_path, monkeypatch):
                                       "--output", str(output)])
     planner.main()
     plan = json.loads(output.read_text())
+    assert plan["unmet_runner_labels"] == {}
     matrix = json.loads((tmp_path / "outputs").read_text().removeprefix("matrix="))
     assert len(matrix["include"]) == 2
     assert all("rtsp" not in s["labels"] for s in matrix["include"])
@@ -207,9 +218,10 @@ def test_partial_scope_retains_models_and_nightly_variants(scope, plan):
         for example, entry in selected["examples"].items():
             assert entry["models"] == scope["examples"][example]["models"]
             for language in ("python", "cpp"):
-                assert entry["e2e"][language].get("variants") == scope["examples"][
-                    example
-                ]["e2e"].get(language, {}).get("variants")
+                original = scope["examples"][example]["e2e"].get(language, {})
+                e2e = entry["e2e"][language]
+                assert e2e.get("variants") == original.get("variants")
+                assert e2e.get("runner_labels") == original.get("runner_labels")
 
 
 @pytest.mark.parametrize(
@@ -597,3 +609,344 @@ def test_validate_scope_rejects_misplaced_runner_labels(scope, place, message):
     else:
         {"top": entry, "e2e": entry["e2e"], "unit": entry["unit"]}[place]["runner_labels"] = [SOM_16]
     assert f"{HIGH_DENSITY}: {message}" in validate_scope(scope, ROOT)
+
+
+def shard_of(plan, task):
+    return next(s for s in plan["shards"] if task in s["tasks"])
+
+
+def candidates(plan):
+    return [s["candidate"] for s in plan["shards"]]
+
+
+def without_runner_labels(scope):
+    for entry in scope["examples"].values():
+        for config in entry.get("e2e", {}).values():
+            config.pop("runner_labels", None)
+    return scope
+
+
+@pytest.mark.parametrize("names", ["abcdefghij", "jihgfedcba"])
+def test_unconstrained_scope_keeps_name_ordered_fleet_and_balancing(scope, names):
+    scope = without_runner_labels(scope)
+    weights = json.loads((ROOT / "tests/ci-durations.json").read_text())["suite_seconds"]
+    fleet = [runner(f"runner-{c}", busy=c == "b", extra=(SOM_8,)) for c in names]
+    plan = planner.make_plan(scope, fleet, BASE_LABELS, weights, "abc")
+    assert candidates(plan) == [f"runner-{c}" for c in "acdefghi"]
+    # Without runner_labels, each suite, longest first, goes to the least-loaded shard.
+    tasks = {s["id"]: [] for s in plan["shards"]}
+    load = dict.fromkeys(tasks, 0)
+    for task in sorted(planner.enumerate_suites(scope, weights),
+                       key=lambda s: (-s["seconds"], s["id"])):
+        shard = min(tasks, key=lambda i: (load[i], i))
+        tasks[shard].append(task["id"])
+        load[shard] += task["seconds"]
+    assert {s["id"]: s["tasks"] for s in plan["shards"]} == tasks
+
+
+def test_idle_16_gib_runner_replaces_a_spare_shard_in_a_full_fleet(constrained):
+    fleet = [runner(f"runner-{c}", extra=(SOM_8,)) for c in "abcdefgh"]
+    fleet += [runner("runner-y", busy=True, extra=(SOM_16,)), runner("runner-z", extra=(SOM_16,))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert len(plan["shards"]) == planner.MAX_SHARDS
+    assert candidates(plan) == [f"runner-{c}" for c in "abcdefg"] + ["runner-z"]
+    assert {shard_of(plan, t)["candidate"] for t in HIGH_DENSITY_E2E} == {"runner-z"}
+    assigned = [t for s in plan["shards"] for t in s["tasks"]]
+    assert sorted(assigned) == plan["expected"]
+
+
+def test_full_fleet_keeps_a_shard_that_covers_another_label_set(constrained):
+    constrained["examples"][HIGH_DENSITY]["e2e"]["python"]["runner_labels"] = ["model-registry"]
+    fleet = [runner(f"runner-{c}", rtsp=c != "h", extra=(SOM_8,)) for c in "abcdefgh"]
+    fleet.append(runner("runner-z", rtsp=True, extra=(SOM_16,)))
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert candidates(plan) == [f"runner-{c}" for c in "abcdefh"] + ["runner-z"]
+    assert shard_of(plan, HIGH_DENSITY_E2E[1])["candidate"] == "runner-h"
+
+
+@pytest.mark.parametrize("idle_8_gib", [3, 8])
+def test_busy_16_gib_runner_gets_a_queued_shard_with_only_the_suites_that_need_it(
+    constrained, idle_8_gib
+):
+    fleet = [runner(f"runner-{i}", extra=(SOM_8,)) for i in range(idle_8_gib)]
+    fleet.append(runner("runner-z", busy=True, extra=(SOM_16,)))
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert len(plan["shards"]) == min(idle_8_gib + 1, planner.MAX_SHARDS)
+    queued = shard_of(plan, HIGH_DENSITY_E2E[0])
+    assert queued["candidate"] == "runner-z" and not queued["idle_at_planning"]
+    assert sorted(queued["tasks"]) == HIGH_DENSITY_E2E
+
+
+def test_busy_shard_uses_the_selector_that_most_runners_match(constrained):
+    # runner-c's selector also matches runner-d, while runner-b's matches only runner-b.
+    fleet = [runner("runner-a", extra=(SOM_8,)),
+             runner("runner-b", busy=True, extra=(SOM_16, "label-r")),
+             runner("runner-c", busy=True, extra=(SOM_16, "label-p", "label-q")),
+             runner("runner-d", busy=True, extra=(SOM_16, "label-p", "label-q", "label-s"))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert candidates(plan) == ["runner-a", "runner-c"]
+
+
+def test_covered_label_sets_add_no_shards(constrained):
+    fleet = [runner(f"runner-{i}", extra=(SOM_16,)) for i in range(10)]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert candidates(plan) == [f"runner-{i}" for i in range(8)]
+
+
+def test_an_idle_runner_is_kept_over_a_busy_one_that_covers_more(constrained):
+    constrained["examples"][HIGH_DENSITY]["e2e"]["python"]["runner_labels"] = ["label-x"]
+    fleet = [runner(f"runner-{c}", extra=(SOM_8,)) for c in "abcdefgh"]
+    fleet += [runner("runner-y", extra=(SOM_16,)),
+              runner("runner-z", busy=True, extra=(SOM_16, "label-x"))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert candidates(plan) == [f"runner-{c}" for c in "abcdef"] + ["runner-y", "runner-z"]
+    assert shard_of(plan, HIGH_DENSITY_E2E[0])["candidate"] == "runner-y"
+    assert shard_of(plan, HIGH_DENSITY_E2E[1])["tasks"] == [HIGH_DENSITY_E2E[1]]
+
+
+def test_constrained_suites_use_an_idle_shard_before_a_queued_one(constrained):
+    detr = "object-detection/detr-object-detector"
+    constrained["examples"][HIGH_DENSITY]["e2e"]["python"]["runner_labels"] = ["label-x"]
+    constrained["examples"][detr]["e2e"]["cpp"]["runner_labels"] = [SOM_16]
+    fleet = [runner("runner-a", extra=(SOM_8,)), runner("runner-b", extra=(SOM_16,)),
+             runner("runner-c", busy=True, extra=(SOM_16, "label-x"))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {f"cpp:e2e:{detr}": 10_000}, "abc")
+    assert shard_of(plan, HIGH_DENSITY_E2E[0])["candidate"] == "runner-b"
+    assert shard_of(plan, HIGH_DENSITY_E2E[1])["candidate"] == "runner-c"
+
+
+def test_busy_shard_prefers_fewer_labels_between_equally_general_selectors(constrained):
+    fleet = [runner("runner-a", extra=(SOM_8,)),
+             runner("runner-b", busy=True, extra=(SOM_16, "label-p", "label-q")),
+             runner("runner-c", busy=True, extra=(SOM_16, "label-r"))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert candidates(plan) == ["runner-a", "runner-c"]
+
+
+def test_shards_without_suites_are_dropped_and_renumbered(scope):
+    chosen = [HIGH_DENSITY, "object-detection/detr-object-detector",
+              "anomaly-detection/fastflow-anomaly-detector"]
+    for example, entry in scope["examples"].items():
+        entry["unit"] = {"cpp": False, "python": False}
+        for language in ("cpp", "python"):
+            e2e = entry.setdefault("e2e", {}).setdefault(language, {})
+            e2e["enabled"] = example in chosen
+            e2e.pop("runner_labels", None)
+            if example in chosen:
+                e2e["runner_labels"] = [SOM_16]
+    fleet = [runner(f"runner-{c}", extra=("modalix-som",)) for c in "abcdefg"]
+    fleet.append(runner("runner-z", extra=(SOM_16,)))
+    plan = planner.make_plan(scope, fleet, BASE_LABELS, {}, "abc")
+    assert [(s["id"], s["candidate"]) for s in plan["shards"]] == [
+        ("devkit-1", "runner-a"), ("devkit-2", "runner-z")
+    ]
+    assert len(shard_of(plan, HIGH_DENSITY_E2E[0])["tasks"]) == 6
+
+
+def test_all_busy_unconstrained_fleet_queues_the_first_runner_by_name():
+    fleet = [runner(f"runner-{c}", busy=True) for c in "cba"]
+    assert [s["candidate"] for s in planner.select_fleet(fleet, ["modalix"], 8)] == ["runner-a"]
+
+
+def test_all_busy_fallback_queues_a_shard_that_covers_the_requirement(constrained):
+    fleet = [runner(f"runner-{c}", busy=True, extra=(SOM_8,)) for c in "ab"]
+    fleet.append(runner("runner-c", busy=True, extra=(SOM_16,)))
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert candidates(plan) == ["runner-c"]
+
+
+@pytest.mark.parametrize(("labels", "expected"), [
+    ((("x",), ("y",), ("x", "y")), ["runner-c"]),
+    ((("x",), ("y",)), ["runner-a", "runner-b"]),
+])
+def test_all_busy_fallback_prefers_a_shard_that_covers_more_label_sets(labels, expected):
+    fleet = [runner(f"runner-{c}", busy=True, extra=extra)
+             for c, extra in reversed(list(zip("abc", labels)))]
+    suites = [{"id": "x", "runner_labels": ["x"]}, {"id": "y", "runner_labels": ["y"]}]
+    selected = planner.select_fleet(fleet, ["modalix"], 8, suites=suites)
+    assert [s["candidate"] for s in selected] == expected
+
+
+def test_label_sets_beyond_the_fleet_cap_fall_back_with_a_reason(scope):
+    scope = without_runner_labels(scope)
+    e2e = [s["id"] for s in planner.enumerate_suites(scope, {}) if ":e2e:" in s["id"]][:9]
+    for i, suite in enumerate(e2e):
+        language, _, example = suite.split(":", 2)
+        scope["examples"][example]["e2e"][language]["runner_labels"] = [f"label-{i}"]
+    fleet = [runner(f"runner-{i}", extra=(f"label-{i}",)) for i in range(9)]
+    plan = planner.make_plan(scope, fleet, BASE_LABELS, {}, "abc")
+    assert len(plan["shards"]) == planner.MAX_SHARDS
+    assert plan["unmet_runner_labels"] == {e2e[8]: ["label-8"]}
+    assert planner.unmet_reason(fleet, BASE_LABELS, [], ["label-8"]) == (
+        "other label sets take every shard the fleet cap allows"
+    )
+
+
+@pytest.mark.parametrize("unavailable", ["unready", "offline"])
+def test_missing_16_gib_runner_falls_back_to_any_shard_and_records_it(constrained, unavailable):
+    status = "offline" if unavailable == "offline" else "online"
+    fleet = [runner("runner-a", extra=(SOM_8,)), runner("runner-b", extra=(SOM_8,)),
+             runner("runner-z", status=status, extra=(SOM_16,))]
+    excluded = ["runner-z"] if unavailable == "unready" else []
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc", excluded_names=excluded)
+    assert candidates(plan) == ["runner-a", "runner-b"]
+    assert plan["unmet_runner_labels"] == dict.fromkeys(HIGH_DENSITY_E2E, [SOM_16])
+    assigned = [t for s in plan["shards"] for t in s["tasks"]]
+    assert sorted(assigned) == plan["expected"]
+
+
+@pytest.mark.parametrize(("case", "reason"), [
+    ("misspelled", "no registered DevKit has them, so check the label spelling"),
+    ("offline", "every DevKit with them is offline or lacks this run's platform or "
+                "firmware labels"),
+    ("other-firmware", "every DevKit with them is offline or lacks this run's platform or "
+                       "firmware labels"),
+    ("unready", "every selector with them also matches a DevKit in APPS_UNREADY_RUNNERS"),
+])
+def test_unmet_reason_says_why_no_devkit_has_the_labels(case, reason):
+    firmware = "3.0.0_master_B2372"
+    fleet = [runner("runner-a", extra=(SOM_8,)),
+             runner("runner-z", status="offline" if case == "offline" else "online",
+                    firmware="other" if case == "other-firmware" else firmware,
+                    extra=(SOM_16,))]
+    labels = ["modalix-som-16gib"] if case == "misspelled" else [SOM_16]
+    excluded = ["runner-z"] if case == "unready" else []
+    assert planner.unmet_reason(fleet, [*BASE_LABELS, firmware], excluded, labels) == reason
+
+
+@pytest.mark.parametrize(("case", "reason"), [
+    ("misspelled", "no registered DevKit has them, so check the label spelling"),
+    ("unready", "every selector with them also matches a DevKit in APPS_UNREADY_RUNNERS"),
+    ("offline", "every DevKit with them is offline or lacks this run's platform or "
+                "firmware labels"),
+    ("other-firmware", "every DevKit with them is offline or lacks this run's platform or "
+                       "firmware labels"),
+])
+def test_unmet_runner_labels_warn_in_the_log_and_step_summary(
+    constrained, tmp_path, monkeypatch, capsys, case, reason
+):
+    fleet = [runner("runner-a", extra=(SOM_8,))]
+    if case != "misspelled":
+        status = "offline" if case == "offline" else "online"
+        firmware = "other" if case == "other-firmware" else "3.0.0_master_B2372"
+        fleet.append(runner("runner-z", status=status, firmware=firmware, extra=(SOM_16,)))
+    unready = '["runner-z"]' if case == "unready" else "[]"
+    monkeypatch.setattr(planner, "discover_scope", lambda *args: constrained)
+    monkeypatch.setattr(planner, "discover_runners", lambda *args: fleet)
+    for key, value in {"RUNNER_DISCOVERY_TOKEN": "test", "GITHUB_REPOSITORY": "sima-neat/apps",
+                       "GITHUB_SHA": "abc", "GITHUB_OUTPUT": str(tmp_path / "outputs"),
+                       "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+                       "APPS_UNREADY_RUNNERS": unready}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(sys, "argv", ["planner", "--group", "devkits",
+                                      "--labels", '["modalix", "3.0.0_master_B2372"]',
+                                      "--output", str(tmp_path / "plan.json")])
+    planner.main()
+    out = capsys.readouterr().out
+    summary = (tmp_path / "summary").read_text()
+    for suite in HIGH_DENSITY_E2E:
+        warning = (f"No planned DevKit has the runner labels {suite} requires ({SOM_16}): "
+                   f"{reason}. The suite runs on any DevKit.")
+        assert f"::warning::{warning}\n" in out
+        assert f"> {warning}\n" in summary
+
+
+def test_plan_accepts_a_listed_unmet_suite_and_rejects_an_unlisted_one(constrained):
+    plan = planner.make_plan(constrained, [runner("runner-a", extra=(SOM_8,))],
+                             BASE_LABELS, {}, "abc")
+    planner.validate_plan(plan, constrained)
+    del plan["unmet_runner_labels"][HIGH_DENSITY_E2E[0]]
+    with pytest.raises(ValueError, match=f"lacks the runner labels {HIGH_DENSITY_E2E[0]}"):
+        planner.validate_plan(plan, constrained)
+
+
+@pytest.mark.parametrize(("suite", "labels"), [
+    (HIGH_DENSITY_E2E[0], ["other-label"]),
+    (HIGH_DENSITY_E2E[0], []),
+    ("python:e2e:missing/example", [SOM_16]),
+])
+def test_plan_rejects_unmet_entries_that_do_not_match_the_scope(constrained, suite, labels):
+    plan = planner.make_plan(constrained, [runner("runner-a", extra=(SOM_8,))],
+                             BASE_LABELS, {}, "abc")
+    plan["unmet_runner_labels"][suite] = labels
+    with pytest.raises(ValueError, match=f"do not match the scope: {suite}"):
+        planner.validate_plan(plan, constrained)
+
+
+def test_plan_rejects_unmet_labels_that_a_shard_has(plan, constrained):
+    plan["unmet_runner_labels"] = {HIGH_DENSITY_E2E[0]: [SOM_16]}
+    with pytest.raises(ValueError, match="A shard has the runner labels listed as unmet"):
+        planner.validate_plan(plan, constrained)
+
+
+def test_plan_rejects_unmet_labels_that_one_of_several_shards_has(constrained):
+    fleet = [runner("runner-a", extra=(SOM_8,)), runner("runner-b", extra=(SOM_16,))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    plan["unmet_runner_labels"] = {HIGH_DENSITY_E2E[0]: [SOM_16]}
+    with pytest.raises(ValueError, match="A shard has the runner labels listed as unmet"):
+        planner.validate_plan(plan, constrained)
+
+
+def test_unmet_warning_lists_every_label():
+    assert planner.unmet_label_warning("suite", ["label-p", SOM_16], "reason") == (
+        "No planned DevKit has the runner labels suite requires "
+        f"(label-p, {SOM_16}): reason. The suite runs on any DevKit."
+    )
+
+
+def test_runner_without_a_memory_label_does_not_satisfy_16_gib(constrained):
+    plan = planner.make_plan(constrained, [runner("runner-a", extra=("modalix-som",))],
+                             BASE_LABELS, {}, "abc")
+    assert set(plan["unmet_runner_labels"]) == set(HIGH_DENSITY_E2E)
+    fleet = [runner("runner-a", extra=("modalix-som",)), runner("runner-b", extra=(SOM_16,))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert {shard_of(plan, t)["candidate"] for t in HIGH_DENSITY_E2E} == {"runner-b"}
+
+
+@pytest.mark.parametrize(("scope_label", "runner_label"), [
+    ("Modalix-SOM-16GIG", SOM_16),
+    (SOM_16, "Modalix-SOM-16GIG"),
+])
+def test_runner_labels_match_without_case(scope, scope_label, runner_label):
+    for language in ("cpp", "python"):
+        scope["examples"][HIGH_DENSITY]["e2e"][language]["runner_labels"] = [scope_label]
+    assert not validate_scope(scope, ROOT)
+    fleet = [runner("runner-a", extra=(SOM_8,)), runner("runner-b", extra=(runner_label,))]
+    plan = planner.make_plan(scope, fleet, BASE_LABELS, {}, "abc")
+    assert {shard_of(plan, t)["candidate"] for t in HIGH_DENSITY_E2E} == {"runner-b"}
+
+
+def test_suites_with_different_requirements_each_get_a_matching_shard(constrained):
+    constrained["examples"][HIGH_DENSITY]["e2e"]["python"]["runner_labels"] = [SOM_8]
+    fleet = [runner("runner-a", extra=(SOM_16,)), runner("runner-b", extra=(SOM_8,)),
+             runner("runner-c", extra=("modalix-som",))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    assert shard_of(plan, HIGH_DENSITY_E2E[0])["candidate"] == "runner-a"
+    assert shard_of(plan, HIGH_DENSITY_E2E[1])["candidate"] == "runner-b"
+
+
+def test_unit_suites_of_a_constrained_example_may_use_any_shard(constrained):
+    weights = dict.fromkeys(HIGH_DENSITY_E2E, 100_000)
+    fleet = [runner("runner-a", extra=(SOM_16,)), runner("runner-b", extra=(SOM_8,))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, weights, "abc")
+    for language in ("cpp", "python"):
+        assert shard_of(plan, f"{language}:unit:{HIGH_DENSITY}")["candidate"] == "runner-b"
+
+
+def test_constrained_suites_are_placed_before_longer_unconstrained_ones(constrained):
+    weights = {"python:unit:harness": 100_000}
+    fleet = [runner("runner-a", extra=(SOM_16,)), runner("runner-b", extra=(SOM_8,))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, weights, "abc")
+    assert shard_of(plan, "python:unit:harness")["candidate"] == "runner-b"
+
+
+def test_plan_rejects_a_constrained_suite_on_a_shard_without_its_labels(constrained):
+    fleet = [runner("runner-a", extra=(SOM_16,)), runner("runner-b", extra=(SOM_8,))]
+    plan = planner.make_plan(constrained, fleet, BASE_LABELS, {}, "abc")
+    source, target = plan["shards"]
+    source["tasks"].remove(HIGH_DENSITY_E2E[0])
+    target["tasks"].append(HIGH_DENSITY_E2E[0])
+    target["needs_media_fixtures"] = True
+    with pytest.raises(ValueError, match=f"lacks the runner labels {HIGH_DENSITY_E2E[0]}"):
+        planner.validate_plan(plan, constrained)
+

@@ -53,7 +53,8 @@ def label_set(runner):
     return {label["name"].casefold() for label in runner["labels"]}
 
 
-def select_fleet(runners, required, maximum, excluded_names=()):
+def safe_candidates(runners, required, excluded_names=()):
+    """Each online runner whose label selector matches no excluded runner, by name."""
     required = {label.casefold() for label in required}
     if "rtsp" in required:
         raise ValueError("Base runner selector must not require the legacy RTSP label")
@@ -78,19 +79,95 @@ def select_fleet(runners, required, maximum, excluded_names=()):
             "No safe label selector excluding unready runners; "
             "configure a dedicated ready-runner label/group"
         )
+    return sorted(safe, key=lambda candidate: candidate[0]["name"])
 
-    safe.sort(key=lambda candidate: candidate[0]["name"])
+
+def select_fleet(runners, required, maximum, excluded_names=(), suites=()):
+    safe = safe_candidates(runners, required, excluded_names)
     idle = [candidate for candidate in safe if not candidate[0]["busy"]]
-    # If all eligible runners are busy, queue one shard with all suites.
-    selected = idle[:maximum] or safe[:1]
+    selected = idle[:maximum]
+    uncovered = sorted({tuple(s["runner_labels"]) for s in suites if s["runner_labels"]})
+    uncovered = [need for need in uncovered if not covers(selected, need)]
+
+    def generality(candidate):
+        # A selector that more runners match lets GitHub start the job on any of them.
+        return sum(has_labels(labels, candidate[1]) for _, labels in safe)
+
+    while uncovered:
+        candidates = [
+            c for c in safe
+            if c not in selected and any(has_labels(c[1], need) for need in uncovered)
+        ]
+        if not candidates:
+            break
+        best = min(
+            candidates,
+            key=lambda c: (
+                c[0]["busy"],
+                -sum(has_labels(c[1], need) for need in uncovered),
+                -generality(c),
+                len(c[1]),
+                c[0]["name"],
+            ),
+        )
+        if len(selected) == maximum:
+            spare = spare_shard(selected, suites)
+            if spare is None:
+                break
+            selected.remove(spare)
+        selected.append(best)
+        uncovered = [need for need in uncovered if not has_labels(best[1], need)]
+    # With every runner busy and no runner covering a label set, one queued shard takes
+    # all suites.
     return [
         {
             "labels": labels,
             "candidate": runner["name"],
             "idle_at_planning": not runner["busy"],
         }
-        for runner, labels in selected
+        for runner, labels in selected or safe[:1]
     ]
+
+
+def has_labels(selector, need):
+    return set(need) <= set(selector)
+
+
+def covers(candidates, need):
+    return any(has_labels(labels, need) for _, labels in candidates)
+
+
+def spare_shard(selected, suites):
+    """The last shard whose removal leaves every covered label set covered, if any."""
+    needs = {tuple(s["runner_labels"]) for s in suites if s["runner_labels"]}
+    covered = [need for need in needs if covers(selected, need)]
+    for candidate in reversed(selected):
+        rest = [c for c in selected if c is not candidate]
+        if all(covers(rest, need) for need in covered):
+            return candidate
+    return None
+
+
+def unmet_reason(runners, required, excluded_names, need):
+    required = {label.casefold() for label in required}
+    with_labels = [r for r in runners if has_labels(label_set(r), need)]
+    if not with_labels:
+        return "no registered DevKit has them, so check the label spelling"
+    if not any(r["status"] == "online" and required <= label_set(r) for r in with_labels):
+        return (
+            "every DevKit with them is offline or lacks this run's platform or "
+            "firmware labels"
+        )
+    if not covers(safe_candidates(runners, required, excluded_names), need):
+        return "every selector with them also matches a DevKit in APPS_UNREADY_RUNNERS"
+    return "other label sets take every shard the fleet cap allows"
+
+
+def unmet_label_warning(suite, labels, reason):
+    return (
+        f"No planned DevKit has the runner labels {suite} requires "
+        f"({', '.join(labels)}): {reason}. The suite runs on any DevKit."
+    )
 
 
 def enumerate_suites(scope, weights):
@@ -98,6 +175,7 @@ def enumerate_suites(scope, weights):
         {
             "id": "python:unit:harness",
             "needs_media_fixtures": False,
+            "runner_labels": [],
             "seconds": weights.get("python:unit:harness", 30),
         }
     ]
@@ -107,11 +185,15 @@ def enumerate_suites(scope, weights):
                 if not is_enabled(entry, language, kind):
                     continue
                 identifier = f"{language}:{kind}:{example}"
+                e2e = entry["e2e"][language] if kind == "e2e" else {}
                 suites.append(
                     {
                         "id": identifier,
                         "needs_media_fixtures": kind == "e2e"
-                        and entry["e2e"][language].get("requires_rtsp", True),
+                        and e2e.get("requires_rtsp", True),
+                        "runner_labels": sorted(
+                            {label.casefold() for label in e2e.get("runner_labels", [])}
+                        ),
                         "seconds": weights.get(
                             identifier, 180 if kind == "e2e" else 30
                         ),
@@ -129,7 +211,9 @@ def make_plan(
     excluded_names=(),
 ):
     suites = enumerate_suites(scope, weights)
-    fleet = select_fleet(runners, required, min(MAX_SHARDS, len(suites)), excluded_names)
+    fleet = select_fleet(
+        runners, required, min(MAX_SHARDS, len(suites)), excluded_names, suites
+    )
     shards = [
         {
             "id": f"devkit-{i + 1}",
@@ -140,18 +224,46 @@ def make_plan(
         }
         for i, runner in enumerate(fleet)
     ]
-    for task in sorted(suites, key=lambda s: (-s["seconds"], s["id"])):
-        shard = min(shards, key=lambda s: (s["estimated_seconds"], s["id"]))
+    # A suite whose labels no shard has still runs, and main warns about it.
+    unmet = {
+        s["id"]: s["runner_labels"]
+        for s in suites
+        if s["runner_labels"]
+        and not any(has_labels(shard["labels"], s["runner_labels"]) for shard in shards)
+    }
+    placement = {s["id"]: [] if s["id"] in unmet else s["runner_labels"] for s in suites}
+    # Constrained suites go first, so each gets the least-loaded shard it may use.
+    order = sorted(suites, key=lambda s: (not placement[s["id"]], -s["seconds"], s["id"]))
+    for task in order:
+        eligible = [s for s in shards if has_labels(s["labels"], placement[task["id"]])]
+        # A queued shard waits for a busy DevKit: give it only suites no idle shard can run.
+        idle = [s for s in eligible if s["idle_at_planning"]]
+        shard = min(idle or eligible, key=lambda s: (s["estimated_seconds"], s["id"]))
         shard["tasks"].append(task["id"])
         shard["estimated_seconds"] += task["seconds"]
         shard["needs_media_fixtures"] |= task["needs_media_fixtures"]
-    plan = {"sha": sha, "expected": sorted(s["id"] for s in suites), "shards": shards}
+    # More idle DevKits than suites that may use them leave shards without tasks.
+    shards = [shard for shard in shards if shard["tasks"]]
+    for i, shard in enumerate(shards):
+        shard["id"] = f"devkit-{i + 1}"
+    plan = {
+        "sha": sha,
+        "expected": sorted(s["id"] for s in suites),
+        "shards": shards,
+        "unmet_runner_labels": unmet,
+    }
     validate_plan(plan, scope)
     return plan
 
 
 def validate_plan(plan, scope):
-    suites = {s["id"]: s["needs_media_fixtures"] for s in enumerate_suites(scope, {})}
+    suites = {s["id"]: s for s in enumerate_suites(scope, {})}
+    unmet = plan.get("unmet_runner_labels", {})
+    for task, labels in unmet.items():
+        if task not in suites or labels != suites[task]["runner_labels"]:
+            raise ValueError(f"Unmet runner labels do not match the scope: {task}")
+        if any(has_labels(shard["labels"], labels) for shard in plan["shards"]):
+            raise ValueError(f"A shard has the runner labels listed as unmet: {task}")
     expected = sorted(suites)
     assigned = [task for shard in plan["shards"] for task in shard["tasks"]]
     if plan["expected"] != expected or sorted(assigned) != expected:
@@ -168,8 +280,17 @@ def validate_plan(plan, scope):
             raise ValueError("Empty shard or runner selector")
         if any(label.casefold() == "rtsp" for label in shard["labels"]):
             raise ValueError("Shard selectors must not require the legacy RTSP label")
-        if shard["needs_media_fixtures"] != any(suites[t] for t in shard["tasks"]):
+        if shard["needs_media_fixtures"] != any(
+            suites[t]["needs_media_fixtures"] for t in shard["tasks"]
+        ):
             raise ValueError("Shard media fixture setup does not match its assigned suites")
+        for task in shard["tasks"]:
+            need = suites[task]["runner_labels"]
+            if task not in unmet and not has_labels(shard["labels"], need):
+                raise ValueError(
+                    f"Shard {shard['id']} lacks the runner labels {task} requires: "
+                    + ", ".join(need)
+                )
 
 
 def main():
@@ -238,7 +359,14 @@ def main():
     }
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write(f"matrix={json.dumps(matrix)}\n")
+    warnings = [
+        unmet_label_warning(suite, need, unmet_reason(runners, labels, excluded, need))
+        for suite, need in plan["unmet_runner_labels"].items()
+    ]
+    for warning in warnings:
+        print(f"::warning::{warning}")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+        summary.writelines(f"> [!WARNING]\n> {warning}\n\n" for warning in warnings)
         summary.write(
             "| Shard | Idle at planning | Estimated tests | Suites |\n|---|---|---:|---:|\n"
         )
