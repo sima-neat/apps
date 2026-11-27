@@ -9,7 +9,6 @@ NEAT_DEBS_DIR="${DEPS_DIR}/debs"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
 NEAT_ARTIFACTS_BASE_URL_EXPLICIT="${NEAT_ARTIFACTS_BASE_URL:+1}"
 NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.neat.sima.ai/core}"
-ELXR_SDK_RELEASE_FILE="${ELXR_SDK_RELEASE_FILE:-/etc/sdk-release}"
 NEAT_CORE_INSTALL_DIR=""
 NEAT_CORE_INSTALL_DIR_OWNED=0
 LATEST_TAG_CACHE_DIR="$(mktemp -d /tmp/neat-apps-latest.XXXXXX)"
@@ -58,7 +57,6 @@ Environment:
                             (default: fresh /tmp/neat-apps-core-install.XXXXXX)
   NEAT_CORE_INSTALL_MODE    legacy or vulcan. Defaults to vulcan when NEAT_VULCAN_ENV is set.
   NEAT_VULCAN_ENV           Vulcan artifact environment for sima-cli core installs (default: production)
-  NEAT_SYNC_SYSROOT         Set to ON to align the eLxr SDK sysroot with the selected Core artifact
   CMAKE_TOOLCHAIN_FILE      Optional CMake toolchain file (auto-detected for cross)
   SYSROOT                   Target sysroot (used by the default cross toolchain file)
 EOF
@@ -611,202 +609,8 @@ run_sima_cli_core_install() {
   rm -f "${log_path}"
 }
 
-is_elxr_sdk() {
-  local sdk_version elxr_version
-  [[ -f "${ELXR_SDK_RELEASE_FILE}" ]] || return 1
-  sdk_version="$(sed -n 's/^SDK Version[[:space:]]*=[[:space:]]*//p' "${ELXR_SDK_RELEASE_FILE}" | head -n1)"
-  elxr_version="$(sed -n 's/^eLXr Version[[:space:]]*=[[:space:]]*//p' "${ELXR_SDK_RELEASE_FILE}" | head -n1)"
-  [[ -n "${sdk_version}" && -n "${elxr_version}" ]]
-}
-
-run_privileged() {
-  if [[ "$(id -u)" -eq 0 ]]; then
-    "$@"
-  elif command -v sudo >/dev/null 2>&1; then
-    sudo "$@"
-  else
-    echo "ERROR: root privileges are required to update the SDK sysroot." >&2
-    return 1
-  fi
-}
-
-sync_sysroot_from_core_artifact() (
-  local sima_cli_bin="$1"
-  local branch="$2"
-  local version="$3"
-  local vulcan_env="$4"
-  [[ "${NEAT_SYNC_SYSROOT:-OFF}" == "ON" ]] || return 0
-
-  if ! is_elxr_sdk; then
-    echo "ERROR: NEAT_SYNC_SYSROOT requires an eLxr SDK." >&2
-    return 1
-  fi
-  if ! command -v sysroot >/dev/null 2>&1; then
-    echo "ERROR: NEAT_SYNC_SYSROOT requires the sysroot command." >&2
-    return 1
-  fi
-
-  local resolve_output metadata_url
-  if ! resolve_output="$("${sima_cli_bin}" neat install \
-      --env "${vulcan_env}" -t minimal --json "core@${branch}:${version}")"; then
-    echo "ERROR: Failed to resolve Core metadata for sysroot alignment." >&2
-    return 1
-  fi
-  if ! metadata_url="$(RESOLVE_OUTPUT="${resolve_output}" python3 - "${branch}" "${version}" <<'PY'
-import json
-import os
-import sys
-
-text = os.environ["RESOLVE_OUTPUT"]
-start = text.find("{")
-if start < 0:
-    raise SystemExit("missing JSON object in sima-cli output")
-payload = json.loads(text[start:])
-if payload.get("repository") != "core":
-    raise SystemExit("resolved repository is not core")
-if payload.get("ref") != sys.argv[1] or payload.get("resolved_spec") != sys.argv[2]:
-    raise SystemExit("resolved Core target does not match the requested target")
-metadata_url = payload.get("metadata_url")
-if not isinstance(metadata_url, str) or not metadata_url:
-    raise SystemExit("resolved Core metadata URL is missing")
-print(metadata_url)
-PY
-  )"; then
-    echo "ERROR: Cannot verify resolved Core metadata identity." >&2
-    return 1
-  fi
-
-  local tmp_dir metadata_file package_file policy_file
-  tmp_dir="$(mktemp -d /tmp/neat-apps-sysroot.XXXXXX)"
-  trap 'rm -rf "${tmp_dir}"' EXIT
-  metadata_file="${tmp_dir}/metadata-minimal.json"
-  package_file="${tmp_dir}/simaai-scheduler.deb"
-  policy_file="${tmp_dir}/scheduler/usr/share/SimaScheduler/dependency-policy.json"
-  if ! download_file "${metadata_url}" "${metadata_file}"; then
-    echo "ERROR: Failed to download selected Core metadata." >&2
-    return 1
-  fi
-
-  # Core ships the Scheduler package it was built against. That package's
-  # dependency policy names the exact SDK sysroot it was built for.
-  local resource_info package_url expected_checksum
-  if ! resource_info="$(python3 - "${metadata_file}" "${metadata_url}" <<'PY'
-import json
-import re
-import sys
-from urllib.parse import urljoin
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    metadata = json.load(handle)
-resource = "simaai-scheduler.deb"
-if metadata.get("resources", []).count(resource) != 1:
-    raise SystemExit("Core metadata must contain exactly one Scheduler package")
-checksum = metadata.get("resources-checksum", {}).get(resource)
-if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
-    raise SystemExit("Core metadata has no valid Scheduler package checksum")
-print(urljoin(sys.argv[2], resource) + "\t" + checksum)
-PY
-  )"; then
-    echo "ERROR: Cannot verify the Core Scheduler package resource." >&2
-    return 1
-  fi
-  package_url="${resource_info%%$'\t'*}"
-  expected_checksum="${resource_info#*$'\t'}"
-  if ! download_file "${package_url}" "${package_file}"; then
-    echo "ERROR: Failed to download the Core Scheduler package." >&2
-    return 1
-  fi
-  local package_checksum
-  package_checksum="$(sha256sum "${package_file}")"
-  if [[ "${package_checksum%% *}" != "${expected_checksum}" ]]; then
-    echo "ERROR: Core Scheduler package checksum mismatch." >&2
-    return 1
-  fi
-  if ! dpkg-deb -x "${package_file}" "${tmp_dir}/scheduler"; then
-    echo "ERROR: Failed to extract the Core Scheduler package." >&2
-    return 1
-  fi
-
-  local sysroot_version
-  if ! sysroot_version="$(python3 - "${policy_file}" "${APPS_MANIFEST}" \
-      "${ELXR_SDK_RELEASE_FILE}" "${SYSROOT:-/opt/toolchain/aarch64/modalix}" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
-
-policy = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-sysroot_version = policy["sysroot-version"]
-consumer_base = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["platform-version"]
-if not isinstance(sysroot_version, str) or not re.fullmatch(
-    r"[0-9]+(?:[.][0-9]+){2}(?:~(?:pre[0-9]+|git[0-9]{12}[.][0-9a-f]{7,40}-[0-9]+))?", sysroot_version
-):
-    raise SystemExit("invalid sysroot-version")
-if consumer_base != sysroot_version.split("~", 1)[0]:
-    raise SystemExit("platform-version does not match the Scheduler sysroot-version")
-if (policy.get("platform-version") != consumer_base
-        or not isinstance(policy.get("elxr_version"), str)
-        or not re.fullmatch(re.escape(consumer_base) + r"_(?:master|develop)_B[1-9][0-9]*", policy["elxr_version"])):
-    raise SystemExit("Scheduler firmware does not match the Apps platform")
-if "~" not in sysroot_version:
-    # Match Core's official-release admission; never patch a release SDK in place.
-    if policy.get("sdk", {}).get("sysroot-version") != sysroot_version:
-        raise SystemExit("Scheduler SDK pin differs from its sysroot-version")
-    fields = {}
-    for line in Path(sys.argv[3]).read_text().splitlines():
-        if " = " in line:
-            key, value = line.split(" = ", 1)
-            if key in fields:
-                raise SystemExit(f"Duplicate SDK receipt field: {key}")
-            fields[key] = value
-    if (fields.get("Platform Version") != sysroot_version
-            or fields.get("Platform Base") != sysroot_version
-            or fields.get("Platform Channel") != "release"):
-        raise SystemExit("Cached SDK does not contain the requested release; refresh its snapshot")
-    sysroot = Path(sys.argv[4])
-    overlay = sysroot / "var/lib/sima-sdk/sysroot-overlay"
-    if overlay.exists() or overlay.is_symlink():
-        raise SystemExit("Release SDK contains an overlay; use a fresh release snapshot")
-    inventory = sysroot / "var/lib/sima-sdk/sysroot-packages.tsv"
-    if inventory.is_symlink():
-        raise SystemExit("SDK inventory must be a regular file")
-    records = [line.split("\t") for line in inventory.read_text().splitlines()]
-    for package in ("simaai-palette-modalix", "simaai-base-files-modalix"):
-        versions = [row[2] for row in records if len(row) >= 3 and row[0] == package
-                    and row[1] in {"all", "arm64"}]
-        if versions != [sysroot_version]:
-            raise SystemExit(f"Cached SDK {package} inventory differs: {versions}")
-    if not (sysroot / "usr/include").is_dir():
-        raise SystemExit("Cached SDK sysroot headers are missing")
-    identities = re.findall(r"^SIMA_PACKAGE_VERSION\s*=\s*(\S+)\s*$",
-                            (sysroot / "etc/packageinfo").read_text(), re.M)
-    if identities != [policy.get("elxr_version")]:
-        raise SystemExit(f"Cached SDK firmware identity differs: {identities}")
-print(sysroot_version)
-PY
-  )"; then
-    echo "ERROR: Cannot verify the Core Scheduler sysroot-version." >&2
-    return 1
-  fi
-
-  if [[ "${sysroot_version}" == *~* ]]; then
-    echo "Updating SDK sysroot to Core's Scheduler sysroot-version ${sysroot_version}"
-    if ! run_privileged sysroot update "${sysroot_version}"; then
-      echo "ERROR: Failed to update SDK sysroot to ${sysroot_version}." >&2
-      return 1
-    fi
-  else
-    echo "SKIP sysroot installation: SDK receipt, inventory and package identity match official release ${sysroot_version}."
-  fi
-  if ! sysroot status; then
-    echo "ERROR: Failed to read SDK sysroot status." >&2
-    return 1
-  fi
-  cp "${policy_file}" "${DEPS_DIR}/scheduler-sdk-policy.json"
-)
-
 ensure_neat_core() {
-  local branch install_mode sima_cli_bin="" version vulcan_env
+  local branch install_mode sima_cli_bin version vulcan_env
   mkdir -p "${DEPS_DIR}" "${NEAT_DEBS_DIR}"
   resolve_neat_core_spec
   branch="${NEAT_CORE_TARGET_BRANCH}"
@@ -823,18 +627,6 @@ ensure_neat_core() {
     vulcan_env="${NEAT_VULCAN_ENV:-production}"
   fi
 
-  if [[ "${NEAT_SYNC_SYSROOT:-OFF}" == "ON" ]]; then
-    if [[ "${install_mode}" != "vulcan" ]]; then
-      echo "ERROR: NEAT_SYNC_SYSROOT requires NEAT_CORE_INSTALL_MODE=vulcan." >&2
-      exit 1
-    fi
-    if ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
-      echo "ERROR: NEAT_SYNC_SYSROOT requires sima-cli on PATH or SIMA_CLI_BIN." >&2
-      exit 1
-    fi
-    sync_sysroot_from_core_artifact "${sima_cli_bin}" "${branch}" "${version}" "${vulcan_env}"
-  fi
-
   local expected_tag="${branch}/${version}"
   if neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
     echo "NEAT core already installed (${expected_tag}). Skipping install."
@@ -845,7 +637,7 @@ ensure_neat_core() {
 
   if [[ "${install_mode}" == "vulcan" ]]; then
     local install_status
-    if [[ -z "${sima_cli_bin}" ]] && ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
+    if ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
       echo "ERROR: NEAT_CORE_INSTALL_MODE=vulcan requires sima-cli on PATH or SIMA_CLI_BIN." >&2
       exit 1
     fi

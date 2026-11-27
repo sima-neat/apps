@@ -96,7 +96,6 @@ jobs:
           -e NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
           -e NEAT_CORE_INSTALL_MODE="vulcan" \
           -e NEAT_INSTALLER_SKIP_PLATFORM_CHECK=ON \
-          -e NEAT_SYNC_SYSROOT=ON \
           -e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
           "${sdk_container}" \
           bash -lc '
@@ -123,8 +122,12 @@ jobs:
             fi
             echo "Cross compiler symlinks:"
             ls -l /usr/bin/aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-g++ || true
-            chmod +x build.sh scripts/ci/check_public_includes.sh scripts/install-vulcan-apps-package.sh
-            ./build.sh --all --clean
+            chmod +x build.sh scripts/ci/check_public_includes.sh scripts/install-vulcan-apps-package.sh \
+              scripts/ci/sync-sdk-sysroot.sh
+            core_target="$(./build.sh --only-resolve-neat-core)"
+            ./scripts/ci/sync-sdk-sysroot.sh
+            # Install the Core the sysroot sync used, even if its latest tag has moved since.
+            ./build.sh --all --clean --neat-core-version "${core_target}"
             ./scripts/ci/check_public_includes.sh
           '
 
