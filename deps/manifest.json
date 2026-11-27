@@ -1,6 +1,7 @@
 {
   "neat-core": {
-    "ref": "develop"
+    "ref": "fix/1579-http-mjpeg-pts",
+    "spec": "9e4a28468c8a"
   },
   "sdk": {
     "channel": "develop"
