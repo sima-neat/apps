@@ -9,7 +9,7 @@ models:
 unit:
   python: true
   cpp: true
-# The 20-stream e2e suites missed their throughput floor on an 8 GiB single-DRAM DevKit in CI.
+# The 20-stream e2e throughput floors ask for 16 GiB DevKits.
 e2e:
   python:
     enabled: true
