@@ -75,8 +75,8 @@ each finding cites the owning file and section.
   `sima-cli neat install apps@<branch>`, configure, run, and inspect the result, and the
   description records it. Report source-only paths, missing packaged files, and customer
   options spread across config, CLI arguments, and environment variables. When sima-cli runs
-  without a terminal, set `SIMA_CLI_CHECK_FOR_UPDATE=0`, because its update question aborts
-  the call.
+  without a terminal and a newer sima-cli is published, its update question aborts the call.
+  Set `SIMA_CLI_CHECK_FOR_UPDATE=0`, or `SIMA_CLI_AUTO_ACCEPT_UPDATE=1` to update instead.
 - **Commands:** README commands, including every model download, ran exactly as written. A
   matching test entry or a file downloaded another way leaves the command unverified.
 - **CI:** read the latest Vulcan CI run for the branch. A skipped test proves nothing, and a
