@@ -117,8 +117,8 @@ def select_fleet(runners, required, maximum, excluded_names=(), suites=()):
             selected.remove(spare)
         selected.append(best)
         uncovered = [need for need in uncovered if not has_labels(best[1], need)]
-    # With every runner busy and no runner covering a label set, one queued shard takes
-    # all suites.
+    # With every runner busy and no shard chosen to cover a label set, one queued shard
+    # takes all suites.
     return [
         {
             "labels": labels,
@@ -152,7 +152,10 @@ def unmet_reason(runners, required, excluded_names, need):
     required = {label.casefold() for label in required}
     with_labels = [r for r in runners if has_labels(label_set(r), need)]
     if not with_labels:
-        return "no registered DevKit has them, so check the label spelling"
+        return (
+            "no DevKit in the runner group has them, so check the label spelling "
+            "and the DevKit labels"
+        )
     if not any(r["status"] == "online" and required <= label_set(r) for r in with_labels):
         return (
             "every DevKit with them is offline or lacks this run's platform or "

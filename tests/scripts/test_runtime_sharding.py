@@ -827,26 +827,31 @@ def test_missing_16_gib_runner_falls_back_to_any_shard_and_records_it(constraine
 
 
 @pytest.mark.parametrize(("case", "reason"), [
-    ("misspelled", "no registered DevKit has them, so check the label spelling"),
+    ("misspelled", ("no DevKit in the runner group has them, so check the label spelling "
+                   "and the DevKit labels")),
     ("offline", "every DevKit with them is offline or lacks this run's platform or "
                 "firmware labels"),
     ("other-firmware", "every DevKit with them is offline or lacks this run's platform or "
                        "firmware labels"),
     ("unready", "every selector with them also matches a DevKit in APPS_UNREADY_RUNNERS"),
+    ("partial", ("no DevKit in the runner group has them, so check the label spelling "
+                 "and the DevKit labels")),
 ])
 def test_unmet_reason_says_why_no_devkit_has_the_labels(case, reason):
     firmware = "3.0.0_master_B2372"
     fleet = [runner("runner-a", extra=(SOM_8,)),
              runner("runner-z", status="offline" if case == "offline" else "online",
                     firmware="other" if case == "other-firmware" else firmware,
-                    extra=(SOM_16,))]
-    labels = ["modalix-som-16gib"] if case == "misspelled" else [SOM_16]
+                    extra=("label-p",) if case == "partial" else (SOM_16,))]
+    labels = {"misspelled": ["modalix-som-16gib"], "partial": ["label-p", SOM_16]}.get(
+        case, [SOM_16])
     excluded = ["runner-z"] if case == "unready" else []
     assert planner.unmet_reason(fleet, [*BASE_LABELS, firmware], excluded, labels) == reason
 
 
 @pytest.mark.parametrize(("case", "reason"), [
-    ("misspelled", "no registered DevKit has them, so check the label spelling"),
+    ("misspelled", ("no DevKit in the runner group has them, so check the label spelling "
+                   "and the DevKit labels")),
     ("unready", "every selector with them also matches a DevKit in APPS_UNREADY_RUNNERS"),
     ("offline", "every DevKit with them is offline or lacks this run's platform or "
                 "firmware labels"),
