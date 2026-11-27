@@ -66,7 +66,8 @@ each finding cites the owning file and section.
   in any changed file or in the description, as `agents/rules.md` "Documentation and
   publication" says.
 - **Code owners:** flag changes to dependency pins, `build.sh`, `scripts/artifact-refs.sh`,
-  `scripts/ci/package-apps.sh`, or `.github/workflows/vulcan-ci.yml` for code owner review.
+  `scripts/ci/package-apps.sh`, `scripts/ci/sync-sdk-sysroot.sh`, or
+  `.github/workflows/vulcan-ci.yml` for code owner review.
 
 ## Evidence
 
