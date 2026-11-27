@@ -1611,6 +1611,66 @@ def test_vulcan_build_enables_ordered_sysroot_sync_without_receipt_pin():
     assert ensure < configure
 
 
+@pytest.mark.parametrize(
+    ("neat_core", "args", "expected"),
+    [
+        ({"ref": "develop"}, [], {"ref": "develop", "spec": "devsha1"}),
+        ({"policy": "snap"}, [], {"ref": "develop", "spec": "devsha1"}),
+        ({"ref": "develop"}, ["--neat-core-version", "main-mainsha1"],
+         {"ref": "main", "spec": "mainsha1"}),
+    ],
+)
+def test_only_resolve_neat_core_records_exact_spec_without_installing(
+    tmp_path, neat_core, args, expected
+):
+    proc = _run_build(
+        tmp_path,
+        neat_core=neat_core,
+        args=["--only-resolve-neat-core", *args],
+        env={**_installer_env(tmp_path), "NEAT_APPS_DEPENDENCY_BRANCH": "develop"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert proc.stdout == f"{expected['ref']}-{expected['spec']}\n"
+    assert json.loads((tmp_path / "deps/neat-core.json").read_text()) == {"neat-core": expected}
+    assert not (tmp_path / "installer-args.txt").exists()
+
+
+def test_install_reuses_the_resolved_spec_after_latest_moves(tmp_path):
+    resolved = _run_build(
+        tmp_path, neat_core={"ref": "develop"}, args=["--only-resolve-neat-core"]
+    )
+    assert resolved.returncode == 0, resolved.stderr
+
+    installed = _run_build(
+        tmp_path,
+        neat_core={"ref": "develop"},
+        args=["--only-install-neat-core", "--neat-core-version", resolved.stdout.strip()],
+        env={
+            **_installer_env(tmp_path),
+            "NEAT_APPS_TEST_LATEST_TAGS": "develop=devsha2",
+            "NEAT_APPS_TEST_METADATA": "develop:devsha1",
+        },
+    )
+
+    assert installed.returncode == 0, installed.stderr + installed.stdout
+    assert _installer_args(tmp_path) == "--minimum develop devsha1"
+
+
+def test_build_help_names_the_resolve_option_and_the_override_form():
+    proc = subprocess.run([str(BUILD_SH), "--help"], text=True, capture_output=True, check=True)
+
+    lines = proc.stdout.splitlines()
+    start = lines.index(
+        "  --only-resolve-neat-core  Write the selected Core to deps/neat-core.json, print it as"
+    )
+    assert lines[start + 1:start + 4] == [
+        "                            <ref>-<spec>, and exit (no install)",
+        "  --neat-core-version <ref>-<spec>",
+        "                            Override deps/manifest.json neat-core for one run",
+    ]
+
+
 def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     package_dir = tmp_path / "package"
     runtime_dir = _write_vulcan_runtime(package_dir)

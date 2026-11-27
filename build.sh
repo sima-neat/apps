@@ -25,6 +25,7 @@ CLEAN=0
 BUILD_CPP=ON
 INSTALL_CORE=0
 ONLY_INSTALL=0
+ONLY_RESOLVE=0
 CLI_BIN="${SIMA_CLI_BIN:-sima-cli}"
 NEAT_CORE_OVERRIDE=""
 
@@ -40,7 +41,9 @@ Options:
   --no-cpp                  Skip C++ example build (layout/metadata only)
   --all                     Install NEAT core SDK, build apps, then package (scripts/ci/package-apps.sh)
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
-  --neat-core-version <branch-version>
+  --only-resolve-neat-core  Write the selected Core to deps/neat-core.json, print it as
+                            <ref>-<spec>, and exit (no install)
+  --neat-core-version <ref>-<spec>
                             Override deps/manifest.json neat-core for one run
   -h, --help                Show help
 
@@ -83,6 +86,7 @@ while [[ $# -gt 0 ]]; do
     --no-cpp) BUILD_CPP=OFF; shift ;;
     --all) INSTALL_CORE=1; shift ;;
     --only-install-neat-core) INSTALL_CORE=1; ONLY_INSTALL=1; shift ;;
+    --only-resolve-neat-core) ONLY_RESOLVE=1; shift ;;
     --neat-core-version) NEAT_CORE_OVERRIDE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
@@ -555,6 +559,16 @@ load_neat_core_target() {
   NEAT_CORE_TARGET_VERSION="$(second_line "${target_output}")"
 }
 
+# Records an exact spec, never "latest", in deps/neat-core.json, so the CI sysroot sync
+# and the install after it select the same Core.
+resolve_neat_core_spec() {
+  load_neat_core_target
+  if [[ "${NEAT_CORE_TARGET_VERSION}" == "latest" ]]; then
+    NEAT_CORE_TARGET_VERSION="$(resolve_latest_version "${NEAT_CORE_TARGET_BRANCH}")" || exit 1
+  fi
+  write_neat_core_metadata "${NEAT_CORE_TARGET_BRANCH}" "${NEAT_CORE_TARGET_VERSION}"
+}
+
 prepare_vulcan_core_install_dir() {
   NEAT_CORE_INSTALL_DIR_OWNED=0
   if [[ -z "${NEAT_APPS_CORE_INSTALL_DIR:-}" ]]; then
@@ -794,7 +808,7 @@ PY
 ensure_neat_core() {
   local branch install_mode sima_cli_bin="" version vulcan_env
   mkdir -p "${DEPS_DIR}" "${NEAT_DEBS_DIR}"
-  load_neat_core_target
+  resolve_neat_core_spec
   branch="${NEAT_CORE_TARGET_BRANCH}"
   version="${NEAT_CORE_TARGET_VERSION}"
   install_mode="${NEAT_CORE_INSTALL_MODE:-}"
@@ -808,13 +822,6 @@ ensure_neat_core() {
   if [[ "${install_mode}" == "vulcan" ]]; then
     vulcan_env="${NEAT_VULCAN_ENV:-production}"
   fi
-
-  # Resolve "latest" to an exact tag before checking installed state.
-  if [[ "${version}" == "latest" ]]; then
-    version="$(resolve_latest_version "${branch}")" || exit 1
-  fi
-  NEAT_CORE_TARGET_VERSION="${version}"
-  write_neat_core_metadata "${branch}" "${version}"
 
   if [[ "${NEAT_SYNC_SYSROOT:-OFF}" == "ON" ]]; then
     if [[ "${install_mode}" != "vulcan" ]]; then
@@ -889,6 +896,13 @@ ensure_neat_core() {
 
   echo "NEAT core installed successfully (${expected_tag})."
 }
+
+if [[ "${ONLY_RESOLVE}" -eq 1 ]]; then
+  resolve_neat_core_spec
+  # The only stdout line, in the form --neat-core-version takes.
+  printf '%s-%s\n' "${NEAT_CORE_TARGET_BRANCH}" "${NEAT_CORE_TARGET_VERSION}"
+  exit 0
+fi
 
 if [[ "${INSTALL_CORE}" -eq 1 ]]; then
   ensure_neat_core
