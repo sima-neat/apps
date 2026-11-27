@@ -161,7 +161,7 @@ capability. Python reads either through DLPack (`to_numpy`, `to_torch`,
 
 **`__dlpack__` only supports dense tensors** and raises for composite ones, so
 an NV12 output cannot go straight to numpy. Use `copy_payload_bytes()` and do
-the plane arithmetic, as the fastflow example does.
+the plane arithmetic, as the superpoint example does.
 
 **`__dlpack_device__` always reports CPU**, whatever `device` says. Call
 `cpu()` or `to_cpu_if_needed()` before handing a device tensor to numpy or
@@ -226,7 +226,6 @@ not. Cast before pushing.
 - [patchcore-anomaly-detector](../../../examples/anomaly-detection/patchcore-anomaly-detector/) — `map_read()` guarded by `is_contiguous()` and `dense_bytes_tight()`, loan released before drawing
 - [high-density-multi-stream-object-detector](../../../examples/object-detection/high-density-multi-stream-object-detector/) — `map_read()` with a copy fallback, `ZeroCopy` output
 - [superpoint-feature-extractor](../../../examples/feature-extraction/superpoint-feature-extractor/) — the Y plane of a pulled NV12 frame (C++ a `cv::Mat` view over `map_nv12_read()`, Python `planes` and `copy_payload_bytes`) as a `GRAY8` tensor in the default `TensorMemory::EV74`
-- [fastflow-anomaly-detector](../../../examples/anomaly-detection/fastflow-anomaly-detector/) — Python `copy_payload_bytes()` into numpy, `TensorMemory.EV74`
 - [image-classification-explorer](../../../examples/classification/image-classification-explorer/) — Python `copy_dense_bytes_tight()` with an explicit dtype
 
 ## Source

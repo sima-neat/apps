@@ -45,8 +45,13 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
 - `config.yaml` owns every value a customer may change, with its key name from
   `agents/rules.md` "Config keys". The code reads every key as required, and a missing key is
   an error that names it.
-- Each key carries a short comment saying what it does. Values are scalars or lists of
-  scalars, which the C++ and Python readers parse the same way.
+- Each key carries a short comment saying what it does. Values are scalars, lists of scalars,
+  or lists of mappings, which the C++ and Python readers parse the same way, except that C++
+  `string()` reads any scalar as text: `id: 5` reads as `"5"` in C++ and fails in Python.
+  Quote a string that looks like a number. A list of
+  mappings holds one entry per item, such as one `model` entry per stream, and `main` reads it
+  with `mapping_list(key)`. Each field of an entry means what the registered key of that name
+  means, such as `path` for `model.path`.
 - `main` loads the file once with `sima_examples.config.Config` in Python or
   `sima_examples::Config` in C++ and passes that object to the functions that build Neat
   options. Each function reads the keys it sets, where it sets them, such as
