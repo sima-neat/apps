@@ -774,8 +774,10 @@ def test_shards_without_suites_are_dropped_and_renumbered(scope):
     assert len(shard_of(plan, HIGH_DENSITY_E2E[0])["tasks"]) == 6
 
 
-def test_all_busy_unconstrained_fleet_queues_the_first_runner_by_name():
-    fleet = [runner(f"runner-{c}", busy=True) for c in "cba"]
+@pytest.mark.parametrize("with_extra_label", ["a", "c"])
+def test_all_busy_unconstrained_fleet_queues_the_first_runner_by_name(with_extra_label):
+    fleet = [runner(f"runner-{c}", busy=True, extra=("label-p",) if c == with_extra_label else ())
+             for c in "cba"]
     assert [s["candidate"] for s in planner.select_fleet(fleet, ["modalix"], 8)] == ["runner-a"]
 
 
@@ -884,7 +886,7 @@ def test_unmet_runner_labels_warn_in_the_log_and_step_summary(
         warning = (f"No planned DevKit has the runner labels {suite} requires ({SOM_16}): "
                    f"{reason}. The suite runs on any DevKit.")
         assert f"::warning::{warning}\n" in out
-        assert f"> {warning}\n" in summary
+        assert f"> [!WARNING]\n> {warning}\n\n" in summary
 
 
 def test_plan_accepts_a_listed_unmet_suite_and_rejects_an_unlisted_one(constrained):
@@ -900,6 +902,7 @@ def test_plan_accepts_a_listed_unmet_suite_and_rejects_an_unlisted_one(constrain
     (HIGH_DENSITY_E2E[0], ["other-label"]),
     (HIGH_DENSITY_E2E[0], []),
     ("python:e2e:missing/example", [SOM_16]),
+    ("python:unit:harness", [SOM_16]),
 ])
 def test_plan_rejects_unmet_entries_that_do_not_match_the_scope(constrained, suite, labels):
     plan = planner.make_plan(constrained, [runner("runner-a", extra=(SOM_8,))],
