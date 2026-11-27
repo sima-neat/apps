@@ -27,7 +27,10 @@ history per commit, line counts, or before and after numbers, stays in the commi
    ask the author to drag the file into that spot.
 5. Check every claim against the source or a command you ran. Remove what you cannot check, or
    mark it `not verified`.
-6. Publish with `gh pr edit <number> --body-file <file>`, then read the published body back.
+6. Before you ask for review, review the full diff against the base branch with
+   `agents/skills/apps-review-pr/SKILL.md`, fix the findings that apply, and record the result
+   under Review outcome.
+7. Publish with `gh pr edit <number> --body-file <file>`, then read the published body back.
 
 The step is done when a reviewer who reads only the description could explain what changed
 and why, and every test and number in it traces to a file or a run.
@@ -69,6 +72,10 @@ and why, and every test and number in it traces to a file or a run.
 - <Venue: what ran and what it showed. Host, SDK build, DevKit, and CI are separate lines.>
 - Not verified: <what did not run, and why>.
 
+## Review outcome
+
+<One sentence on what the author's own review found and fixed, or `No findings`.>
+
 ## Rule, skill, and knowledge updates
 
 <The rule, skill, and cheat sheet files changed and the lesson each teaches, as
@@ -96,6 +103,9 @@ Refs #<issue>, #<issue>
 - **Validation** keeps venues apart. A host check is not board evidence, and a run on an earlier
   commit says which commit. Report measured numbers with the venue, the MLA clock, and the
   input that produced them, in one table.
+- **Review outcome** names what the self-review changed, not that it ran. Bad: "Reviewed
+  the diff." Good: "Moved the RTSP probe into `main` and removed an unused config key." Write
+  `No findings` when the review changed nothing.
 - Each list item and table row stays on one source line. No headings beyond the ones above.
 - The last line names every linked issue as `Refs #<issue>`, or `Closes #<issue>` for an issue
   the merge finishes. PR sanitization fails a description without one, and a bare `(#770)`
