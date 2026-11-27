@@ -87,8 +87,8 @@ Complete flow: [single-stream-thermal-face-detector](../../../examples/face-dete
 |---|---|---|---|---|---|
 | Policy | `policy` | `policy` | `GraphLinkPolicy::Default` | Chooses how the link behaves when the receiver is slow. See the next table | Set `RealtimeLatestByStream` on live video branches, unless metadata must pair with every frame the branch sends to Insight |
 | Stream ID | `stream_id` | `stream_id` | `""` | Stable stream identity stamped on samples before realtime scheduling. Empty derives the identity from the source link. With one source, the pulled sample carries the decoder name instead (see Pitfalls) | Several cameras share a model and you need to tell their results apart, count drops per camera, or keep IDs stable across restarts |
-| Inflight per stream | `max_inflight_per_stream` | `max_inflight_per_stream` | `-1` (the framework default, 4) | Maximum decoded frames one stream may have in the graph at once. Applies only to realtime links that carry raw decoder frames. It does not bound a model graph behind the link. Measured on Neat Core 0.6.2: with the model graph as the decoder output's only consumer, the link registered no credit. With a second consumer, that consumer's pull or `Latest()` replace released the frame's credit, which sits on the frame's shared storage (`src/pipeline/runtime/RunCore.cpp`, `src/pipeline/runtime/EdgeRouter.cpp`). Bound such a model's frames with the decoder's `num_buffers` | A stream must keep more frames in flight to reach its frame rate, or fewer to leave decoder buffers for others |
-| Inflight total | `max_inflight_total` | `max_inflight_total` | `-1` (the per-stream limits added up, at most 8) | Maximum decoded frames all streams together may have in the graph. Applies only to realtime links that carry raw decoder frames | More than two streams share one model: the default total of 8 caps them below their per-stream limits. The pose estimator sets 16 for four streams. The total counts the streams on one link (`src/pipeline/runtime/EdgeRouter.cpp`). Like the per-stream limit, it does not bound a model graph behind the link |
+| Inflight per stream | `max_inflight_per_stream` | `max_inflight_per_stream` | `-1` (the framework default, 4) | Maximum decoded frames one stream may have in the graph at once. Applies only to realtime links that carry raw decoder frames. When a decoder feeds its own model graph, the limit may not hold; see Pitfalls | A stream must keep more frames in flight to reach its frame rate, or fewer to leave decoder buffers for others |
+| Inflight total | `max_inflight_total` | `max_inflight_total` | `-1` (the per-stream limits added up, at most 8) | Maximum decoded frames all streams together may have in the graph. Applies only to realtime links that carry raw decoder frames | More than two streams share one model: the default total of 8 caps them below their per-stream limits. The pose estimator sets 16 for four streams. The total counts the streams on one link (`src/pipeline/runtime/EdgeRouter.cpp`) |
 
 `GraphLinkOptions` also has `queue_depth`, which is kept so that older code
 still compiles. It has no effect, see Pitfalls.
@@ -134,6 +134,14 @@ None. Python has every field and both policy values.
 - **The total limit is lower than it looks.** With the default total of 8, eight
   streams at 4 frames each still share 8 frames in flight. Raise
   `max_inflight_total` together with the stream count.
+- **A model fed by one decoder can hold more frames than the limit.** Measured on Neat Core
+  0.6.2, with each stream's decoder feeding its own model graph through its own
+  `RealtimeLatestByStream` link: with the model as the decoder output's only consumer, the link
+  registered no frame credit. With a second consumer, such as a `Latest()` output, that
+  consumer's pull released each frame's credit, which sits on the frame's shared storage
+  (`src/pipeline/runtime/RunCore.cpp`, `src/pipeline/runtime/EdgeRouter.cpp`). Neither case
+  bounded the model's frames, so bound them with `SimaDecodeOptions::num_buffers`. Several
+  streams sharing one model was not measured this way.
 
 ## Used in
 

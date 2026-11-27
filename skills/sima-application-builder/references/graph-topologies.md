@@ -124,10 +124,9 @@ stream. Do not raise it to add buffering. Use `OutputOptions` on the `Output`, o
   with a `RealtimeLatestByStream` link from the decoder to the model. Pull every `results_<i>` in
   one loop. A slowed model slows only its own stream: on a DevKit with Neat Core 0.6.2, MLA at
   1 GHz, and four 1280x720@30 H.264 streams, one model held to 10 or 1 results/s left the other
-  three at 30 results/s. An oversubscribed MLA was not measured. The link's in-flight cap does
-  not bound such a model's frames: on Neat Core 0.6.2 the link registered no frame credit, and a
-  second consumer of the decoder output releases each frame when it pulls it. Bound them with
-  `SimaDecodeOptions::num_buffers`.
+  three at 30 results/s. An oversubscribed MLA was not measured. Bound each model's frames with
+  `SimaDecodeOptions::num_buffers`, because the link's in-flight cap does not, as the optimizer
+  skill's tuning reference ("Share the model across streams") says.
 - **Results joined by frame:** before a `graphs::Combine` with `CombinePolicy::ByFrame` or
   `ByPts`, use plain links. A latest-by-stream link drops frames, and the join then waits for
   frames that never arrive.

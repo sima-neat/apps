@@ -46,7 +46,9 @@ is the reference: read its `main.py` and `main.cpp` before writing or reviewing 
   `agents/rules.md` "Config keys". The code reads every key as required, and a missing key is
   an error that names it.
 - Each key carries a short comment saying what it does. Values are scalars, lists of scalars,
-  or lists of mappings, which the C++ and Python readers parse the same way. A list of
+  or lists of mappings, which the C++ and Python readers parse the same way, except that C++
+  `string()` reads any scalar as text: `id: 5` reads as `"5"` in C++ and fails in Python.
+  Quote a string that looks like a number. A list of
   mappings holds one entry per item, such as one `model` entry per stream, and `main` reads it
   with `mapping_list(key)`. Each field of an entry means what the registered key of that name
   means, such as `path` for `model.path`.
