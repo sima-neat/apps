@@ -96,6 +96,8 @@ from shell_config_suite import (  # noqa: E402,F401
     ShellResidentLimitConfigTests,
     StudioSupervisorTests,
     ShellWebConfigTests,
+    StandaloneUpdateRunTests,
+    StandaloneUpdateTests,
 )
 from setup_rag_suite import (  # noqa: E402,F401
     RagDatabaseCleanupTests,

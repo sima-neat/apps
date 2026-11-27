@@ -474,9 +474,19 @@ run. Allowed origins get CORS headers (the `X-*` timing and engine headers are
 exposed) and preflight answers on the API paths; `/shutdown` never does.
 
 ### Update and clean up
-To update, install the newer Apps release with `sima-cli neat install apps` and
-run `${APP_DIR}/setup.sh` again. (`${APP_DIR}/run.sh update` refreshes a source
-checkout or a single-example download instead; see Development From Source.)
+To update a `sima-cli` install, run `sima-cli neat install apps` again, which
+also updates the Neat Library, and then `${APP_DIR}/setup.sh`.
+In a source checkout, `${APP_DIR}/run.sh update` runs `git pull` for the whole
+checkout. In an install, it updates only the Studio folder. It fetches the
+latest build of the branch or tag in `deps/neat-apps.json` with the install's
+`scripts/get-example.sh`. An install from a tag therefore stays on its release.
+`NEAT_APPS_BRANCH=main` or a newer tag moves it. If the install has no
+`scripts/get-example.sh`, the update downloads that ref's script from GitHub.
+The update leaves `deps/`, which holds the Core pin and the Apps commit, and
+`scripts/get-example.sh` as they are. Only a reinstall refreshes them.
+`NEAT_APPS_BRANCH=<branch or tag>` applies to one update, and the next plain
+update returns to the ref in `deps/neat-apps.json`. `UPDATE_DEPS=1` also
+refreshes the Python environments.
 
 `${APP_DIR}/run.sh --clean` stops a running instance, lists what it will remove
 (the venvs, `config.local.yaml`, the RAG database, downloaded TTS voices,
@@ -531,11 +541,17 @@ carries the host-runnable unit suites under `tests/python/`, collected by
 `tests/python/test_unit.py`; `./tests/test.sh --unit` runs them and they need
 only pytest and PyYAML.
 
-Outside the installed bundle, the Studio can also be fetched on its own with
+Without the whole bundle, the Studio can also be fetched on its own with
 `curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- neat-genai-studio`.
-`${APP_DIR}/run.sh update` refreshes such a download, or runs `git pull` in a checkout;
-`NEAT_APPS_BRANCH=<branch>` picks the branch and `UPDATE_DEPS=1` also refreshes
-the Python environments.
+It lands in `neat-genai-studio/examples/genai/neat-genai-studio/`. Run
+`cd neat-genai-studio` and `APP_DIR=examples/genai/neat-genai-studio`, then the
+commands above. To update it, run `${APP_DIR}/run.sh update` as Update and clean
+up describes. To reinstall it, run the same `curl` command with `--force` before
+`neat-genai-studio`, from the folder above `neat-genai-studio`. `--force` keeps
+`models/` and deletes everything else in the folder, including
+`config.local.yaml`, the venvs, the RAG database and the downloaded voices. A
+Studio that an older `get-example.sh` fetched has no `deps/`, so `--force`
+refuses it. Move that folder away and fetch the Studio again.
 
 The backend folder was called ui before it became `src/python/api/`. After
 `run.sh update` from such a version, the next `run.sh` start moves the
