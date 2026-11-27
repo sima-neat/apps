@@ -889,18 +889,18 @@ int run_case(const std::string& binary, const fs::path& detector, const fs::path
     return 1;
   }
 
-  // Read during the run, so no message waits long enough to overflow the socket buffer.
+  // A message with a pose spans several datagrams, and the listener drops a partial one after
+  // 250 ms, so read without pausing for the whole run.
   MetadataJsonListenerResult metadata;
-  const auto read_metadata = [&] {
-    // Once one port has a message, poll_messages returns after each datagram, so read until the
-    // sockets are empty.
-    (void)listener.poll_messages(metadata, 100);
-    while (listener.poll_messages(metadata, 0)) {
+  std::atomic<bool> stop{false};
+  std::thread read_metadata([&] {
+    while (!stop) {
+      (void)listener.poll_messages(metadata, 100);
     }
-    return false; // The application stops by itself after runtime.frames.
-  };
-  const ProcessResult process =
-      spawn_until(binary, {"--config", config.string()}, read_metadata, timeout_ms);
+  });
+  const ProcessResult process = spawn_and_wait(binary, {"--config", config.string()}, timeout_ms);
+  stop = true;
+  read_metadata.join();
   const MetadataJsonListenerResult rest = listener.drain_pending();
   metadata.messages.insert(metadata.messages.end(), rest.messages.begin(), rest.messages.end());
   std::string metadata_error = !metadata.error.empty() ? metadata.error : rest.error;
