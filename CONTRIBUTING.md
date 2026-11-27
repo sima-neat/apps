@@ -36,7 +36,7 @@ Keep runtime inputs explicit:
 - no hidden model defaults that disagree with the README
 - no stale product names in user-facing text
 
-Use the official product names: Neat Library, Neat Development Environment,
+Use the official product names: Neat Library, Palette SDK,
 Model Compiler, and LLiMa.
 
 ## README Contract
@@ -57,8 +57,20 @@ The validator requires these sections in order:
 9. `Source Files`
 10. `Development From Source`
 
-Optional sections such as `Expected Result` and `Troubleshooting` belong where
-they support that sequence.
+Each section is one step the customer takes, in that order, and every command
+runs as written from `prebuilt-apps/`. Optional sections go in these places:
+
+- a `Prepare <input>` section, such as `Prepare Insight`, after `Prepare the Model`
+- `Expected Result`, `Troubleshooting`, and `Performance` after `Run`
+
+Keep each section minimal and precise. `Concept` starts with the one- or
+two-sentence portal summary, then shows the graph topology as a flowgraph in a
+`text` code block, drawn as `agents/references/flowgraph.md` describes: the
+inputs, decoders, models, outputs, and senders the entrypoint connects, and the
+link policies between them. `Configure` names only the keys the
+customer edits, one bullet each, with the value or where it comes from. Explain
+behavior in `Concept`, and list error messages with their fixes in
+`Troubleshooting`.
 
 The installed workflow must:
 
@@ -130,6 +142,10 @@ Treat the packaged `src/common/config.yaml` as the source of truth. Point users
 to it and name only the settings they must change. Do not copy the full file
 into the README. A focused snippet is appropriate only for an override or
 generated configuration that the package does not provide.
+
+Config files use the key names in `examples/config-keys.yaml` and put settings
+only one example has under `app.`. Every key the application reads is required,
+and it ignores keys it does not read.
 
 Bundle instructions run from `prebuilt-apps/`. Define
 `APP_DIR=examples/<category>/<example>` once and reuse it so commands remain
@@ -208,7 +224,7 @@ available:
 ./tests/test.sh --e2e --strict
 ```
 
-Compile C++ examples in the Neat Development Environment. Run runtime and e2e
+Compile C++ examples in the Palette SDK. Run runtime and e2e
 checks on supported SiMa hardware. Host checks cover documentation, source
 hygiene, and lightweight static validation.
 
@@ -219,8 +235,8 @@ When adding C++:
 - keep C++ test filenames aligned with `cmake/ExampleModule.cmake`
 
 When changing layout, commands, models, or tests, inspect `build.sh`,
-`tests/test.sh`, `tests/utils/test_scope.py`, README validation, catalog
-generation, and affected CI workflows.
+`scripts/ci/package-apps.sh`, `tests/test.sh`, `tests/utils/test_scope.py`,
+README validation, catalog generation, and affected CI workflows.
 
 ## Installed Layout
 
@@ -231,6 +247,10 @@ generation, and affected CI workflows.
 | `examples/<category>/<example>/src/cpp/` | C++ implementation reference |
 | `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
+| `support/README.md` | What each shared helper does |
+| `support/labels/` | Class-label files two or more examples' configs name |
+| `support/python/` | Helpers the Python examples share |
+| `support/cpp/` | Source of the helpers the C++ executables are built with, as reference |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |
 | `deps/neat-apps.json` | Installed Apps ref and exact commit |
@@ -244,6 +264,10 @@ to compile source or run the Apps test suite.
 | Path | Purpose |
 | --- | --- |
 | `examples/` | Application examples organized by category |
+| `examples/config-keys.yaml` | Config keys the examples share, checked by `tests/scripts/test_config_keys.py` |
+| `support/` | The shared library: code two or more examples need, under the same file and function names in each language, and in `support/labels/` the label files they share. `support/README.md` lists the modules and label files, and `agents/rules.md` says what goes there instead of an example's `utils/` or `src/common/` |
+| `skills/` | Customer skills that sima-cli installs |
+| `agents/` | Rules and skills for contributors' agents and the automatic review |
 | `assets/datasets/` | Runtime datasets shipped with Apps |
 | `assets/datasets-test/` | Repository-only test fixtures |
 | `models/` | Ignored user-managed model packages |
@@ -260,6 +284,8 @@ the `snap` policy, while a release-preparation branch can select an exact Core
 artifact. Vulcan records the resolved Core target under package metadata and
 the Apps installer uses that same target. Insight is not pinned in the Apps
 manifest.
+`cmake/YamlCpp.cmake` pins the yaml-cpp 0.8.0 source by SHA-256, for the
+headers of the `libyaml-cpp.so.0.8` that Core links.
 
 Builds inherit the sysroot requirement from Core's bundled Scheduler. Official
 releases require a matching cached SDK receipt, package inventory and package

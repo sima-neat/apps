@@ -1,23 +1,37 @@
-// E2E test for multi-stream-multi-model.
-// Runs four RTSP streams through four different models and verifies that each stream publishes
-// its own Insight contract and writes its own annotated debug frames.
-#include "support/testing/metadata_json_listener.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+// End-to-end tests: four RTSP streams, each with its own model, reach Insight as video and as that
+// model's metadata, each on its own channel. tests/python/test_e2e.py runs the same checks.
+#include "sima_examples/rtsp_probe.h"
+#include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/source_cases.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 
-#include <cmath>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <map>
 #include <memory>
+#include <regex>
+#include <set>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
-#include <array>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
@@ -25,276 +39,508 @@ using namespace sima_examples::testing;
 namespace {
 
 constexpr const char* kExampleName = "multi-stream-multi-model";
-constexpr const char* kE2eInsightHost = "127.0.0.1";
+constexpr int kFrames = 150;
+// Above the shipped 0.30, so the results show that the example applies inference.min_score.
+constexpr double kMinScore = 0.35;
+// A floor that catches a stream falling far behind, not a slow source. Whether the app keeps up
+// with its sources is measured on a board, not here.
+constexpr double kMinResultsPerS = 19.5;
+// A keyframe arrives as a burst of packets, and a full socket buffer drops the rest of it. Linux
+// caps the size at net.core.rmem_max, so the report prints what the socket got.
+constexpr int kVideoReceiveBuffer = 8 << 20;
 
-/// One slot per stream: the task, the head layout of its package, the package file the scope
-/// downloads, the Insight contract that stream must publish on, and how many results at least one
-/// of its messages must carry. Detection and segmentation cover all COCO classes, so the CI footage
-/// yields results. Pose stays at 0: it needs people, and the CI H.264 fixture published 140 frames
-/// without a tracked person (see multi-stream-tracker's E2E); published poses are still checked.
-struct StreamSlot {
-  const char* task;
-  const char* decode;
-  const char* model_file;
-  const char* metadata_type;
-  const char* data_array_key;
-  int min_objects;
+using Clock = std::chrono::steady_clock;
+
+// The shipped config's streams, in order: the package test-scope.yaml downloads for each, the
+// Insight metadata type its model sends, and the key of the entries in that type's data.
+struct StreamCase {
+  std::string file;
+  std::string metadata_type;
+  std::string key;
+};
+const std::vector<StreamCase> kStreams = {
+    {"yolo11s_w8a8_mpk.tar.gz", "object-detection", "objects"},
+    {"yolo26s_seg_w8a16_mpk.tar.gz", "segmentation", "segments"},
+    {"yolo26m_pose_w8a8_mpk.tar.gz", "pose-estimation", "poses"},
+    {"yolo26m_w8a8_mpk.tar.gz", "object-detection", "objects"},
 };
 
-class VideoListeners {
+// RTP payload types: H.264 96, H.265 98.
+int payload_type(const std::string& codec) {
+  return codec == "h264" ? 96 : 98;
+}
+
+std::string regex_escape(const std::string& text) {
+  static const std::regex special(R"([.^$|()\[\]{}*+?\\])");
+  return std::regex_replace(text, special, R"(\$&)");
+}
+
+std::set<std::string> coco_labels() {
+  std::ifstream file("support/labels/coco80.txt");
+  std::set<std::string> labels;
+  for (std::string line; std::getline(file, line);) {
+    if (!line.empty()) {
+      labels.insert(line);
+    }
+  }
+  return labels;
+}
+
+using RtpHeader = std::array<unsigned char, 12>;
+
+// Receives one stream's video and keeps each packet's RTP header until `stop` is set.
+class VideoDrain {
 public:
-  std::vector<int> sockets;
-  ~VideoListeners() { for (int fd : sockets) ::close(fd); }
-  bool bind_ports(int base) {
-    for (int i = 0; i < 4; ++i) {
-      const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
-      if (fd < 0) return false;
-      sockets.push_back(fd);
-      sockaddr_in address{};
-      address.sin_family = AF_INET;
-      address.sin_port = htons(base + i);
-      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-      if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) return false;
-    }
-    return true;
-  }
-  bool check(const std::string& codec) {
-    bool ok = true;
-    for (std::size_t i = 0; i < sockets.size(); ++i) {
-      std::array<unsigned char, 65536> packet{};
-      const auto size = ::recv(sockets[i], packet.data(), packet.size(), MSG_DONTWAIT);
-      if (size < 12 || packet[0] >> 6 != 2 || (packet[1] & 0x7f) != (codec == "h264" ? 96 : 98)) {
-        std::cerr << "[FAIL] stream " << i << " did not deliver valid " << codec << " RTP video\n";
-        ok = false;
-      }
-    }
-    return ok;
-  }
-};
-
-const std::vector<StreamSlot>& stream_slots() {
-  static const std::vector<StreamSlot> slots = {
-      {"detection", "yolov8", "yolo11s_w8a8_mpk.tar.gz", "object-detection", "objects", 1},
-      {"segmentation", "yolo26", "yolo26s_seg_w8a16_mpk.tar.gz", "segmentation", "segments", 1},
-      {"pose", "yolo26", "yolo26m_pose_w8a8_mpk.tar.gz", "pose-estimation", "poses", 0},
-      {"detection", "yolo26", "yolo26m_w8a8_mpk.tar.gz", "object-detection", "objects", 1},
-  };
-  return slots;
-}
-
-struct SourceCase {
-  std::string codec;
-  std::vector<std::string> urls;
-};
-
-void record_unavailable_source(const std::string& fail_reason, const std::string& skip_reason,
-                               int& rc) {
-  if (require_e2e_mode()) {
-    std::cerr << "[FAIL] " << fail_reason << "\n";
-    rc = 1;
-  } else {
-    std::cerr << "[SKIP] " << skip_reason << "\n";
-  }
-}
-
-/// Append the per-stream mapping list to a generated config.
-///
-/// `write_e2e_config` rebuilds the config from flat scalars, which cannot express a YAML sequence
-/// of mappings, so the stream list is written here instead of overridden through the harness.
-void append_streams_block(const fs::path& config_path, const std::vector<std::string>& urls,
-                          const std::vector<std::string>& model_paths) {
-  std::ofstream out(config_path, std::ios::app);
-  out << "streams:\n";
-  for (std::size_t index = 0; index < stream_slots().size(); ++index) {
-    const StreamSlot& slot = stream_slots()[index];
-    out << "  - url: " << urls[index % urls.size()] << "\n"
-        << "    task: " << slot.task << "\n"
-        << "    decode: " << slot.decode << "\n"
-        << "    model: " << model_paths[index] << "\n";
-  }
-}
-
-using MetadataListeners = std::vector<std::unique_ptr<MetadataJsonListener>>;
-
-/// Bind one listener per stream. The four channels carry three different Insight contracts, so a
-/// single shared listener could not tell a wrong-typed stream from a silent one.
-///
-/// The sockets must be bound before the application starts, or its datagrams arrive with nothing
-/// listening and are dropped.
-MetadataListeners bind_metadata_listeners(const std::string& codec, int metadata_port_base) {
-  MetadataListeners listeners;
-  for (std::size_t index = 0; index < stream_slots().size(); ++index) {
-    MetadataJsonListenerOptions options;
-    options.host = kE2eInsightHost;
-    options.base_port = metadata_port_base + static_cast<int>(index);
-    options.num_ports = 1;
-    options.timeout_ms = 5000;
-    options.metadata_type = stream_slots()[index].metadata_type;
-    options.data_array_key = stream_slots()[index].data_array_key;
-    options.require_all_ports = true;
-    options.min_object_count = stream_slots()[index].min_objects;
-    listeners.push_back(std::make_unique<MetadataJsonListener>(options));
-    if (!listeners.back()->ok()) {
-      std::cerr << "[FAIL] " << codec << " metadata listener for stream " << index
-                << " failed: " << listeners.back()->error() << "\n";
-      return {};
-    }
-  }
-  return listeners;
-}
-
-/// Every `confidence` this message publishes, wherever the task's payload keeps it.
-void collect_confidences(const nlohmann::json& node, std::vector<double>& out) {
-  if (node.is_object()) {
-    for (const auto& [key, value] : node.items()) {
-      if (key == "confidence" && value.is_number()) {
-        out.push_back(value.get<double>());
-      } else {
-        collect_confidences(value, out);
-      }
-    }
-  } else if (node.is_array()) {
-    for (const auto& value : node) {
-      collect_confidences(value, out);
-    }
-  }
-}
-
-bool check_metadata(const std::string& codec, int metadata_port_base,
-                    const MetadataListeners& listeners) {
-  bool ok = true;
-  for (std::size_t index = 0; index < listeners.size(); ++index) {
-    const MetadataJsonListenerResult result = listeners[index]->wait_for_messages();
-    bool valid_stamps = !result.messages.empty();
-    for (const auto& message : result.messages) {
-      valid_stamps = valid_stamps && message.timestamp_ms >= 0 && !message.frame_id.empty();
-      // Three decimals, so C++ and Python publish the same bytes for the same result and the
-      // byte budget keeps the same number of entries in both.
-      std::vector<double> confidences;
-      collect_confidences(nlohmann::json::parse(message.payload)["data"], confidences);
-      for (const double confidence : confidences) {
-        if (std::abs(confidence * 1000.0 - std::round(confidence * 1000.0)) > 1e-6) {
-          std::cerr << "[FAIL] " << codec << " stream " << index
-                    << " published an unrounded confidence " << confidence << "\n";
-          ok = false;
-        }
-      }
-      if (std::string(stream_slots()[index].metadata_type) == "pose-estimation") {
-        for (const auto& pose : nlohmann::json::parse(message.payload)["data"]["poses"]) {
-          if (!pose.contains("keypoints") || pose["keypoints"].size() != 17) {
-            std::cerr << "[FAIL] " << codec << " stream " << index
-                      << " published a pose without 17 keypoints\n";
-            ok = false;
+  VideoDrain(int port, const std::atomic<bool>& stop) {
+    fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    timeval timeout{0, 200000};
+    ::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    ::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &kVideoReceiveBuffer, sizeof(kVideoReceiveBuffer));
+    socklen_t size = sizeof(receive_buffer_);
+    ::getsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &receive_buffer_, &size);
+    ok_ = fd_ >= 0 && ::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
+    if (ok_) {
+      // The loop only reads, into one buffer, so it empties the socket as fast as it can.
+      thread_ = std::thread([this, &stop] {
+        std::vector<unsigned char> packet(65536);
+        for (;;) {
+          const auto size = ::recv(fd_, packet.data(), packet.size(), 0);
+          if (size >= 12) {
+            RtpHeader header{};
+            std::copy_n(packet.begin(), header.size(), header.begin());
+            headers_.push_back(header);
+          } else if (stop) {
+            return;
           }
         }
-      }
-    }
-    if (!result.success || !valid_stamps) {
-      std::cerr << "[FAIL] " << codec << " stream " << index << " did not publish "
-                << stream_slots()[index].metadata_type << " metadata on port "
-                << metadata_port_base + static_cast<int>(index) << ": " << result.error
-                << (valid_stamps ? "" : "; missing usable source timestamp or frame ID") << "\n";
-      ok = false;
-    } else {
-      std::cout << "[OK] " << codec << " stream " << index << " published "
-                << stream_slots()[index].metadata_type << " metadata\n";
+      });
     }
   }
-  return ok;
-}
-
-bool every_stream_saved_a_frame(const std::string& output_dir) {
-  for (std::size_t index = 0; index < stream_slots().size(); ++index) {
-    const std::string prefix = "stream_" + std::to_string(index) + "_frame_";
-    bool found = false;
-    for (const auto& entry : fs::recursive_directory_iterator(output_dir)) {
-      if (entry.is_regular_file() && entry.path().filename().string().rfind(prefix, 0) == 0) {
-        found = true;
-        break;
-      }
+  ~VideoDrain() {
+    if (thread_.joinable()) {
+      thread_.join();
     }
-    if (!found) {
-      std::cerr << "[FAIL] stream " << index << " saved no annotated debug frame\n";
-      return false;
+    if (fd_ >= 0) {
+      ::close(fd_);
     }
   }
-  return true;
+  bool ok() const {
+    return ok_;
+  }
+  int receive_buffer() const {
+    return receive_buffer_;
+  }
+  // Call after `stop` is set.
+  const std::vector<RtpHeader>& headers() {
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+    return headers_;
+  }
+
+private:
+  int fd_ = -1;
+  bool ok_ = false;
+  int receive_buffer_ = 0;
+  std::vector<RtpHeader> headers_;
+  std::thread thread_;
+};
+
+// RcvbufErrors of the Udp: line of /proc/net/snmp: datagrams the kernel dropped because a UDP
+// socket's receive buffer was full, for every UDP socket of the host. -1 without the file.
+long long udp_rcvbuf_errors() {
+  std::ifstream file("/proc/net/snmp");
+  std::vector<std::vector<std::string>> rows;
+  for (std::string line; std::getline(file, line) && rows.size() < 2;) {
+    if (line.rfind("Udp:", 0) == 0) {
+      std::istringstream words(line);
+      rows.emplace_back(std::istream_iterator<std::string>(words),
+                        std::istream_iterator<std::string>());
+    }
+  }
+  if (rows.size() != 2) {
+    return -1;
+  }
+  const auto name = std::find(rows[0].begin(), rows[0].end(), "RcvbufErrors");
+  const auto column = static_cast<std::size_t>(name - rows[0].begin());
+  return name == rows[0].end() || column >= rows[1].size() ? -1 : std::stoll(rows[1][column]);
 }
 
-int run_source_case(const std::string& binary, const std::vector<std::string>& model_paths,
-                    const fs::path& labels_file, const SourceCase& source_case) {
+std::uint32_t rtp_timestamp(const RtpHeader& header) {
+  return static_cast<std::uint32_t>(header[4]) << 24 | static_cast<std::uint32_t>(header[5]) << 16 |
+         static_cast<std::uint32_t>(header[6]) << 8 | header[7];
+}
+
+std::uint16_t rtp_sequence(const RtpHeader& header) {
+  return static_cast<std::uint16_t>(header[2] << 8 | header[3]);
+}
+
+// A gap in the RTP sequence: the packets missing, and the RTP timestamps of the packets before and
+// after it. A frame wholly in a gap has a timestamp between those two.
+struct SequenceGap {
+  long long missing = 0;
+  std::uint32_t before = 0;
+  std::uint32_t after = 0;
+};
+
+std::vector<SequenceGap> sequence_gaps(const std::vector<RtpHeader>& headers) {
+  std::vector<SequenceGap> gaps;
+  for (std::size_t i = 1; i < headers.size(); ++i) {
+    const auto step =
+        static_cast<std::uint16_t>(rtp_sequence(headers[i]) - rtp_sequence(headers[i - 1]));
+    if (step > 1 && step < 0x8000) {
+      gaps.push_back({step - 1, rtp_timestamp(headers[i - 1]), rtp_timestamp(headers[i])});
+    }
+  }
+  return gaps;
+}
+
+// Whether the frame at `timestamp_ms` may be one of the packets a gap is missing.
+bool in_gap(std::int64_t timestamp_ms, const std::vector<SequenceGap>& gaps) {
+  const auto ticks = static_cast<std::uint32_t>(timestamp_ms * 90);
+  return std::any_of(gaps.begin(), gaps.end(), [&](const SequenceGap& gap) {
+    return static_cast<std::uint32_t>(ticks - gap.before + 90) <=
+           static_cast<std::uint32_t>(gap.after - gap.before + 180);
+  });
+}
+
+// What each video port received, to tell packets the test's sockets dropped from frames the app
+// did not send. A gap in the RTP sequence numbers is a packet sent and not received.
+std::string video_report(const std::vector<std::unique_ptr<VideoDrain>>& videos,
+                         long long drops_before) {
+  std::string report;
+  for (std::size_t index = 0; index < videos.size(); ++index) {
+    const auto& headers = videos[index]->headers();
+    long long missing = 0;
+    for (const auto& gap : sequence_gaps(headers)) {
+      missing += gap.missing;
+    }
+    std::set<std::uint32_t> timestamps;
+    for (const auto& header : headers) {
+      timestamps.insert(rtp_timestamp(header));
+    }
+    report += "video port " + std::to_string(index) + ": " + std::to_string(headers.size()) +
+              " RTP packets, " + std::to_string(missing) + " sequence numbers missing between " +
+              "them, " + std::to_string(timestamps.size()) + " RTP timestamps for " +
+              std::to_string(kFrames) + " frames, receive buffer " +
+              std::to_string(videos[index]->receive_buffer()) + " bytes from getsockopt for " +
+              std::to_string(kVideoReceiveBuffer) + " asked\n";
+  }
+  const long long drops_after = udp_rcvbuf_errors();
+  std::ifstream rmem_file("/proc/sys/net/core/rmem_max");
+  std::string rmem_max;
+  if (!(rmem_file >> rmem_max)) {
+    rmem_max = "unknown";
+  }
+  return report + "Udp RcvbufErrors during the run, all sockets: " +
+         (drops_before < 0 || drops_after < 0 ? std::string("unknown")
+                                              : std::to_string(drops_after - drops_before)) +
+         "; rmem_max " + rmem_max;
+}
+
+// Insight's pairing: the metadata's timestamp on the 90 kHz RTP clock is within 1 ms of a video
+// frame's RTP timestamp.
+bool pairs(std::int64_t timestamp_ms, const std::set<std::uint32_t>& rtp_timestamps) {
+  const auto ticks = static_cast<std::uint32_t>(timestamp_ms * 90);
+  return std::any_of(rtp_timestamps.begin(), rtp_timestamps.end(), [&](std::uint32_t rtp) {
+    return std::llabs(static_cast<long long>(ticks) - static_cast<long long>(rtp)) <= 90;
+  });
+}
+
+// Why `entry` is not a result the stream's model can send, or "" when it is.
+std::string entry_problem(const std::string& metadata_type, const nlohmann::json& entry,
+                          const std::set<std::string>& labels) {
+  const double confidence = entry.at("confidence").get<double>();
+  if (confidence < kMinScore || confidence > 1.0) {
+    return "confidence below inference.min_score";
+  }
+  const std::string label = entry.at("label").get<std::string>();
+  if (metadata_type == "pose-estimation") {
+    const auto& keypoints = entry.at("keypoints");
+    if (label != "person" || keypoints.size() != 17U || keypoints[0].at("name") != "nose") {
+      return "not a person with the 17 COCO keypoints";
+    }
+    return "";
+  }
+  if (labels.count(label) == 0) {
+    return "label not in coco80.txt";
+  }
+  if (metadata_type == "segmentation" && entry.at("mask").size() < 3U) {
+    return "mask outline with fewer than three points";
+  }
+  return "";
+}
+
+// With `size_set`, input.width, input.height, and input.fps take the source's own values.
+int run_case(const std::string& binary, const std::string& models_dir,
+             const MultiStreamSourceCase& source_case, bool size_set) {
+  const std::string label = source_case.codec + (size_set ? "_size_set" : "");
   const std::string output_dir = create_test_output_dir(
-      kExampleName, "test_every_stream_publishes_its_own_model_contract_" + source_case.codec);
+      kExampleName,
+      "test_each_stream_reaches_its_insight_channel_as_video_and_its_models_results_" + label);
   if (output_dir.empty()) {
     return 1;
   }
-
-  const int video_port_base = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
-  const int metadata_port_base =
-      env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
-  const int total_saved_frames = e2e_int(kExampleName, "testing.e2e.output", "total_saved_frames");
+  const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
+  const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-
-  const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
-  write_e2e_config(kExampleName, config_path,
-                   {{"model.labels", labels_file.string()},
-                    {"input.codec", source_case.codec},
-                    {"output.debug_dir", output_dir},
-                    {"output.insight.host", kE2eInsightHost},
-                    {"output.insight.video_port_base", std::to_string(video_port_base)},
-                    {"output.insight.metadata_port_base", std::to_string(metadata_port_base)},
-                    {"inference.frames", "140"}});
-  append_streams_block(config_path, source_case.urls, model_paths);
-
-  VideoListeners videos;
-  if (!videos.bind_ports(video_port_base)) {
-    std::cerr << "[FAIL] cannot bind video listener ports\n";
-    return 1;
-  }
-  const MetadataListeners listeners =
-      bind_metadata_listeners(source_case.codec, metadata_port_base);
-  if (listeners.empty()) {
-    remove_dir(output_dir);
-    return 1;
-  }
-
-  const ProcessResult result = spawn_and_wait(
-      binary, {"--config", config_path.string()}, timeout_ms);
-
-  int rc = 0;
-  if (result.exit_code != 0) {
-    std::cerr << "[FAIL] " << source_case.codec << " exit code " << result.exit_code << "\n";
-    std::cerr << "stdout:\n" << result.stdout_text << "\n";
-    std::cerr << "stderr:\n" << result.stderr_text << "\n";
-    rc = 1;
-  } else {
-    const int files = count_output_files(output_dir);
-    const std::string frames_problem =
-        streamed_frames_problem(output_dir, total_saved_frames, stream_slots().size());
-    if (files < total_saved_frames) {
-      std::cerr << "[FAIL] " << source_case.codec << " expected at least " << total_saved_frames
-                << " sampled output files, got " << files << "\n";
-      rc = 1;
-    } else if (!frames_problem.empty()) {
-      std::cerr << "[FAIL] " << source_case.codec << " " << frames_problem << "\n";
-      rc = 1;
-    } else if (!every_stream_saved_a_frame(output_dir)) {
-      rc = 1;
-    } else {
-      std::cout << "[OK] " << source_case.codec << " multi-model pipeline produced " << files
-                << " sampled output files across " << stream_slots().size() << " streams\n";
+  const fs::path config_dir = fs::path(output_dir).parent_path();
+  const fs::path config_path = config_dir / "config.yaml";
+  const int streams = static_cast<int>(kStreams.size());
+  std::vector<std::string> model_paths;
+  std::vector<std::string> sources;
+  // The shipped entries, each with its path relative to the generated config, so the test runs
+  // the app's path join. The labels path starts at the working directory, as shipped.
+  const auto shipped = example_common_config(kExampleName).mapping_list("model");
+  std::vector<ConfigScalars> models;
+  for (int index = 0; index < streams; ++index) {
+    const fs::path model = fs::path(models_dir) / kStreams[static_cast<std::size_t>(index)].file;
+    model_paths.push_back(fs::relative(fs::absolute(model), fs::absolute(config_dir)).string());
+    // The app runs in this test's working directory, so only a path joined to the config file
+    // finds a model.
+    if (fs::exists(model_paths.back())) {
+      std::cerr << "[FAIL] " << label << " the working directory also finds "
+                << model_paths.back() << "\n";
+      return 1;
+    }
+    sources.push_back(
+        size_set ? source_case.urls.front()
+                 : source_case.urls[static_cast<std::size_t>(index) % source_case.urls.size()]);
+    const auto& entry = shipped.at(static_cast<std::size_t>(index));
+    models.push_back({{"id", entry.string("id")}, {"path", model_paths.back()}});
+    if (const auto labels = entry.string_value("labels")) {
+      // The app runs in this test's working directory, so the shipped labels path must resolve
+      // from there.
+      if (!fs::is_regular_file(*labels)) {
+        std::cerr << "[FAIL] " << label << " the working directory does not find " << *labels
+                  << "\n";
+        return 1;
+      }
+      models.back()["labels"] = *labels;
     }
   }
-  if (rc == 0 && !videos.check(source_case.codec)) rc = 1;
-  if (rc == 0 && !check_metadata(source_case.codec, metadata_port_base, listeners)) {
-    rc = 1;
+  ConfigScalars scalars = {{"input.codec", source_case.codec},
+                           {"inference.frames", std::to_string(kFrames)},
+                           {"inference.min_score", std::to_string(kMinScore)},
+                           // This test is the Insight receiver, so the example sends to loopback.
+                           {"output.insight.host", "127.0.0.1"},
+                           {"output.insight.video_port_base", std::to_string(video_port)},
+                           {"output.insight.metadata_port_base", std::to_string(metadata_port)}};
+  // A set size and rate are the ones the app runs with. A 0 runs with the probe's.
+  std::string stream_size = "\\d+x\\d+@(\\d+)";
+  if (size_set) {
+    sima_examples::RtspStreamInfo source;
+    try {
+      source = sima_examples::probe_rtsp_stream_info(sources.front(), true);
+    } catch (const std::exception& error) {
+      std::cerr << "[FAIL] " << label << " " << error.what() << "\n";
+      return 1;
+    }
+    scalars["input.width"] = std::to_string(source.width);
+    scalars["input.height"] = std::to_string(source.height);
+    scalars["input.fps"] = std::to_string(source.fps);
+    stream_size = std::to_string(source.width) + "x" + std::to_string(source.height) + "@(" +
+                  std::to_string(source.fps) + ")";
+  }
+  write_e2e_config(kExampleName, config_path, scalars, {{"input.source", sources}},
+                   {{"model", models}});
+
+  MetadataJsonListenerOptions metadata_options;
+  metadata_options.host = "127.0.0.1";
+  metadata_options.base_port = metadata_port;
+  metadata_options.num_ports = streams;
+  for (const auto& stream : kStreams) {
+    metadata_options.contracts.push_back({stream.metadata_type, stream.key, 0});
+  }
+  MetadataJsonListener listener(metadata_options);
+  if (!listener.ok()) {
+    std::cerr << "[FAIL] " << label << " cannot bind the metadata ports: " << listener.error()
+              << "\n";
+    return 1;
+  }
+  std::atomic<bool> stop{false};
+  std::vector<std::unique_ptr<VideoDrain>> videos;
+  for (int index = 0; index < streams; ++index) {
+    videos.push_back(std::make_unique<VideoDrain>(video_port + index, stop));
+    if (!videos.back()->ok()) {
+      std::cerr << "[FAIL] " << label << " cannot bind video port " << video_port + index << "\n";
+      stop = true;
+      return 1;
+    }
   }
 
-  if (rc != 0 && result.exit_code == 0) {
-    std::cerr << "stdout:\n" << result.stdout_text << "\nstderr:\n" << result.stderr_text << "\n";
+  // Read during the run and at exit, so no message waits long enough to overflow the socket
+  // buffer.
+  MetadataJsonListenerResult metadata;
+  std::map<int, std::vector<Clock::time_point>> arrivals;
+  const auto read_metadata = [&] {
+    const std::size_t before = metadata.messages.size();
+    // Wait up to 100 ms for a datagram, then read every one already queued: MetadataSender sends
+    // a message above 1200 bytes, such as a frame's poses, as several chunks.
+    listener.poll_messages(metadata, 100);
+    listener.read_ready(metadata);
+    for (std::size_t i = before; i < metadata.messages.size(); ++i) {
+      arrivals[metadata.messages[i].port - metadata_port].push_back(Clock::now());
+    }
+    return false; // The application stops by itself after inference.frames.
+  };
+  const long long drops_before = udp_rcvbuf_errors();
+  const ProcessResult result =
+      spawn_until(binary, {"--config", config_path.string()}, read_metadata, timeout_ms);
+  const auto rest = listener.drain_pending();
+  metadata.messages.insert(metadata.messages.end(), rest.messages.begin(), rest.messages.end());
+  stop = true;
+  const std::string video = video_report(videos, drops_before);
+
+  const auto labels = coco_labels();
+  std::vector<std::string> problems;
+  if (const std::string problem = exit_problem(result); !problem.empty()) {
+    problems.push_back(problem + "\nstdout:\n" + result.stdout_text + "\nstderr:\n" +
+                       result.stderr_text);
+  }
+  for (const std::string& error : {metadata.error, rest.error}) {
+    if (!error.empty()) {
+      problems.push_back("metadata listener: " + error);
+    }
+  }
+  bool stream_0_saw_person = false;
+  for (int index = 0; index < streams; ++index) {
+    const auto& stream_case = kStreams[static_cast<std::size_t>(index)];
+    const std::string stream = "stream " + std::to_string(index);
+    const std::regex start_line("(^|\n)\\[" + stream + "\\] [a-z0-9-]+ model=" +
+                                regex_escape(model_paths[static_cast<std::size_t>(index)]) +
+                                " rtsp=" + regex_escape(sources[static_cast<std::size_t>(index)]) +
+                                " stream=" + stream_size + " insight=127\\.0\\.0\\.1 video=" +
+                                std::to_string(video_port + index) +
+                                " metadata=" + std::to_string(metadata_port + index) + "\n");
+    std::smatch start_match;
+    int stream_fps = 0;
+    if (std::regex_search(result.stdout_text, start_match, start_line)) {
+      stream_fps = std::stoi(start_match[2].str());
+    } else {
+      problems.push_back(stream + " did not print its model, source, and ports");
+    }
+    const std::regex summary_line("(^|\n)\\[" + stream + "\\] processed=" +
+                                  std::to_string(kFrames) + " left_out=0\n");
+    if (!std::regex_search(result.stdout_text, summary_line)) {
+      problems.push_back(stream + " did not report processed=" + std::to_string(kFrames) +
+                         " left_out=0");
+    }
+
+    std::set<int> payload_types;
+    std::set<std::uint32_t> rtp_timestamps;
+    const auto& headers = videos[static_cast<std::size_t>(index)]->headers();
+    for (const auto& header : headers) {
+      payload_types.insert(header[1] & 0x7F);
+      rtp_timestamps.insert(rtp_timestamp(header));
+    }
+    if (payload_types != std::set<int>{payload_type(source_case.codec)}) {
+      problems.push_back(stream + " video did not arrive with RTP payload type " +
+                         std::to_string(payload_type(source_case.codec)));
+    }
+
+    int messages = 0;
+    int entries = 0;
+    long long previous_frame_id = -1;
+    std::vector<std::int64_t> unpaired;
+    for (const auto& message : metadata.messages) {
+      if (message.port != metadata_port + index) {
+        continue;
+      }
+      ++messages;
+      if (message.metadata_type != stream_case.metadata_type) {
+        problems.push_back(stream + " sent " + message.metadata_type + " metadata");
+      }
+      if (message.frame_id.empty()) {
+        problems.push_back(stream + ": a message without a frame ID");
+        continue;
+      }
+      const long long frame_id = std::stoll(message.frame_id);
+      if (frame_id <= previous_frame_id) {
+        problems.push_back(stream + ": frame IDs out of order: " + message.frame_id + " after " +
+                           std::to_string(previous_frame_id));
+      }
+      previous_frame_id = frame_id;
+      // A named payload: a range-for over parse(...).at(...) would keep only the reference at()
+      // returns, into a parse result destroyed before the loop.
+      const nlohmann::json payload = nlohmann::json::parse(message.payload);
+      for (const auto& entry : payload.at("data").at(stream_case.key)) {
+        if (const std::string problem = entry_problem(stream_case.metadata_type, entry, labels);
+            !problem.empty()) {
+          problems.push_back(stream + " frame " + message.frame_id + ": " + problem);
+        }
+        stream_0_saw_person |= index == 0 && entry.at("label") == "person";
+        ++entries;
+      }
+      // Insight draws each message's entries on the video frame its timestamp names.
+      if (!pairs(message.timestamp_ms, rtp_timestamps)) {
+        unpaired.push_back(message.timestamp_ms);
+      }
+    }
+    // UDP on loopback may drop a message under load, so allow a few to go missing.
+    if (messages < kFrames * 95 / 100) {
+      problems.push_back(stream + ": " + std::to_string(messages) + " of " +
+                         std::to_string(kFrames) + " messages arrived");
+    }
+    // Every test stream has objects, but only some have a person, so the pose stream must send
+    // poses only when stream 0 found a person on the same URL.
+    if (stream_case.metadata_type != "pose-estimation" && entries == 0) {
+      problems.push_back(stream + " sent no " + stream_case.key);
+    }
+    if (stream_case.metadata_type == "pose-estimation" && entries == 0 && stream_0_saw_person &&
+        sources[static_cast<std::size_t>(index)] == sources.front()) {
+      problems.push_back(stream + " sent no poses while stream 0 saw a person");
+    }
+    // A frame in a gap of the RTP sequence was lost between the sender and this test, so its
+    // message counts against the frames received, up to 5%, not against the app's timestamps.
+    const auto gaps = sequence_gaps(headers);
+    const auto lost = std::count_if(unpaired.begin(), unpaired.end(), [&](std::int64_t timestamp) {
+      return in_gap(timestamp, gaps);
+    });
+    if (lost > messages * 5 / 100) {
+      problems.push_back(stream + ": " + std::to_string(lost) +
+                         " messages whose frame was in a sequence gap\n" + video);
+    }
+    unpaired.erase(std::remove_if(unpaired.begin(), unpaired.end(),
+                                  [&](std::int64_t timestamp) { return in_gap(timestamp, gaps); }),
+                   unpaired.end());
+    // The video link sends every frame, so a message stays unpaired only when its frame was lost
+    // after the sender. Allow 5%, as for the count.
+    if (static_cast<int>(unpaired.size()) > messages * 5 / 100) {
+      problems.push_back(stream + ": " + std::to_string(unpaired.size()) +
+                         " timestamps with no video frame, first " +
+                         std::to_string(unpaired.front()) + ", " + std::to_string(lost) +
+                         " messages in a sequence gap\n" + video);
+    }
+    const auto& times = arrivals[index];
+    const std::size_t first = times.size() / 10;
+    if (times.size() - first <= 10) {
+      problems.push_back(stream + ": " + std::to_string(times.size() - first) +
+                         " messages arrived during the run");
+      continue;
+    }
+    const double seconds = std::chrono::duration<double>(times.back() - times[first]).count();
+    const double results_per_s = static_cast<double>(times.size() - first - 1) / seconds;
+    std::cout << label << " " << stream << ": " << messages << " messages, " << results_per_s
+              << " results/s of " << stream_fps << " fps, " << entries << " " << stream_case.key
+              << "\n";
+    if (results_per_s < kMinResultsPerS) {
+      problems.push_back(stream + ": " + std::to_string(results_per_s) + " results/s, below " +
+                         std::to_string(kMinResultsPerS));
+    }
   }
   remove_dir(output_dir);
-  return rc;
+  for (const auto& problem : problems) {
+    std::cerr << "[FAIL] " << label << " " << problem << "\n";
+  }
+  if (problems.empty()) {
+    std::cout << "[OK] " << label << " reached its Insight channels as video and results\n";
+  }
+  return problems.empty() ? 0 : 1;
 }
 
 } // namespace
@@ -304,57 +550,35 @@ int main(int argc, char** argv) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
     return 2;
   }
-
   const std::string binary = argv[1];
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
-
-  std::vector<std::string> model_paths;
-  for (const StreamSlot& slot : stream_slots()) {
-    const fs::path model_path = fs::path(models_dir) / slot.model_file;
-    if (!fs::exists(model_path)) {
-      return skip_or_fail("configured model not found under SIMANEAT_APPS_TEST_MODELS_DIR: " +
-                          model_path.string());
+  for (const auto& stream : kStreams) {
+    if (!fs::is_regular_file(fs::path(models_dir) / stream.file)) {
+      return skip_or_fail("model not found under SIMANEAT_APPS_TEST_MODELS_DIR: " + stream.file);
     }
-    model_paths.push_back(model_path.string());
   }
-
-  const fs::path labels_file =
-      example_common_config_path(kExampleName).parent_path() / "coco_label.txt";
-  if (!fs::exists(labels_file)) {
-    return skip_or_fail("src/common/coco_label.txt not found for multi-stream-multi-model");
-  }
-
-  const std::vector<SourceCase> source_cases = {
-      {"h264", rtsp_h264_urls_from_env()},
-      {"h265", rtsp_h265_urls_from_env()},
-  };
-
-  int cases_run = 0;
   int rc = 0;
-  for (const SourceCase& source_case : source_cases) {
+  int cases_run = 0;
+  for (const MultiStreamSourceCase& source_case :
+       {MultiStreamSourceCase{"h264", rtsp_h264_urls_from_env()},
+        MultiStreamSourceCase{"h265", rtsp_h265_urls_from_env()}}) {
     if (source_case.urls.empty()) {
-      record_unavailable_source("need at least one RTSP " + source_case.codec +
-                                    " URLs for multistream e2e",
-                                "set at least one RTSP " + source_case.codec + " URLs to run " +
-                                    source_case.codec + " multistream e2e",
-                                rc);
+      const std::string env = source_case.codec == "h264" ? "H264" : "H265";
+      record_unavailable_case("SIMANEAT_TEST_RTSP_" + env + "_URLS needs 1 URL",
+                              "no " + source_case.codec + " URLs", rc);
       continue;
     }
     ++cases_run;
-    if (run_source_case(binary, model_paths, labels_file, source_case) != 0) {
+    if (run_case(binary, models_dir, source_case, false) != 0) {
+      rc = 1;
+    }
+    if (source_case.codec == "h264" && run_case(binary, models_dir, source_case, true) != 0) {
       rc = 1;
     }
   }
-
   if (cases_run == 0) {
-    if (require_e2e_mode()) {
-      std::cerr << "[FAIL] no multi-stream multi-model RTSP e2e URLs configured\n";
-      return 1;
-    }
-    std::cerr << "[SKIP] no multi-stream multi-model RTSP e2e URLs configured\n";
-    return kSkipCode;
+    return rc != 0 ? rc : skip_or_fail("no RTSP URLs configured for " + std::string(kExampleName));
   }
-
   return rc;
 }

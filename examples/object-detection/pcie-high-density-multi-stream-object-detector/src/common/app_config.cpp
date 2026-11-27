@@ -14,7 +14,7 @@
 
 #include "app_config.h"
 
-#include "support/runtime/config_utils.h"
+#include "sima_examples/config.h"
 
 #include <fstream>
 #include <sstream>
@@ -184,12 +184,13 @@ void validate(const AppConfig& config) {
 
 AppConfig load_config(const std::filesystem::path& path) {
   require(std::filesystem::exists(path), "config file not found: " + path.string());
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
 
   AppConfig config;
   config.profile_name = raw.string_or("profile.name", "pcie-high-density");
   config.model_path = resolve_path(path, raw.string_or("model.path", ""));
-  config.labels_path = resolve_path(path, raw.string_or("model.labels", "coco_label.txt"));
+  config.labels_path =
+      resolve_path(path, raw.string_or("model.labels", "support/labels/coco80.txt"));
   config.decode_type = raw.string_or("model.decode_type", "yolo26");
   config.card_id = raw.int_or("card.card_id", 0);
   config.queue = raw.int_or("card.queue", 0);

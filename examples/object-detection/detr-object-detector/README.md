@@ -16,15 +16,35 @@
 
 Detects objects in a folder of images with DETR and saves annotated images with class labels and confidence scores.
 
-The application passes each image to Neat with the model's preprocessing and
-DETR box decoder enabled. Neat stretches the image to the model's input size
-without padding, as its DETR decoder requires, with antialiased bilinear
-resampling to match how the registry calibrated the model, and applies ImageNet
-normalization. Its DETR decoder turns the 100 query outputs into boxes
-in original-image pixels, keeps those above `decode.confidence_threshold`, and
-returns at most `decode.max_draw` of them. DETR predicts each object once, so
-no overlap removal is needed. The application can keep only the COCO `person`
-class and writes the annotated result.
+```text
+How does an image move through detr-object-detector?
+
+   ┌────────────────────────────────────────────┐
+   │ Image folder, input.source                 │
+   └────────────────────────────────────────────┘
+        │ one BGR image at a time, runner.run
+╭┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+┆ RUN   ▼ from model.build                           ┆
+┆  ┌────────────────────────────────────────────┐    ┆
+┆  │ DETR Model                                 │    ┆
+┆  │ stretch, ImageNet, MLA, DETR box decode    │    ┆
+┆  └────────────────────────────────────────────┘    ┆
+╰┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+        ▼ BBOX tensor, decode_bbox_tensor
+   ┌────────────────────────────────────────────┐
+   │ draw_detections (support/image_folder)     │
+   └────────────────────────────────────────────┘
+        │ boxes drawn
+        ▼
+   ┌────────────────────────────────────────────┐
+   │ output.dir, one <image>_detr.png per image │
+   └────────────────────────────────────────────┘
+```
+
+- The application reads the images one at a time with OpenCV and sends each through `runner.run`, the run that `model.build` creates from the first image. The run accepts images up to the largest width and height in the folder, so a photo above 1920x1080 also works.
+- Neat stretches each image to the model's input size without padding, as its DETR decoder requires, with antialiased bilinear resampling to match how the registry calibrated the model, and applies ImageNet normalization.
+- Neat's DETR decoder turns the 100 query outputs into boxes in the image's pixels, keeps those above `inference.min_score`, and returns at most `inference.max_detections`. DETR predicts each object once, so no overlap removal is needed.
+- The application draws each image's boxes with their labels from `model.labels` and saves the result under `output.dir`.
 
 ## Preview
 
@@ -63,16 +83,20 @@ sima-cli models download --id detr_resnet_50 --variant w16a16
 unzip -o models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_default.zip -d models/detr_resnet_50/w16a16
 ```
 
-The model archive is then at
+The packaged config reads
 `models/detr_resnet_50/w16a16/detr_resnet_50_w16a16_mpk.tar.gz`; Neat cannot
 load the ZIP itself. To use ResNet-101 instead, replace `detr_resnet_50` with
-`detr_resnet_101` in both commands. To use the `w8a8_mixed` variant, replace
-`w16a16` in both commands and in `model.path`. Neat reads the input size from the package,
-so both rows work with the same config.
+`detr_resnet_101` in both commands and in `model.path`. To use the `w8a8_mixed`
+variant, replace `w16a16` in both commands and in `model.path`. Neat reads the
+input size from the package, so both rows work with the same config.
 
 ## Configure
 
-Open `${APP_DIR}/src/common/config.yaml` and set `model.path` to the downloaded package, then set `io.input_dir` and `io.output_dir`. Set `decode.person_only` to `true` if you only want person detections. It filters the `decode.max_draw` highest-scoring detections.
+Open `${APP_DIR}/src/common/config.yaml`. It reads the downloaded default model from `models/`. Set:
+
+- `input.source`: the folder of images. The application processes every `.jpg`, `.jpeg`, `.png`, and `.bmp` file directly inside it, in file-name order, and does not search subfolders. The packaged `assets/datasets/coco` folder holds 21 images.
+- `output.dir`: the folder for the annotated PNGs, one per input image. Keep it apart from `input.source`.
+- `model.path`: only for another model from the table above; a relative path starts at the config file.
 
 ## Run
 
@@ -95,31 +119,35 @@ python3 ${APP_DIR}/src/python/main.py \
 ## Expected Result
 
 The application prints one line per image with its detection count and output
-file:
+file, then the number of images it processed:
 
 ```text
 [1/21] 000000081061.jpg: 3 detections -> 000000081061_detr.png
 [2/21] 000000116439.jpg: 10 detections -> 000000116439_detr.png
+...
+Done: 21 images processed
 ```
 
-`io.output_dir` (default `sandbox/detr-object-detector`) then holds one
-annotated PNG per input image; with the packaged `assets/datasets/coco` folder
-that is 21 files. Detection counts vary by image. A run that writes every file
-with `0 detections` usually means `decode.confidence_threshold` is too high for
-the content.
+`output.dir` (default `sandbox/detr-object-detector`) then holds one annotated
+PNG per input image: 21 files for the packaged `assets/datasets/coco` folder.
+Detection counts vary by image. Both implementations print this format. A run
+that writes every file with `0 detections` usually means `inference.min_score`
+is too high for the content.
 
 ## Troubleshooting
 
-- Verify `model.path` if model loading fails.
-- Lower `decode.confidence_threshold` if expected objects are missing.
+- `no .jpg, .jpeg, .png, or .bmp files in <folder>`: point `input.source` at a folder that holds images directly, not in subfolders.
+- If the model fails to load, check that `model.path` points to the extracted `_mpk.tar.gz` file, not the ZIP; a relative path starts at the config file.
+- Lower `inference.min_score` if expected objects are missing.
 - Use a package from the table above. Neat's DETR decoder expects a class-logit output with a final no-object channel and a four-channel box-logit output, on a stretched input.
-- Confirm `io.output_dir` can be created.
 
 ## Source Files
 
-- C++ reference source: `src/cpp/main.cpp`
-- Python source: `src/python/main.py`
+- C++ reference source: `src/cpp/main.cpp`, with `src/cpp/utils/images.h` for the largest image size
+- Python source: `src/python/main.py`, with `src/python/utils/images.py` for the largest image size
 - Shared config: `src/common/config.yaml`
+- Class labels: `support/labels/coco91.txt` in `prebuilt-apps/`, shared with the other examples that score the same classes
+- Helpers the examples share: `support/python/sima_examples/` at the root of the installed bundle, which `main.py` finds in a folder above itself, and their C++ reference source in `support/cpp/sima_examples/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 

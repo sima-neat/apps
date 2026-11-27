@@ -17,9 +17,11 @@
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
 #include "examples/tracking/multi-stream-tracker/src/cpp/utils/tracker_api.cpp"
-#include "support/object_detection/obj_detection_utils.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
+#include "sima_examples/obj_detection_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/detection_egress.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/rtsp_probe.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -74,6 +76,8 @@ struct AppConfig {
   bool profile = false;
   int warmup_frames = 30;
   std::vector<ClassTrackerConfig> tracker_classes;
+  // The labels file's classes in class-id order, which the tracks' class_id indexes.
+  std::vector<std::string> labels;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -396,7 +400,7 @@ void validate_config(const AppConfig& cfg) {
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
-  const auto raw = sima_examples::ScalarConfig::load(config_path);
+  const auto raw = sima_examples::Config::load(config_path);
 
   AppConfig cfg;
   cfg.model_path = raw.string_or("model.path", "");
@@ -415,10 +419,10 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
   const auto default_labels =
       fs::path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).parent_path() / "common" / "coco_label.txt";
-  const auto labels =
+  cfg.labels =
       multi_stream_tracker::load_labels(raw.string_or("model.labels", default_labels.string()));
   cfg.tracker_classes =
-      multi_stream_tracker::parse_class_configs(parse_tracking_classes(config_path), labels);
+      multi_stream_tracker::parse_class_configs(parse_tracking_classes(config_path), cfg.labels);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -458,26 +462,6 @@ std::vector<Detection> to_detections(const std::vector<objdet::Box>& boxes) {
     detections.push_back(Detection{box.x1, box.y1, box.x2, box.y2, box.score, box.class_id});
   }
   return detections;
-}
-
-std::vector<sima_examples::MetadataBox>
-build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, int frame_h) {
-  std::vector<sima_examples::MetadataBox> metadata_boxes;
-  metadata_boxes.reserve(tracks.size());
-  for (const auto& track : tracks) {
-    const auto box = multi_stream_tracker::clip_box_to_frame(track, frame_w, frame_h);
-
-    sima_examples::MetadataBox obj;
-    obj.id = std::to_string(track.track_id);
-    obj.label = track.label;
-    obj.confidence = track.score;
-    obj.x = static_cast<float>(box.x);
-    obj.y = static_cast<float>(box.y);
-    obj.w = static_cast<float>(box.w);
-    obj.h = static_cast<float>(box.h);
-    metadata_boxes.push_back(obj);
-  }
-  return metadata_boxes;
 }
 
 void probe_stream(const AppConfig& cfg, StreamRuntime& stream) {
@@ -639,10 +623,13 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   return runtime;
 }
 
+// Until #789 converts this example, Core's send_metadata builds the envelope.
 void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
-                   const std::vector<TrackedDetection>& tracks) {
-  const auto metadata_tracks = build_metadata_tracks(tracks, stream.frame_w, stream.frame_h);
-  const std::string data_json = sima_examples::metadata_boxes_data_json("tracks", metadata_tracks);
+                   const std::vector<TrackedDetection>& tracks,
+                   const std::vector<std::string>& labels) {
+  const nlohmann::json data = {{"tracks", sima_examples::detection_egress::track_entries(
+                                              tracks, labels, stream.frame_w, stream.frame_h)}};
+  const std::string data_json = data.dump();
   const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
   const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
   std::string err;
@@ -740,7 +727,7 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
   const bool warming_up = stream.processed <= cfg.warmup_frames;
   if (!warming_up) {
     const double metadata_start = sima_examples::time_ms();
-    send_metadata(stream, sample, tracks);
+    send_metadata(stream, sample, tracks, cfg.labels);
     const double metadata_end = sima_examples::time_ms();
     if (save_frames_enabled(cfg)) {
       maybe_save_debug_frame(

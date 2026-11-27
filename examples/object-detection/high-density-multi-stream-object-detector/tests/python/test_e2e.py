@@ -17,21 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from received_metadata_tracker import ReceivedMetadataTracker
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
-EIGHT_GIB_KIB = 8 * 1024 * 1024
-
-
-def minimum_stream_fps():
-    # Linux reports usable RAM, so the 8 GiB SOM can report less than 8 GiB.
-    try:
-        with Path("/proc/meminfo").open() as meminfo:
-            field, value, unit = meminfo.readline().split()
-        kib = int(value)
-        if field == "MemTotal:" and unit == "kB" and 0 < kib <= EIGHT_GIB_KIB:
-            return 25.0
-    except (OSError, ValueError):
-        pass
-    # Eight CI DevKits on Platform 3.0.1 held 556 to 565 FPS in total for H.264.
-    return 27.0
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+LABELS = set((APPS_ROOT / "support" / "labels" / "coco80.txt").read_text().splitlines())
+# Every stream must keep this rate over the measured interval: 500 FPS in total for 20 streams.
+# DevKits measured 528 to 565 FPS in total for H.264.
+MIN_STREAM_FPS = 25.0
 
 
 def select_source(urls, codec):
@@ -72,7 +62,9 @@ def validate_metadata_message(message, base_port):
     assert payload["stream_index"] == index
     assert payload["stream_id"] == f"stream{index}"
     assert payload["frame_id"] and payload["pts_ns"] >= 0
-    assert "rtp_timestamp" in payload
+    for item in payload["data"]["objects"]:
+        assert item["label"] in LABELS, f"label not in coco80.txt: {item['label']}"
+        assert 0.3 <= item["confidence"] <= 1.0, "confidence below inference.min_score"
     return index, payload
 
 
@@ -85,8 +77,7 @@ def test_metadata_throughput(
     port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", "9100"))
     config = e2e_config_writer(
         {
-            "streams": [url] * 20,
-            "input": {"codec": codec, "width": 1280, "height": 720, "fps": 0},
+            "input": {"source": [url] * 20, "codec": codec},
             "output": {
                 "video_enabled": True,
                 "insight": {
@@ -95,7 +86,6 @@ def test_metadata_throughput(
                     "video_port_base": int(
                         os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "9000")
                     ),
-                    "max_visible_streams": 20,
                 },
             },
         }
@@ -198,7 +188,7 @@ def test_metadata_throughput(
     assert tracker.total_measured == 5000
     assert tracker.elapsed_s > 0
     aggregate_fps = tracker.total_measured / tracker.elapsed_s
-    stream_floor = minimum_stream_fps()
+    stream_floor = MIN_STREAM_FPS
     aggregate_floor = len(tracker.measured_frames) * stream_floor
     summary = {
         "frames": tracker.total_measured,

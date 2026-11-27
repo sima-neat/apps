@@ -12,993 +12,286 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Detects objects on many RTSP streams with one shared YOLO26 model. Every stream's video and
+// its detection boxes go to Insight, one channel per stream.
+
 #include "neat.h"
-#include "neat/models.h"
-#include "neat/node_groups.h"
-#include "neat/nodes.h"
-#include "support/object_detection/detection_egress.h"
-#include "support/object_detection/obj_detection_utils.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/detection_egress.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/labels.h"
+#include "sima_examples/pull_status.h"
+#include "sima_examples/rtsp_probe.h"
+#include "sima_examples/stop_signals.h"
 
-#include <nodes/groups/VideoSender.h>
-#include <nodes/io/MetadataSender.h>
-
-#include <algorithm>
-#include <chrono>
-#include <cstddef>
-#include <csignal>
-#include <cctype>
+#include <atomic>
 #include <cstdint>
-#include <cstdlib>
-#include <exception>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <memory>
-#include <span>
+#include <map>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
+namespace neat = simaai::neat;
+namespace groups = simaai::neat::nodes::groups;
 
 namespace {
 
-constexpr int kStreamLimit = 80;
-constexpr int kDefaultQueueDepth = 4;
-constexpr int kDefaultInternalQueueDepth = 1;
-constexpr int kDefaultMaxInflightPerStream = 4;
-constexpr int kDefaultMaxInflightTotal = 8;
-// Complete MLA work asynchronously so a busy shared model stage cannot starve
-// a subset of decoder streams.
-constexpr bool kInferenceAsync = true;
-constexpr int kDefaultDecoderBuffers = 16;
-constexpr int kDefaultDecoderInputBuffers = 2;
-// runtime.* defaults. The settings are validated so existing configs keep loading,
-// but the application no longer acts on them.
-constexpr int kDefaultWarmupFrames = 30;
-constexpr int kDefaultDetectionTimeoutMs = 30000;
-constexpr int kAllInsightStreams = -1;
+constexpr int kPullTimeoutMs = 100;
 
-volatile std::sig_atomic_t g_stop_requested = 0;
-
-void request_stop(int) {
-  g_stop_requested = 1;
-}
-
-struct AppConfig {
-  std::string model_path;
-  std::string decode_type = "yolo26";
-  fs::path labels_path;
-  std::vector<std::string> rtsp_urls;
-  /// Encoded RTSP path used for every stream in this application.
-  simaai::neat::nodes::groups::RtspCodec codec = simaai::neat::nodes::groups::RtspCodec::H264;
-  int workers = 1;
-  int queue_depth = kDefaultQueueDepth;
-  int internal_queue_depth = kDefaultInternalQueueDepth;
-  int max_inflight_per_stream = kDefaultMaxInflightPerStream;
-  int max_inflight_total = kDefaultMaxInflightTotal;
-  int decoder_buffers = kDefaultDecoderBuffers;
-  int decoder_input_buffers = kDefaultDecoderInputBuffers;
-  std::string decoder_tuning = "auto";
-  int input_width = 0;
-  int input_height = 0;
-  int input_fps = 0;
-  int latency_ms = 100;
-  bool tcp = true;
-  bool skip_rtsp_probe = false;
-  bool rtsp_drop_on_latency = false;
-  double min_score = 0.55;
-  double nms_iou = 0.60;
-  int max_detections = 50;
-  std::string insight_host = "127.0.0.1";
-  int video_port_base = 9000;
-  int metadata_port_base = 9100;
-  int insight_visible_streams = kAllInsightStreams;
-  bool video_enabled = true;
-  bool profile = false;
-  int warmup_frames = kDefaultWarmupFrames;
-  int initial_detection_timeout_ms = kDefaultDetectionTimeoutMs;
-  int stream_detection_timeout_ms = kDefaultDetectionTimeoutMs;
-  int no_detection_timeout_ms = kDefaultDetectionTimeoutMs;
+const std::map<std::string, groups::RtspCodec> kRtspCodecs = {
+    {"h264", groups::RtspCodec::H264},
+    {"h265", groups::RtspCodec::H265},
+};
+const std::map<std::string, neat::SimaDecodeType> kDecodeTypes = {
+    {"h264", neat::SimaDecodeType::H264},
+    {"h265", neat::SimaDecodeType::H265},
 };
 
-std::string lower_copy(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
-simaai::neat::nodes::groups::RtspCodec parse_input_codec(const std::string& value) {
-  const std::string lowered = lower_copy(value);
-  if (lowered == "h264" || lowered == "avc" || lowered == "h.264") {
-    return simaai::neat::nodes::groups::RtspCodec::H264;
-  }
-  if (lowered == "h265" || lowered == "hevc" || lowered == "h.265") {
-    return simaai::neat::nodes::groups::RtspCodec::H265;
-  }
-  throw std::runtime_error("input.codec must be h264/avc or h265/hevc");
-}
-
-simaai::neat::BoxDecodeType parse_box_decode_type(const std::string& token) {
-  if (token == "yolo26" || token == "yolov26")
-    return simaai::neat::BoxDecodeType::YoloV26;
-  if (token == "yolov8")
-    return simaai::neat::BoxDecodeType::YoloV8;
-  throw std::runtime_error("model.decode_type must be one of: yolo26, yolov8");
-}
-
-std::string normalize_decoder_tuning(std::string token) {
-  std::replace(token.begin(), token.end(), '_', '-');
-  std::transform(token.begin(), token.end(), token.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  if (token.empty() || token == "auto")
-    return "auto";
-  if (token == "default")
-    return "default";
-  if (token == "low-memory" || token == "memory")
-    return "low-memory";
-  if (token == "throughput-low-latency" || token == "throughput" ||
-      token == "low-latency-throughput")
-    return "throughput-low-latency";
-  throw std::runtime_error(
-      "input.decoder_tuning must be one of: auto, default, low-memory, throughput-low-latency");
-}
-
-struct CliOptions {
-  fs::path config_path;
-  bool validate_config_only = false;
-};
-
-struct SourceRuntime {
-  int index = 0;
-  std::string url;
-  std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
-  std::vector<std::string> labels;
-  std::vector<objdet::Box> parsed_boxes;
-  int frame_w = 0;
-  int frame_h = 0;
-  int source_fps = 0;
-  int video_port = 0;
-  std::uint64_t metadata_send_fail = 0;
-};
-struct AppRuntime {
-  explicit AppRuntime(int internal_queue_depth)
-      : graph([internal_queue_depth] {
-          simaai::neat::GraphOptions options;
-          options.advanced_execution.internal_queue_depth = internal_queue_depth;
-          options.advanced_execution.inference_async = kInferenceAsync;
-          return options;
-        }()) {}
-
-  std::unique_ptr<simaai::neat::Model> model;
-  simaai::neat::Graph graph;
-  simaai::neat::Run run;
-  std::vector<SourceRuntime> sources;
-};
-CliOptions parse_args(int argc, char** argv) {
-  CliOptions options;
+fs::path parse_args(int argc, char** argv) {
   const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
-  options.config_path = fs::exists(adjacent_config)
-                            ? adjacent_config
-                            : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  fs::path config_path = fs::exists(adjacent_config)
+                             ? adjacent_config
+                             : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--config") {
-      if (i + 1 >= argc) {
-        throw std::runtime_error("--config requires a path");
-      }
-      options.config_path = argv[++i];
-    } else if (arg == "--validate-config-only") {
-      options.validate_config_only = true;
-    } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: " << argv[0] << " [--config <path>] [--validate-config-only]\n";
-      std::exit(0);
+    if (arg == "--config" && i + 1 < argc) {
+      config_path = argv[++i];
     } else {
-      throw std::runtime_error("unknown argument: " + arg);
+      throw std::runtime_error("usage: " + std::string(argv[0]) + " [--config <path>]");
     }
+  }
+  return config_path;
+}
+
+neat::Model::Options model_options(const sima_examples::Config& config, int max_detections) {
+  neat::Model::Options options;
+  options.verbose = neat::VerboseOptions::quiet();
+  options.preprocess.kind = neat::InputKind::Image;
+  options.preprocess.enable = neat::AutoFlag::On;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
+  options.preprocess.preset = neat::NormalizePreset::COCO_YOLO;
+  options.decode_type = neat::BoxDecodeType::YoloV26;
+  options.score_threshold = config.number("inference.min_score");
+  options.nms_iou_threshold = config.number("inference.nms_iou");
+  options.top_k = max_detections;
+  return options;
+}
+
+// The model every stream shares: "detector_frame" input -> model -> "detections" output.
+neat::Graph detector_graph(neat::Model& model, const sima_examples::Config& config) {
+  neat::Graph frames;
+  frames.add(neat::nodes::Input("detector_frame", model.input_appsrc_options(false)));
+
+  neat::Graph detections;
+  detections.add(neat::nodes::Output(
+      "detections", neat::OutputOptions::EveryFrame(config.integer("app.queue_depth"))));
+
+  neat::Graph model_graph = model.graph();
+  neat::Graph graph;
+  graph.connect(frames, model_graph);
+  graph.connect(model_graph, detections);
+  return graph;
+}
+
+groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config,
+                                             const std::string& url,
+                                             const sima_examples::RtspStreamInfo& stream) {
+  groups::RtspEncodedInputOptions options;
+  options.url = url;
+  options.codec = config.choice("input.codec", kRtspCodecs);
+  options.tcp = config.boolean("input.rtsp.tcp");
+  options.latency_ms = config.integer("input.rtsp.latency_ms");
+  options.source_fps = config.integer("input.fps");
+  options.auto_caps_from_stream = options.source_fps == 0;
+  if (options.codec == groups::RtspCodec::H264) {
+    options.fallback_h264_width = stream.width;
+    options.fallback_h264_height = stream.height;
+    options.fallback_h264_fps = stream.fps;
   }
   return options;
 }
 
-fs::path resolve_config_relative_path(const fs::path& config_path, const std::string& value) {
-  const fs::path path(value);
-  if (path.empty() || path.is_absolute()) {
-    return path;
-  }
-  return (config_path.parent_path() / path).lexically_normal();
-}
-
-std::string strip_inline_comment(const std::string& line) {
-  bool in_single = false;
-  bool in_double = false;
-  std::string out;
-  out.reserve(line.size());
-  for (char c : line) {
-    if (c == '\'' && !in_double) {
-      in_single = !in_single;
-    } else if (c == '"' && !in_single) {
-      in_double = !in_double;
-    } else if (c == '#' && !in_single && !in_double) {
-      break;
-    }
-    out.push_back(c);
-  }
-  return out;
-}
-
-std::string unquote(std::string value) {
-  value = sima_examples::trim_copy(value);
-  if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
-                            (value.front() == '\'' && value.back() == '\''))) {
-    return value.substr(1, value.size() - 2);
-  }
-  return value;
-}
-
-int leading_indent(const std::string& line) {
-  int indent = 0;
-  while (indent < static_cast<int>(line.size()) &&
-         (line[static_cast<std::size_t>(indent)] == ' ' ||
-          line[static_cast<std::size_t>(indent)] == '\t')) {
-    ++indent;
-  }
-  return indent;
-}
-
-std::vector<std::string> parse_streams(const fs::path& config_path) {
-  std::ifstream input(config_path);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open config file: " + config_path.string());
-  }
-
-  std::vector<std::string> streams;
-  bool in_streams = false;
-  int streams_indent = -1;
-  std::string raw_line;
-  while (std::getline(input, raw_line)) {
-    const std::string line_without_comment = strip_inline_comment(raw_line);
-    if (sima_examples::trim_copy(line_without_comment).empty()) {
-      continue;
-    }
-
-    const int indent = leading_indent(line_without_comment);
-    const std::string line = sima_examples::trim_copy(line_without_comment);
-
-    if (in_streams && indent <= streams_indent && line.rfind("- ", 0) != 0) {
-      in_streams = false;
-    }
-    if (!in_streams && line == "streams:") {
-      in_streams = true;
-      streams_indent = indent;
-      continue;
-    }
-    if (!in_streams) {
-      continue;
-    }
-
-    if (line.rfind("- ", 0) == 0) {
-      const std::string url = unquote(line.substr(2));
-      if (url.empty()) {
-        throw std::runtime_error("streams entries must be non-empty strings");
-      }
-      streams.push_back(url);
-    }
-  }
-  if (streams.empty()) {
-    throw std::runtime_error("streams must be a non-empty list");
-  }
-  return streams;
-}
-
-void validate_config(const AppConfig& cfg) {
-  sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
-  (void)parse_box_decode_type(cfg.decode_type);
-  sima_examples::require(!cfg.labels_path.empty(), "model.labels must be set");
-  sima_examples::require(!cfg.rtsp_urls.empty(), "streams must be set");
-  sima_examples::require(cfg.rtsp_urls.size() <= kStreamLimit,
-                         "this example supports up to 80 streams");
-  sima_examples::require(
-      cfg.workers == 1,
-      "graph-native multi-stream detector uses one shared worker; set inference.workers to 1");
-  sima_examples::require(cfg.queue_depth > 0, "inference.queue_depth must be > 0");
-  sima_examples::require(cfg.queue_depth <= 32, "inference.queue_depth must be <= 32");
-  sima_examples::require(cfg.internal_queue_depth >= 0,
-                         "inference.internal_queue_depth must be >= 0");
-  sima_examples::require(cfg.internal_queue_depth <= 32,
-                         "inference.internal_queue_depth must be <= 32");
-  sima_examples::require(cfg.max_inflight_per_stream > 0,
-                         "inference.max_inflight_per_stream must be > 0");
-  sima_examples::require(cfg.max_inflight_per_stream <= 32,
-                         "inference.max_inflight_per_stream must be <= 32");
-  sima_examples::require(cfg.max_inflight_total > 0, "inference.max_inflight_total must be > 0");
-  sima_examples::require(cfg.decoder_buffers > 0, "input.decoder_buffers must be > 0");
-  sima_examples::require(cfg.decoder_buffers <= 64, "input.decoder_buffers must be <= 64");
-  sima_examples::require(cfg.decoder_input_buffers > 0, "input.decoder_input_buffers must be > 0");
-  (void)normalize_decoder_tuning(cfg.decoder_tuning);
-  sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
-  sima_examples::require(cfg.latency_ms >= 0, "input.latency_ms must be >= 0");
-  sima_examples::require(cfg.input_width >= 0, "input.width must be >= 0");
-  sima_examples::require(cfg.input_height >= 0, "input.height must be >= 0");
-  sima_examples::require(cfg.input_fps >= 0, "input.fps must be >= 0");
-  sima_examples::require((cfg.input_width == 0) == (cfg.input_height == 0),
-                         "input.width and input.height must be set together");
-  if (cfg.skip_rtsp_probe) {
-    sima_examples::require(
-        cfg.input_width > 0 && cfg.input_height > 0 && cfg.input_fps > 0,
-        "input.skip_rtsp_probe requires input.width, input.height, and input.fps");
-  }
-  sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
-                         "inference.min_score must be between 0 and 1");
-  sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
-                         "inference.nms_iou must be between 0 and 1");
-  sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
-  sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
-  sima_examples::require(cfg.initial_detection_timeout_ms > 0,
-                         "runtime.initial_detection_timeout_ms must be > 0");
-  sima_examples::require(cfg.stream_detection_timeout_ms > 0,
-                         "runtime.stream_detection_timeout_ms must be > 0");
-  sima_examples::require(cfg.no_detection_timeout_ms > 0,
-                         "runtime.no_detection_timeout_ms must be > 0");
-  sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
-  sima_examples::require(cfg.video_port_base <= 65535,
-                         "output.insight.video_port_base must be <= 65535");
-  sima_examples::require(cfg.metadata_port_base > 0,
-                         "output.insight.metadata_port_base must be > 0");
-  sima_examples::require(cfg.metadata_port_base <= 65535,
-                         "output.insight.metadata_port_base must be <= 65535");
-  sima_examples::require(cfg.insight_visible_streams >= kAllInsightStreams,
-                         "output.insight.max_visible_streams must be >= -1 (-1 means all)");
-  if (cfg.insight_visible_streams >= 0) {
-    sima_examples::require(static_cast<std::size_t>(cfg.insight_visible_streams) <=
-                               cfg.rtsp_urls.size(),
-                           "output.insight.max_visible_streams cannot exceed stream count");
-  }
-  const auto visible_streams = static_cast<std::int64_t>(
-      cfg.insight_visible_streams < 0 ? cfg.rtsp_urls.size()
-                                      : static_cast<std::size_t>(cfg.insight_visible_streams));
-  if (visible_streams > 0) {
-    const auto video_last = static_cast<std::int64_t>(cfg.video_port_base) + visible_streams - 1;
-    const auto metadata_last =
-        static_cast<std::int64_t>(cfg.metadata_port_base) + visible_streams - 1;
-    sima_examples::require(video_last <= 65535, "output.insight video port range exceeds 65535");
-    sima_examples::require(metadata_last <= 65535,
-                           "output.insight metadata port range exceeds 65535");
-    const bool disjoint =
-        video_last < cfg.metadata_port_base || metadata_last < cfg.video_port_base;
-    sima_examples::require(disjoint, "output.insight video and metadata port ranges overlap");
-  }
-}
-
-AppConfig load_app_config(const fs::path& config_path) {
-  const auto raw = sima_examples::ScalarConfig::load(config_path);
-  sima_examples::require(
-      !raw.string_value("inference.fan_in_policy").has_value(),
-      "inference.fan_in_policy was removed; remove it because ordinary connect()/build() now "
-      "selects realtime fan-in automatically");
-  sima_examples::require(!raw.string_value("inference.fps").has_value(),
-                         "inference.fps is not supported; set stream FPS at the RTSP source");
-  sima_examples::require(
-      !raw.string_value("inference.target_fps").has_value(),
-      "inference.target_fps is not supported; set stream FPS at the RTSP source");
-  sima_examples::require(
-      !raw.string_value("output.hidden_streams.video_sink").has_value() &&
-          !raw.string_value("output.hidden_streams.metadata_enabled").has_value(),
-      "output.hidden_streams was removed; set output.insight.max_visible_streams explicitly");
-  sima_examples::require(
-      !raw.string_value("output.debug_dir").has_value() &&
-          !raw.string_value("output.save_every").has_value(),
-      "output.debug_dir/output.save_every were removed from the realtime application");
-  AppConfig cfg;
-  cfg.model_path =
-      resolve_config_relative_path(config_path, raw.string_or("model.path", "")).string();
-  cfg.decode_type = raw.string_or("model.decode_type", "yolo26");
-  cfg.labels_path = raw.string_or("model.labels", "coco_label.txt");
-  cfg.rtsp_urls = parse_streams(config_path);
-  cfg.codec = parse_input_codec(raw.string_or("input.codec", "h264"));
-  cfg.tcp = raw.bool_or("input.tcp", true);
-  cfg.latency_ms = raw.int_or("input.latency_ms", 100);
-  cfg.decoder_buffers = raw.int_or("input.decoder_buffers", kDefaultDecoderBuffers);
-  cfg.decoder_input_buffers =
-      raw.int_or("input.decoder_input_buffers", kDefaultDecoderInputBuffers);
-  cfg.decoder_tuning = normalize_decoder_tuning(raw.string_or("input.decoder_tuning", "auto"));
-  cfg.input_width = raw.int_or("input.width", 0);
-  cfg.input_height = raw.int_or("input.height", 0);
-  cfg.input_fps = raw.int_or("input.fps", 0);
-  cfg.skip_rtsp_probe = raw.bool_or("input.skip_rtsp_probe", false);
-  cfg.rtsp_drop_on_latency = raw.bool_or("input.drop_on_latency", false);
-  cfg.workers = raw.int_or("inference.workers", 1);
-  cfg.queue_depth = raw.int_or("inference.queue_depth", kDefaultQueueDepth);
-  if (!raw.string_value("inference.queue_depth").has_value()) {
-    cfg.queue_depth = raw.int_or("inference.inflight",
-                                 raw.int_or("inference.detector_queue_depth", kDefaultQueueDepth));
-  }
-  cfg.internal_queue_depth =
-      raw.int_or("inference.internal_queue_depth", kDefaultInternalQueueDepth);
-  cfg.max_inflight_per_stream =
-      raw.int_or("inference.max_inflight_per_stream", kDefaultMaxInflightPerStream);
-  cfg.max_inflight_total = raw.int_or("inference.max_inflight_total", kDefaultMaxInflightTotal);
-  cfg.min_score = raw.double_or("inference.min_score", 0.55);
-  cfg.nms_iou = raw.double_or("inference.nms_iou", 0.60);
-  cfg.max_detections = raw.int_or("inference.max_detections", 50);
-  cfg.insight_host = raw.string_or("output.insight.host", "");
-  cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
-  cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
-  cfg.insight_visible_streams =
-      raw.int_or("output.insight.max_visible_streams", kAllInsightStreams);
-  cfg.video_enabled = raw.bool_or("output.video_enabled", true);
-  cfg.profile = raw.bool_or("runtime.profile", false);
-  cfg.warmup_frames = raw.int_or("runtime.warmup_frames", kDefaultWarmupFrames);
-  cfg.initial_detection_timeout_ms =
-      raw.int_or("runtime.initial_detection_timeout_ms", kDefaultDetectionTimeoutMs);
-  cfg.stream_detection_timeout_ms =
-      raw.int_or("runtime.stream_detection_timeout_ms", kDefaultDetectionTimeoutMs);
-  cfg.no_detection_timeout_ms =
-      raw.int_or("runtime.no_detection_timeout_ms", kDefaultDetectionTimeoutMs);
-  for (const char* key : {"runtime.profile", "runtime.warmup_frames",
-                          "runtime.initial_detection_timeout_ms",
-                          "runtime.stream_detection_timeout_ms",
-                          "runtime.no_detection_timeout_ms"}) {
-    if (raw.string_value(key).has_value()) {
-      std::cerr << "[warn] runtime.* settings are validated for compatibility but have no "
-                   "effect; warmup, measurement, and progress deadlines belong to the "
-                   "end-to-end test receiver\n";
-      break;
-    }
-  }
-  validate_config(cfg);
-  return cfg;
-}
-
-std::vector<std::string> load_labels(const fs::path& labels_path) {
-  std::ifstream in(labels_path);
-  if (!in.good()) {
-    throw std::runtime_error("labels file does not exist: " + labels_path.string());
-  }
-  std::vector<std::string> labels;
-  std::string line;
-  while (std::getline(in, line)) {
-    if (!line.empty()) {
-      labels.push_back(line);
-    }
-  }
-  if (labels.empty()) {
-    throw std::runtime_error("labels file is empty: " + labels_path.string());
-  }
-  return labels;
-}
-
-const simaai::neat::Tensor* find_bbox_tensor(const simaai::neat::Sample& sample, std::string& err) {
-  if (sample.kind == simaai::neat::SampleKind::Bundle) {
-    for (const auto& field : sample.fields) {
-      if (const auto* tensor = find_bbox_tensor(field, err))
-        return tensor;
-    }
-    err = "bundle missing BBOX field";
-    return nullptr;
-  }
-
-  const simaai::neat::Tensor* tensor = nullptr;
-  if (sample.kind == simaai::neat::SampleKind::Tensor && sample.tensor.has_value()) {
-    tensor = &*sample.tensor;
-  } else if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
-    tensor = &sample.tensors.front();
-  } else {
-    err = sample.kind == simaai::neat::SampleKind::Tensor ? "capture_missing_tensor"
-                                                          : "capture_expected_tensor";
-    return nullptr;
-  }
-
-  std::string format = sample.payload_tag;
-  if (format.empty() && !sample.format.empty())
-    format = sample.format;
-  if (format.empty() && tensor->semantic.tess.has_value())
-    format = tensor->semantic.tess->format;
-  const std::string format_upper = objdet::upper_ascii_copy(format);
-  if (!format_upper.empty() && format_upper != "BBOX") {
-    err = "capture_expected_bbox format=" + format_upper;
-    return nullptr;
-  }
-  return tensor;
-}
-
-struct BboxPayloadView {
-  simaai::neat::Mapping mapping;
-  std::vector<std::uint8_t> owned;
-  const std::uint8_t* data = nullptr;
-  std::size_t size = 0;
-
-  [[nodiscard]] std::span<const std::uint8_t> bytes() const {
-    return {data, size};
-  }
-};
-
-bool map_bbox_payload(const simaai::neat::Sample& sample, BboxPayloadView& payload,
-                      std::string& err) {
-  const auto* tensor = find_bbox_tensor(sample, err);
-  if (!tensor)
-    return false;
-
-  try {
-    const std::size_t tight_bytes = tensor->dense_bytes_tight();
-    if (tight_bytes > 0 && tensor->is_contiguous()) {
-      payload.mapping = tensor->map_read();
-      if (payload.mapping.data && payload.mapping.size_bytes >= tight_bytes) {
-        payload.data = static_cast<const std::uint8_t*>(payload.mapping.data);
-        payload.size = tight_bytes;
-      }
-    }
-    if (!payload.data) {
-      payload.mapping = {};
-      payload.owned = tensor->copy_payload_bytes();
-      payload.data = payload.owned.data();
-      payload.size = payload.owned.size();
-    }
-  } catch (const std::exception& ex) {
-    err = "capture_payload_failed err=";
-    err += ex.what();
-    return false;
-  }
-
-  if (payload.size == 0) {
-    err = "capture_empty_payload";
-    return false;
-  }
-  return true;
-}
-
-bool env_bool(const char* key, bool fallback = false) {
-  const char* value = std::getenv(key);
-  if (!value || !*value)
-    return fallback;
-  std::string v(value);
-  std::transform(v.begin(), v.end(), v.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return v == "1" || v == "true" || v == "yes" || v == "on";
-}
-
-bool app_verbose() {
-  return env_bool("HIGH_DENSITY_DETECTOR_VERBOSE", false);
-}
-
-std::string stream_id_for(int stream_index) {
-  return "stream" + std::to_string(stream_index);
-}
-
-int effective_insight_visible_streams(const AppConfig& cfg) {
-  if (cfg.insight_visible_streams < 0) {
-    return static_cast<int>(cfg.rtsp_urls.size());
-  }
-  return cfg.insight_visible_streams;
-}
-
-bool is_insight_visible_stream(const AppConfig& cfg, int stream_index) {
-  return stream_index >= 0 && stream_index < effective_insight_visible_streams(cfg);
-}
-
-bool should_send_metadata(const AppConfig& cfg, int stream_index) {
-  return is_insight_visible_stream(cfg, stream_index);
-}
-
-int stream_index_from_detection(const simaai::neat::Sample& sample, int stream_count) {
-  const std::string prefix = "stream";
-  if (sample.stream_id.rfind(prefix, 0) != 0) {
-    if (stream_count == 1)
-      return 0;
-    throw std::runtime_error("detection sample missing stream id: " + sample.stream_id);
-  }
-  const std::string suffix = sample.stream_id.substr(prefix.size());
-  if (suffix.empty() ||
-      !std::all_of(suffix.begin(), suffix.end(), [](unsigned char c) { return std::isdigit(c); })) {
-    throw std::runtime_error("invalid detection stream id: " + sample.stream_id);
-  }
-  const int index = std::stoi(suffix);
-  if (index < 0 || index >= stream_count) {
-    throw std::runtime_error("detection stream id out of range: " + sample.stream_id);
-  }
-  return index;
-}
-
-simaai::neat::RunOptions realtime_options(
-    int queue_depth = 3,
-    simaai::neat::OverflowPolicy overflow_policy = simaai::neat::OverflowPolicy::KeepLatest) {
-  simaai::neat::RunOptions run_options;
-  run_options.preset = simaai::neat::RunPreset::Realtime;
-  run_options.queue_depth = queue_depth;
-  run_options.overflow_policy = overflow_policy;
-  run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
-  return run_options;
-}
-
-void resolve_source_geometry(const AppConfig& cfg, const std::string& url, int& fps_out,
-                             int& width_out, int& height_out) {
-  sima_examples::RtspStreamInfo probe;
-  const bool needs_probe =
-      !cfg.skip_rtsp_probe && (cfg.input_width <= 0 || cfg.input_height <= 0 || cfg.input_fps <= 0);
-  if (needs_probe) {
-    sima_examples::RtspProbeOptions probe_options;
-    probe_options.payload_type = 96;
-    probe_options.latency_ms = cfg.latency_ms;
-    probe_options.rtsp_tcp = cfg.tcp;
-    probe_options.debug = app_verbose();
-    (void)sima_examples::probe_rtsp_stream_info(url, probe_options, probe);
-  }
-
-  width_out = cfg.input_width > 0 ? cfg.input_width : probe.width;
-  height_out = cfg.input_height > 0 ? cfg.input_height : probe.height;
-  fps_out = cfg.input_fps > 0 ? cfg.input_fps : probe.fps;
-}
-
-std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg) {
-  simaai::neat::Model::Options model_opt;
-  if (!app_verbose()) {
-    model_opt.verbose = simaai::neat::VerboseOptions::quiet();
-  }
-  model_opt.preprocess.kind = simaai::neat::InputKind::Image;
-  model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
-  model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
-  model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
-  model_opt.decode_type = parse_box_decode_type(cfg.decode_type);
-  model_opt.score_threshold = cfg.min_score;
-  model_opt.nms_iou_threshold = cfg.nms_iou;
-  model_opt.top_k = cfg.max_detections;
-  return std::make_unique<simaai::neat::Model>(cfg.model_path, model_opt);
-}
-
-simaai::neat::nodes::groups::VideoSenderOptions make_video_options(const AppConfig& cfg,
-                                                                   const SourceRuntime& source) {
-  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(cfg.codec);
-  video_options.host = cfg.insight_host;
-  video_options.channel = source.index;
-  video_options.video_port_base = cfg.video_port_base;
-  // This sender is fused into the same live pipeline as the decoder fan-in.
-  // It must not take part in preroll, otherwise every asynchronous UDP sink
-  // can hold the shared pipeline in PAUSED before all decoder branches start.
-  video_options.async = false;
-  return video_options;
-}
-
-SourceRuntime make_source_runtime(const AppConfig& cfg, int stream_index,
-                                  const std::vector<std::string>& labels) {
-  SourceRuntime source;
-  source.index = stream_index;
-  source.url = cfg.rtsp_urls[static_cast<std::size_t>(stream_index)];
-  resolve_source_geometry(cfg, source.url, source.source_fps, source.frame_w, source.frame_h);
-  sima_examples::require(source.frame_w > 0 && source.frame_h > 0,
-                         "failed to probe RTSP frame dimensions");
-  sima_examples::require(source.source_fps > 0, "failed to probe RTSP frame rate");
-  source.labels = labels;
-  source.parsed_boxes.reserve(static_cast<std::size_t>(cfg.max_detections));
-
-  if (should_send_metadata(cfg, stream_index)) {
-    simaai::neat::MetadataSenderOptions metadata_options;
-    metadata_options.host = cfg.insight_host;
-    metadata_options.channel = stream_index;
-    metadata_options.metadata_port_base = cfg.metadata_port_base;
-    simaai::neat::MetadataSenderSendOptions send_options;
-    send_options.nonblocking = true;
-    std::string metadata_err;
-    source.metadata_sender = std::make_unique<simaai::neat::MetadataSender>(
-        metadata_options, send_options, &metadata_err);
-    sima_examples::require(source.metadata_sender->ok(), metadata_err);
-  }
-  return source;
-}
-
-simaai::neat::Graph build_detector_graph(const AppConfig& cfg,
-                                         std::unique_ptr<simaai::neat::Model>& model) {
-  model = make_model(cfg);
-
-  simaai::neat::Graph input_graph;
-  auto detector_input_options = model->input_appsrc_options(false);
-  const int detector_input_buffers = std::max(1, detector_input_options.pool_max_buffers);
-  if (cfg.input_width > 0 && cfg.input_height > 0) {
-    const auto width = static_cast<std::uint64_t>(cfg.input_width);
-    const auto height = static_cast<std::uint64_t>(cfg.input_height);
-    detector_input_options.max_bytes =
-        width * height * 3U / 2U * static_cast<std::uint64_t>(detector_input_buffers);
-    detector_input_options.pool_max_buffers = detector_input_buffers;
-  }
-  detector_input_options.block = true;
-  input_graph.add(simaai::neat::nodes::Input("detector_frame", detector_input_options));
-
-  simaai::neat::Graph model_graph = model->graph();
-
-  simaai::neat::Graph detections_graph;
-  detections_graph.add(simaai::neat::nodes::Output(
-      "detections", simaai::neat::OutputOptions::EveryFrame(cfg.queue_depth)));
-
-  simaai::neat::Graph graph;
-  graph.connect(input_graph, model_graph);
-  graph.connect(model_graph, detections_graph);
+// Hardware decode to NV12 frames at the stream's size, ending at "detector_frame".
+neat::Graph decoder_graph(const sima_examples::Config& config,
+                          const sima_examples::RtspStreamInfo& stream) {
+  neat::SimaDecodeOptions decode;
+  decode.type = config.choice("input.codec", kDecodeTypes);
+  decode.decoder_name = "decoder";
+  decode.next_element = "CVU";
+  decode.dec_width = stream.width;
+  decode.dec_height = stream.height;
+  decode.dec_fps = stream.fps;
+  decode.num_buffers = config.integer("app.decoder_buffers");
+  decode.input_buffers = 2;
+  decode.decoder_tuning = "throughput-low-latency";
+  decode.memory_opt = true;
+  neat::Graph graph("decoder");
+  graph.add(neat::nodes::SimaDecode(std::move(decode)));
+  graph.add(neat::nodes::CapsRaw("NV12", stream.width, stream.height, config.integer("input.fps")));
+  graph.add(neat::nodes::Output("detector_frame"));
   return graph;
 }
 
-void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& source,
-                          const simaai::neat::Graph& detector_graph) {
-  simaai::neat::GraphLinkOptions detector_link;
-  detector_link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
-  detector_link.stream_id = stream_id_for(source.index);
-  detector_link.max_inflight_per_stream = cfg.max_inflight_per_stream;
-  detector_link.max_inflight_total = cfg.max_inflight_total;
+std::string stream_id(int index) {
+  return "stream" + std::to_string(index);
+}
 
-  // Keep the encoded RTSP producer explicit in the public topology. Core
-  // lowers this fan-out internally: the decoder branch remains fused with the
-  // shared detector, while VideoSender consumes the same read-only encoded AU
-  // before the decoder. This keeps video delivery off the application pull
-  // path and avoids retaining decoded EV buffers.
-  simaai::neat::nodes::groups::RtspEncodedInputOptions rtsp_options;
-  rtsp_options.url = source.url;
-  rtsp_options.codec = cfg.codec;
-  rtsp_options.latency_ms = cfg.latency_ms;
-  rtsp_options.tcp = cfg.tcp;
-  rtsp_options.drop_on_latency = cfg.rtsp_drop_on_latency;
-  rtsp_options.insert_queue = true;
-  rtsp_options.auto_caps_from_stream = !cfg.skip_rtsp_probe;
-  rtsp_options.source_fps = cfg.input_fps;
-  rtsp_options.payload_type = 96;
-  if (cfg.codec == simaai::neat::nodes::groups::RtspCodec::H264) {
-    rtsp_options.fallback_h264_fps = source.source_fps;
-    rtsp_options.fallback_h264_width = source.frame_w;
-    rtsp_options.fallback_h264_height = source.frame_h;
-  }
-  auto rtsp = simaai::neat::nodes::groups::RtspEncodedInput(rtsp_options);
+// Feed the shared model the latest frame of each stream, with bounded frames in flight.
+neat::GraphLinkOptions detector_link(const sima_examples::Config& config, int index) {
+  neat::GraphLinkOptions link;
+  link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
+  link.stream_id = stream_id(index);
+  link.max_inflight_per_stream = config.integer("inference.max_inflight_per_stream");
+  link.max_inflight_total = config.integer("inference.max_inflight_total");
+  return link;
+}
 
-  simaai::neat::SimaDecodeOptions decode_options;
-  decode_options.type = cfg.codec == simaai::neat::nodes::groups::RtspCodec::H265
-                            ? simaai::neat::SimaDecodeType::H265
-                            : simaai::neat::SimaDecodeType::H264;
-  decode_options.out_format = simaai::neat::FormatTag::NV12;
-  decode_options.decoder_name = "decoder";
-  decode_options.raw_output = true;
-  decode_options.next_element = "CVU";
-  decode_options.dec_width = source.frame_w;
-  decode_options.dec_height = source.frame_h;
-  decode_options.dec_fps = source.source_fps;
-  decode_options.num_buffers = cfg.decoder_buffers;
-  decode_options.input_buffers = cfg.decoder_input_buffers;
-  decode_options.decoder_tuning = cfg.decoder_tuning;
-  decode_options.memory_opt =
-      cfg.decoder_tuning == "low-memory" || cfg.decoder_tuning == "throughput-low-latency";
-  simaai::neat::Graph decoder("decoder");
-  decoder.add(simaai::neat::nodes::SimaDecode(std::move(decode_options)));
-  decoder.add(simaai::neat::nodes::CapsRaw("NV12", source.frame_w, source.frame_h, cfg.input_fps,
-                                           simaai::neat::CapsMemory::Any));
-  decoder.add(simaai::neat::nodes::Output("detector_frame"));
-  app.graph.connect(rtsp, decoder);
-  app.graph.connect(decoder, detector_graph, detector_link);
+neat::GraphLinkOptions video_link() {
+  neat::GraphLinkOptions link;
+  link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
+  return link;
+}
 
-  if (cfg.video_enabled && is_insight_visible_stream(cfg, source.index)) {
-    const auto video_options = make_video_options(cfg, source);
-    source.video_port = video_options.video_port();
-    auto video_sender = simaai::neat::nodes::groups::VideoSender(video_options);
-    video_sender.set_name("encoded_insight_video_sender_" + std::to_string(source.index));
-    simaai::neat::GraphLinkOptions video_link;
-    video_link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
-    app.graph.connect(rtsp, video_sender, video_link);
-  }
+// Send the encoded stream to Insight unchanged, on video port base + index.
+groups::VideoSenderOptions video_options(const sima_examples::Config& config, int index) {
+  auto options = groups::VideoSenderOptions::Passthrough(config.choice("input.codec", kRtspCodecs));
+  options.host = config.string("output.insight.host");
+  options.channel = index;
+  options.video_port_base = config.integer("output.insight.video_port_base");
+  return options;
+}
 
-  std::cout << "[stream " << source.index << "] rtsp=" << source.url << " stream=" << source.frame_w
-            << "x" << source.frame_h << "@" << source.source_fps << " insight=" << cfg.insight_host
-            << " video=";
-  if (!cfg.video_enabled) {
-    std::cout << "disabled";
-  } else if (is_insight_visible_stream(cfg, source.index)) {
-    std::cout << source.video_port;
+neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config, int index) {
+  neat::MetadataSenderOptions options;
+  options.host = config.string("output.insight.host");
+  options.channel = index;
+  options.metadata_port_base = config.integer("output.insight.metadata_port_base");
+  return options;
+}
+
+neat::GraphOptions graph_options(const sima_examples::Config& config) {
+  neat::GraphOptions options;
+  options.advanced_execution.internal_queue_depth = config.integer("app.internal_queue_depth");
+  return options;
+}
+
+neat::RunOptions run_options(const sima_examples::Config& config) {
+  neat::RunOptions options;
+  options.preset = neat::RunPreset::Realtime;
+  options.queue_depth = config.integer("app.queue_depth");
+  options.output_memory = neat::OutputMemory::ZeroCopy;
+  return options;
+}
+
+// The boxes in a detections sample, whose first tensor is the BBOX payload.
+std::vector<neat::Box> decode_boxes(const neat::Sample& sample,
+                                    const sima_examples::RtspStreamInfo& stream,
+                                    int max_detections) {
+  const neat::Tensor* bbox = nullptr;
+  if (sample.kind == neat::SampleKind::TensorSet && !sample.tensors.empty()) {
+    bbox = &sample.tensors.front();
+  } else if (sample.kind == neat::SampleKind::Tensor && sample.tensor.has_value()) {
+    bbox = &*sample.tensor;
   } else {
-    std::cout << "not-published";
+    throw std::runtime_error("expected a BBOX tensor in the detections sample");
   }
-  std::cout << " metadata=";
-  if (source.metadata_sender) {
-    std::cout << source.metadata_sender->metadata_port();
-  } else {
-    std::cout << "disabled";
-  }
-  std::cout << "\n";
+  return neat::decode_bbox_tensor(*bbox, stream.width, stream.height, max_detections,
+                                  /*strict=*/true)
+      .boxes;
 }
 
-void validate_worker_pool_geometry(const std::vector<SourceRuntime>& sources) {
-  if (sources.empty()) {
-    return;
-  }
-  const int frame_w = sources.front().frame_w;
-  const int frame_h = sources.front().frame_h;
-  for (const auto& source : sources) {
-    if (source.frame_w != frame_w || source.frame_h != frame_h) {
-      throw std::runtime_error("detector graph requires all streams to share frame size");
+// Send every detections sample to its stream's Insight channel until a stop signal.
+void send_detections(neat::Run& run, std::vector<neat::MetadataSender>& metadata_senders,
+                     const std::vector<sima_examples::RtspStreamInfo>& streams,
+                     const std::vector<std::string>& labels, int max_detections,
+                     const std::atomic<bool>& stop) {
+  while (!stop) {
+    neat::Sample sample;
+    neat::PullError error;
+    const auto status = run.pull("detections", kPullTimeoutMs, sample, &error);
+    if (!sima_examples::pull_status_has_sample(status, "detections", error, run.last_error())) {
+      continue;
+    }
+
+    // With one source, Core names the sample after the decoder instead of the stream.
+    int index = 0;
+    if (metadata_senders.size() > 1) {
+      index = std::stoi(sample.stream_id.substr(std::string("stream").size()));
+    }
+    const auto& stream = streams.at(static_cast<std::size_t>(index));
+    const std::string payload = sima_examples::detection_egress::serialize(
+        decode_boxes(sample, stream, max_detections), labels, stream.width, stream.height,
+        sima_examples::detection_egress::frame_metadata(sample, index));
+    // A nonblocking send drops the message while the socket buffer is full; the drops are
+    // counted in the sender's stats and reported when the run ends. Any other failure throws.
+    std::string send_error;
+    if (!metadata_senders.at(static_cast<std::size_t>(index)).send_raw_json(payload, &send_error) &&
+        !send_error.empty()) {
+      throw std::runtime_error("metadata send failed: " + send_error);
     }
   }
 }
 
-std::uint32_t rtp_timestamp_from_pts_ns(int64_t pts_ns) {
-  if (pts_ns < 0) {
-    return 0;
-  }
-  const auto ticks = (static_cast<__int128>(pts_ns) * 90000) / 1000000000;
-  return static_cast<std::uint32_t>(static_cast<std::uint64_t>(ticks));
-}
+int run_app(const fs::path& config_path) {
+  const auto config = sima_examples::Config::load(config_path);
+  const auto sources = config.string_list("input.source");
+  // Each stream's frame size and rate: the configured values, and a probe's for each 0.
+  const auto streams = sima_examples::probe_rtsp_streams(
+      sources, config.boolean("input.rtsp.tcp"),
+      {config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")});
+  const auto labels = sima_examples::load_labels(config.string("model.labels"));
+  const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
+  // Used by both the model and the box decode.
+  const int max_detections = config.integer("inference.max_detections");
+  neat::Model model(model_path.string(), model_options(config, max_detections));
+  const neat::Graph detector = detector_graph(model, config);
 
-bool should_log_failure_count(std::uint64_t count) {
-  // Log the first failure and then powers of two. Persistent UDP pressure is
-  // visible without letting a failing receiver turn the realtime dispatcher
-  // into a stderr benchmark.
-  return count != 0 && (count & (count - 1U)) == 0;
-}
-
-void send_metadata_nonblocking(SourceRuntime& source, const std::string& payload) {
-  if (!source.metadata_sender) {
-    return;
-  }
-  std::string err;
-  const bool sent = source.metadata_sender->send_raw_json(payload, &err);
-  if (sent) {
-    return;
-  }
-  const std::uint64_t failures = ++source.metadata_send_fail;
-  if (should_log_failure_count(failures)) {
-    std::cerr << "[warn] stream " << source.index
-              << " nonblocking metadata send failed (count=" << failures << "): " << err << "\n";
-  }
-}
-
-void send_metadata(SourceRuntime& source, const simaai::neat::Sample& frame,
-                   const std::vector<objdet::Box>& boxes) {
-  if (!source.metadata_sender) {
-    return;
-  }
-  sima_examples::detection_egress::FrameMetadata metadata;
-  metadata.stream_index = source.index;
-  const std::string fallback_stream_id =
-      frame.stream_id.empty() ? stream_id_for(source.index) : std::string{};
-  metadata.stream_id = frame.stream_id.empty() ? std::string_view(fallback_stream_id)
-                                               : std::string_view(frame.stream_id);
-  metadata.frame_id = frame.frame_id;
-  metadata.pts_ns = frame.pts_ns;
-  metadata.dts_ns = frame.dts_ns;
-  metadata.duration_ns = frame.duration_ns;
-  metadata.input_seq = frame.input_seq;
-  metadata.orig_input_seq = frame.orig_input_seq;
-  if (frame.pts_ns >= 0)
-    metadata.rtp_timestamp = rtp_timestamp_from_pts_ns(frame.pts_ns);
-
-  std::string payload;
-  try {
-    payload = sima_examples::detection_egress::serialize(boxes, source.labels, source.frame_w,
-                                                         source.frame_h, metadata);
-  } catch (const std::exception& ex) {
-    std::cerr << "[warn] stream " << source.index << " metadata JSON build failed: " << ex.what()
-              << "\n";
-    return;
-  }
-
-  send_metadata_nonblocking(source, payload);
-}
-
-void complete_detection(SourceRuntime& source, const AppConfig& cfg,
-                        const simaai::neat::Sample& detections) {
-  {
-    BboxPayloadView payload;
-    std::string err;
-    if (!map_bbox_payload(detections, payload, err)) {
-      throw std::runtime_error("stream " + std::to_string(source.index) +
-                               " bbox extract failed: " + err);
+  neat::Graph graph(graph_options(config));
+  std::vector<neat::MetadataSender> metadata_senders;
+  for (int index = 0; index < static_cast<int>(sources.size()); ++index) {
+    const std::string& url = sources[static_cast<std::size_t>(index)];
+    const auto& stream = streams[static_cast<std::size_t>(index)];
+    auto rtsp = groups::RtspEncodedInput(rtsp_options(config, url, stream));
+    const neat::Graph decoder = decoder_graph(config, stream);
+    graph.connect(rtsp, decoder);
+    graph.connect(decoder, detector, detector_link(config, index));
+    if (config.boolean("output.video_enabled")) {
+      graph.connect(rtsp, groups::VideoSender(video_options(config, index)), video_link());
     }
-    objdet::parse_boxes_strict_into(payload.bytes(), source.frame_w, source.frame_h,
-                                    cfg.max_detections, false, source.parsed_boxes);
+    std::string error;
+    metadata_senders.emplace_back(metadata_options(config, index), &error);
+    sima_examples::require(metadata_senders.back().ok(), error);
   }
-  send_metadata(source, detections, source.parsed_boxes);
-}
+  std::cout << "streams=" << sources.size() << " insight=" << config.string("output.insight.host")
+            << " video_ports=" << config.integer("output.insight.video_port_base")
+            << "+ metadata_ports=" << config.integer("output.insight.metadata_port_base") << "+\n";
 
-void pull_detections(AppRuntime& app, const AppConfig& cfg) {
-  while (g_stop_requested == 0) {
-    bool did_work = false;
-    constexpr int kMaxDetectionsPerRound = 64;
-    for (int drained = 0; drained < kMaxDetectionsPerRound; ++drained) {
-      simaai::neat::Sample detections;
-      simaai::neat::PullError err;
-      const auto status = app.run.pull("detections", /*timeout_ms=*/0, detections, &err);
-      if (status == simaai::neat::PullStatus::Closed) {
-        const std::string run_error = app.run.last_error();
-        throw std::runtime_error("detections output closed unexpectedly" +
-                                 (run_error.empty() ? std::string{} : ": " + run_error));
-      }
-      if (status == simaai::neat::PullStatus::Timeout) {
-        break;
-      }
-      if (status == simaai::neat::PullStatus::Error) {
-        throw std::runtime_error("failed to pull detections: " + err.message);
-      }
-      if (status != simaai::neat::PullStatus::Ok) {
-        continue;
-      }
+  const std::atomic<bool>& stop = sima_examples::stop_on_signals();
+  // The Run's destructor closes it when send_detections throws.
+  neat::Run run = graph.build(run_options(config));
+  send_detections(run, metadata_senders, streams, labels, max_detections, stop);
+  run.close();
 
-      did_work = true;
-      const int stream_index =
-          stream_index_from_detection(detections, static_cast<int>(app.sources.size()));
-      auto& source = app.sources[static_cast<std::size_t>(stream_index)];
-      complete_detection(source, cfg, detections);
-    }
-    if (!did_work) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  for (std::size_t index = 0; index < metadata_senders.size(); ++index) {
+    const auto failures = metadata_senders[index].stats().send_failures;
+    if (failures > 0) {
+      std::cout << "stream " << index << ": " << failures << " metadata messages dropped\n";
     }
   }
-}
-
-void run_app(const AppConfig& cfg) {
-  g_stop_requested = 0;
-  auto previous_sigint = std::signal(SIGINT, request_stop);
-
-  const auto labels = load_labels(cfg.labels_path);
-
-  // The realtime fan-in retains the latest pending frame per stream. This small
-  // global depth only decouples shared model stages and does not create another
-  // decoded-frame queue per camera. GraphOptions must be set on the final
-  // composition owner rather than a nested model fragment.
-  AppRuntime app(cfg.internal_queue_depth);
-  app.sources.reserve(cfg.rtsp_urls.size());
-  std::cout << "[detector] max_inflight_per_stream=" << cfg.max_inflight_per_stream
-            << " max_inflight_total=" << cfg.max_inflight_total << "\n";
-  try {
-    auto detector_graph = build_detector_graph(cfg, app.model);
-    for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
-      app.sources.push_back(make_source_runtime(cfg, static_cast<int>(index), labels));
-      connect_source_graph(app, cfg, app.sources.back(), detector_graph);
-    }
-    validate_worker_pool_geometry(app.sources);
-
-    // Ordinary build() lowers the explicit encoded VideoSender and decoder
-    // fan-out into the fused realtime source pipeline.
-    app.run = app.graph.build(
-        realtime_options(cfg.queue_depth, simaai::neat::OverflowPolicy::KeepLatest));
-
-    pull_detections(app, cfg);
-  } catch (...) {
-    app.run.close();
-    std::signal(SIGINT, previous_sigint);
-    throw;
-  }
-
-  app.run.close();
-  std::signal(SIGINT, previous_sigint);
+  return 0;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
   try {
-    const CliOptions cli = parse_args(argc, argv);
-    if (!fs::exists(cli.config_path)) {
-      std::cerr << "Error: config file not found: " << cli.config_path << "\n";
-      return 2;
-    }
-
-    const AppConfig cfg = load_app_config(cli.config_path);
-    if (cli.validate_config_only) {
-      const int visible_streams = effective_insight_visible_streams(cfg);
-      const int video_port_last = cfg.video_port_base + std::max(0, visible_streams - 1);
-      const int metadata_port_last = cfg.metadata_port_base + std::max(0, visible_streams - 1);
-      std::cout << "Config validated: " << cli.config_path << " (streams=" << cfg.rtsp_urls.size()
-                << ", model_path=" << cfg.model_path << ", labels_path=" << cfg.labels_path.string()
-                << ", workers=" << cfg.workers << ", queue_depth=" << cfg.queue_depth
-                << ", internal_queue_depth=" << cfg.internal_queue_depth
-                << ", inference_async=" << (kInferenceAsync ? "true" : "false")
-                << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
-                << ", max_inflight_total=" << cfg.max_inflight_total
-                << ", input=" << cfg.input_width << "x" << cfg.input_height << "@" << cfg.input_fps
-                << ", insight_visible_streams=" << visible_streams
-                << ", video_ports=" << cfg.video_port_base << "-" << video_port_last
-                << ", metadata_ports=" << cfg.metadata_port_base << "-" << metadata_port_last
-                << ", decoder_admission=core)\n";
-      return 0;
-    }
-    run_app(cfg);
-    return 0;
-  } catch (const std::exception& e) {
-    std::cerr << "[ERR] " << e.what() << "\n";
+    return run_app(parse_args(argc, argv));
+  } catch (const std::exception& error) {
+    std::cerr << "[ERR] " << error.what() << "\n";
     return 1;
   }
 }

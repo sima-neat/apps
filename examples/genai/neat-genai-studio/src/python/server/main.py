@@ -52,7 +52,7 @@ def start_openai_server(cfg: AppConfig):
     except ImportError as exc:
         raise RuntimeError(
             "pyneat is required. Run this example from the Python environment "
-            "provided by the installed Neat Development Environment."
+            "provided by the installed Palette SDK."
         ) from exc
 
     if len(cfg.chat_models) > 1:

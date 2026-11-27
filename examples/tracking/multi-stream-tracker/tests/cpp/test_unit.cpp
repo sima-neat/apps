@@ -1,5 +1,6 @@
 #include "examples/tracking/multi-stream-tracker/src/cpp/utils/tracker_api.cpp"
-#include "support/testing/test_process.h"
+#include "sima_examples/detection_egress.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 
@@ -302,6 +303,22 @@ bool test_config_file_classes(const std::string& binary) {
   return ok;
 }
 
+// The [x, y, width, height] Insight gets for one track on a 640x480 frame.
+struct InsightBox {
+  int x = 0;
+  int y = 0;
+  int w = 0;
+  int h = 0;
+};
+
+InsightBox metadata_box(const TrackedDetection& track) {
+  const auto entries = sima_examples::detection_egress::track_entries(
+      std::vector<TrackedDetection>{track}, std::vector<std::string>{}, 640, 480);
+  const auto& bbox = entries.at(0).at("bbox");
+  return {bbox.at(0).get<int>(), bbox.at(1).get<int>(), bbox.at(2).get<int>(),
+          bbox.at(3).get<int>()};
+}
+
 bool test_metadata_box_clipping() {
   bool ok = true;
   // Crosses the left edge: raw span is 181 px but only 136 px are visible.
@@ -311,7 +328,7 @@ bool test_metadata_box_clipping() {
   left.y1 = 10.0f;
   left.x2 = 136.98f;
   left.y2 = 90.0f;
-  const auto left_box = multi_stream_tracker::clip_box_to_frame(left, 640, 480);
+  const auto left_box = metadata_box(left);
   ok &= expect_true(left_box.x == 0 && left_box.w == 136, "left-edge box uses clipped extent");
   ok &= expect_true(left_box.x + left_box.w <= 640 && left_box.y + left_box.h <= 480,
                     "left-edge box stays inside the frame");
@@ -323,7 +340,7 @@ bool test_metadata_box_clipping() {
   right.y1 = 400.0f;
   right.x2 = 700.0f;
   right.y2 = 500.0f;
-  const auto right_box = multi_stream_tracker::clip_box_to_frame(right, 640, 480);
+  const auto right_box = metadata_box(right);
   ok &= expect_true(right_box.x == 600 && right_box.x + right_box.w == 640 &&
                         right_box.y + right_box.h == 480,
                     "right/bottom box is clipped to the frame");
@@ -335,7 +352,7 @@ bool test_metadata_box_clipping() {
   gone.y1 = -200.0f;
   gone.x2 = -10.0f;
   gone.y2 = -10.0f;
-  const auto gone_box = multi_stream_tracker::clip_box_to_frame(gone, 640, 480);
+  const auto gone_box = metadata_box(gone);
   ok &= expect_true(gone_box.w == 0 && gone_box.h == 0, "box outside the frame is empty");
   return ok;
 }

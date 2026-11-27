@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import sys
 from pathlib import Path
 
 from tests.utils import pytest_fixtures
@@ -80,19 +77,6 @@ def test_classification_image_is_test_only():
     assert not (APPS_ROOT / "assets/datasets/imagenet/goldfish.jpeg").exists()
 
 
-def test_superpoint_video_is_a_licensed_runtime_dataset():
-    dataset = APPS_ROOT / "assets" / "datasets" / "tum-rgbd"
-    video = dataset / "freiburg1-desk.mp4"
-    license_file = dataset / "LICENSE.md"
-
-    assert video.is_file()
-    assert license_file.is_file()
-    assert hashlib.sha256(video.read_bytes()).hexdigest() == (
-        "fe6189df4c6f3fa468fea1439a31d2ce306110988cfba4854fb1d24d37a978fe"
-    )
-    assert "CC BY 4.0" in license_file.read_text(encoding="utf-8")
-
-
 def test_direct_pytest_defaults_to_test_assets(monkeypatch):
     monkeypatch.delenv("SIMANEAT_APPS_TEST_MODELS_DIR", raising=False)
     monkeypatch.delenv("SIMANEAT_APPS_TEST_INPUT_DIR", raising=False)
@@ -113,26 +97,6 @@ def test_direct_classification_pytest_uses_test_fixture():
     assert '"datasets-test"' in source
     assert '"imagenet"' in source
     assert "test_images_classification" not in source
-
-
-def test_benchmark_refresh_finds_top_level_model(tmp_path, monkeypatch):
-    package = "example-package.tar.gz"
-    model_path = tmp_path / "models" / package
-    model_path.parent.mkdir()
-    model_path.write_bytes(b"model")
-
-    refresh_path = (
-        APPS_ROOT / "examples/benchmarking/model-benchmark/scripts/refresh_results.py"
-    )
-    module_name = "model_benchmark_refresh_contract"
-    spec = importlib.util.spec_from_file_location(module_name, refresh_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    monkeypatch.setitem(sys.modules, module_name, module)
-    spec.loader.exec_module(module)
-    row = module.ModelRow("example", f"nested/{package}", "example-app")
-
-    assert module.resolve_model_path(row, tmp_path / "models") == model_path
 
 
 def test_obsolete_asset_directories_are_absent():

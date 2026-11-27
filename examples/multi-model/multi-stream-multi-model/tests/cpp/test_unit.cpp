@@ -1,332 +1,547 @@
-#include "support/testing/test_process.h"
+// tests/python/test_unit.py's tests, less those that need a Run or main.cpp's private tables: the
+// deadline is tested on PendingResults.observe().
 
+#include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/insight_metadata.h"
+#include "examples/multi-model/multi-stream-multi-model/src/cpp/utils/pending_results.h"
+#include "sima_examples/config.h"
+#include "sima_examples/testing/test_checks.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
+
+#include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <optional>
+#include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::create_test_scratch_dir;
-using sima_examples::testing::remove_dir;
-using sima_examples::testing::spawn_and_wait;
+using insight_metadata::Entry;
+using pending_results::PendingResults;
+using namespace sima_examples::testing;
 
 namespace {
 
-constexpr const char* kFourStreams = "streams:\n"
-                                     "  - url: rtsp://127.0.0.1:8554/src1\n"
-                                     "    task: detection\n"
-                                     "    decode: yolov8\n"
-                                     "    model: models/yolo11s_w8a8_mpk.tar.gz\n"
-                                     "  - url: rtsp://127.0.0.1:8554/src2\n"
-                                     "    task: segmentation\n"
-                                     "    decode: yolo26\n"
-                                     "    model: models/yolo26s_seg_w8a16_mpk.tar.gz\n"
-                                     "  - url: rtsp://127.0.0.1:8554/src3\n"
-                                     "    task: pose\n"
-                                     "    decode: yolo26\n"
-                                     "    model: models/yolo26m_pose_w8a8_mpk.tar.gz\n"
-                                     "  - url: rtsp://127.0.0.1:8554/src4\n"
-                                     "    task: detection\n"
-                                     "    decode: yolo26\n"
-                                     "    model: models/yolo26m_w8a8_mpk.tar.gz\n";
+constexpr const char* kExampleName = "multi-stream-multi-model";
+const std::vector<std::string> kLabels = {"person", "bicycle", "car"};
 
-constexpr const char* kOneStream = "streams:\n"
-                                   "  - url: rtsp://127.0.0.1:8554/src1\n"
-                                   "    task: detection\n"
-                                   "    decode: yolo26\n"
-                                   "    model: models/yolo26m_w8a8_mpk.tar.gz\n";
+using FrameId = std::optional<std::int64_t>;
+constexpr FrameId kNone = std::nullopt;
 
-constexpr const char* kInsightOutput = "output:\n"
-                                       "  insight:\n"
-                                       "    host: 127.0.0.1\n";
+// The error observe() throws for one round, or "" when it throws none.
+std::string error_of(PendingResults& pending, FrameId frame_id, FrameId result_frame_id,
+                     double now_s) {
+  try {
+    pending.observe(frame_id, result_frame_id, now_s);
+  } catch (const std::runtime_error& error) {
+    return error.what();
+  }
+  return "";
+}
 
-bool expect_true(bool condition, const std::string& message) {
-  if (!condition) {
-    std::cerr << "[FAIL] " << message << "\n";
+// One round that must not throw. A throw outside error_of would end the test binary.
+bool observes(PendingResults& pending, FrameId frame_id, FrameId result_frame_id, double now_s) {
+  const std::string error = error_of(pending, frame_id, result_frame_id, now_s);
+  return expect_true(error.empty(),
+                     "the round at " + std::to_string(now_s) + " s passes: " + error);
+}
+
+// The shipped model entries, each by field.
+std::vector<ConfigScalars> shipped_models() {
+  std::vector<ConfigScalars> models;
+  for (const auto& model : example_common_config(kExampleName).mapping_list("model")) {
+    ConfigScalars fields = {{"id", model.string("id")}, {"path", model.string("path")}};
+    if (const auto labels = model.string_value("labels")) {
+      fields["labels"] = *labels;
+    }
+    models.push_back(fields);
+  }
+  return models;
+}
+
+// The last stderr line for the shipped config with `models` as its entries, the test's directory
+// as <dir>. The set frame size and rate skip the probe, so no source is needed.
+std::string run_error(const std::string& binary, const std::string& test_name,
+                      const std::vector<ConfigScalars>& models, std::string* all = nullptr) {
+  const std::string dir = create_test_scratch_dir(kExampleName, test_name);
+  const fs::path config_path = fs::path(dir) / "config.yaml";
+  // The writer keeps only the shipped scalars, so the test passes the streams too.
+  write_e2e_config(
+      kExampleName, config_path,
+      {{"input.width", "1280"}, {"input.height", "720"}, {"input.fps", "30"}},
+      {{"input.source", example_common_config(kExampleName).string_list("input.source")}},
+      {{"model", models}});
+  const ProcessResult result = spawn_and_wait(binary, {"--config", config_path.string()}, 60000);
+  remove_dir(dir);
+  std::string text = result.stderr_text;
+  while (!text.empty() && text.back() == '\n') {
+    text.pop_back();
+  }
+  const auto newline = text.rfind('\n');
+  std::string line = result.exit_code == 1
+                         ? text.substr(newline == std::string::npos ? 0 : newline + 1)
+                         : "exit " + std::to_string(result.exit_code) + ": " + text;
+  for (std::string* shown : {&line, &text}) {
+    for (auto at = shown->find(dir); at != std::string::npos; at = shown->find(dir, at)) {
+      shown->replace(at, dir.size(), "<dir>");
+    }
+  }
+  if (all != nullptr) {
+    *all = text;
+  }
+  return line;
+}
+
+// The checks the application leaves to its config: the values it reads are usable.
+bool test_shipped_config_is_usable() {
+  const fs::path common_dir = "examples/multi-model/multi-stream-multi-model/src/common";
+  const auto config = sima_examples::Config::load(common_dir / "config.yaml");
+  const auto sources = config.string_list("input.source");
+  bool ok = expect_true(!sources.empty() && sources.size() <= 4U,
+                        "the shipped config lists one to four streams");
+  const auto models = config.mapping_list("model");
+  ok &= expect_true(models.size() == sources.size(), "one model per stream");
+  std::vector<std::string> model_ids;
+  std::vector<std::string> model_paths;
+  for (const auto& model : models) {
+    model_ids.push_back(model.string("id"));
+    model_paths.push_back(model.string("path"));
+  }
+  ok &= expect_true(model_ids == std::vector<std::string>{"yolov8", "yolo26-seg", "yolo26-pose",
+                                                          "yolo26"},
+                    "the model entries name the four supported packages");
+  const std::vector<std::string> files = {
+      "yolo11s_w8a8_mpk.tar.gz", "yolo26s_seg_w8a16_mpk.tar.gz", "yolo26m_pose_w8a8_mpk.tar.gz",
+      "yolo26m_w8a8_mpk.tar.gz"};
+  for (std::size_t i = 0; i < model_paths.size() && i < files.size(); ++i) {
+    const fs::path model_path = common_dir / model_paths[i];
+    ok &= expect_true(model_path.filename() == files[i], model_paths[i] + " names " + files[i]);
+    // The packaged path reaches prebuilt-apps/models from the config file.
+    const std::string normal = fs::absolute(model_path).lexically_normal().string();
+    const std::string models = fs::absolute("models").lexically_normal().string() + "/";
+    ok &= expect_true(normal.rfind(models, 0) == 0,
+                      model_paths[i] + " reaches models/ from the config file");
+  }
+  const std::string codec = config.string("input.codec");
+  ok &= expect_true(codec == "h264" || codec == "h265", "the shipped codec is supported");
+  for (std::size_t i = 0; i < models.size(); ++i) {
+    if (model_ids[i] == "yolo26-pose") {
+      ok &= expect_true(!models[i].string_value("labels").has_value(),
+                        "the pose model has no labels");
+      continue;
+    }
+    // The labels path starts at the working directory, the Apps root here.
+    std::ifstream labels_file(models[i].string("labels"));
+    int labels = 0;
+    for (std::string line; std::getline(labels_file, line);) {
+      labels += line.empty() ? 0 : 1;
+    }
+    ok &= expect_true(labels == 80, model_ids[i] + " has the 80 COCO labels it scores");
+  }
+  for (const std::string key :
+       {"input.width", "input.height", "input.fps", "input.rtsp.latency_ms", "inference.frames",
+        "output.insight.video_port_base", "output.insight.metadata_port_base"}) {
+    ok &= expect_true(config.integer(key) >= 0, key + " is not negative");
+  }
+  ok &= expect_true(config.integer("inference.max_detections") > 0,
+                    "inference.max_detections is positive");
+  for (const std::string key : {"inference.min_score", "inference.nms_iou"}) {
+    ok &= expect_true(config.number(key) >= 0.0 && config.number(key) <= 1.0,
+                      key + " is from 0 to 1");
+  }
+  ok &= expect_true(!config.string("output.insight.host").empty(), "output.insight.host is set");
+  ok &= expect_true(config.boolean("input.rtsp.tcp"), "the shipped config receives over TCP");
+  return ok;
+}
+
+bool test_objects_clamp_boxes_to_the_frame() {
+  const std::vector<simaai::neat::Box> boxes = {{10.7f, 20.2f, 110.9f, 220.5f, 0.91234f, 2},
+                                                {1200.0f, 700.0f, 1400.0f, 800.0f, 0.5f, 7}};
+  const auto entries = insight_metadata::objects(boxes, kLabels, 1280, 720);
+  const std::string expected =
+      R"([{"id":"obj_1","label":"car","confidence":0.912,"bbox":[10.0,20.0,100.0,200.0]},)"
+      R"({"id":"obj_2","label":"unknown","confidence":0.5,"bbox":[1200.0,700.0,80.0,20.0]}])";
+  return expect_true(Entry(entries).dump() == expected,
+                     "objects clamp boxes to the frame: " + Entry(entries).dump());
+}
+
+bool test_mask_rect_maps_the_frame_through_the_letterbox() {
+  // A 1920x1080 frame fills the 640x640 input at 1/3 scale, with 140 rows of padding above.
+  const cv::Rect whole = insight_metadata::mask_rect({0, 0, 1920, 1080}, 1920, 1080, 160, 160);
+  const cv::Rect corner =
+      insight_metadata::mask_rect({960, 540, 960, 540}, 1920, 1080, 160, 160);
+  bool ok = expect_true(whole == cv::Rect(0, 35, 160, 90), "the whole frame maps to rows 35-124");
+  ok &= expect_true(corner == cv::Rect(80, 80, 80, 45),
+                    "the bottom-right quarter maps to cells 80-159 by 80-124");
+  return ok;
+}
+
+bool test_segment_outline_follows_the_mask() {
+  // In a 640x640 frame one mask cell is 4x4 pixels. The object covers cells 20-59 by 40-79,
+  // pixels 80-239 by 160-319.
+  std::vector<std::uint8_t> masks(2 * 160 * 160, 0);
+  for (int y = 40; y < 80; ++y) {
+    std::fill_n(masks.begin() + y * 160 + 20, 40, 255);
+  }
+  const std::vector<float> boxes = {64.0f, 144.0f, 256.0f, 336.0f, 0.80004f, 1.0f,
+                                    0.0f,  0.0f,   100.0f, 100.0f, 0.9f,     0.0f};
+  auto segments = insight_metadata::segments(boxes, masks, 160, 160, kLabels, 640, 640);
+  // The second detection's mask is empty, so it has no outline and is left out.
+  if (!expect_true(segments.size() == 1U, "one segment has an outline")) {
     return false;
   }
-  std::cout << "[OK] " << message << "\n";
-  return true;
-}
-
-bool expect_contains(const std::string& haystack, const std::string& needle,
-                     const std::string& message) {
-  return expect_true(haystack.find(needle) != std::string::npos, message);
-}
-
-fs::path write_config(const std::string& test_name, const std::string& body) {
-  const std::string temp_dir = create_test_scratch_dir("multi-stream-multi-model", test_name);
-  if (temp_dir.empty()) {
-    throw std::runtime_error("failed to create temp directory");
+  const Entry outline = segments[0]["mask"];
+  segments[0].erase("mask");
+  const std::string expected = R"({"id":"seg_1","label":"bicycle","confidence":0.8,)"
+                               R"("bbox":[64,144,192,192],"mask_format":"polygon"})";
+  bool ok = expect_true(segments[0].dump() == expected,
+                        "the segment names its class, score, and box: " + segments[0].dump());
+  // The resize rounds the square's corners, so the outline has four corners, each within a pixel
+  // of the square's, and spans the square exactly.
+  std::vector<int> xs;
+  std::vector<int> ys;
+  for (const auto& point : outline) {
+    xs.push_back(point[0].get<int>());
+    ys.push_back(point[1].get<int>());
   }
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << body;
-  return config_path;
-}
-
-sima_examples::testing::ProcessResult validate(const std::string& binary,
-                                               const fs::path& config_path) {
-  return spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"},
-                        20000);
-}
-
-bool test_help_runs(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--help"}, 20000);
-  return expect_true(result.exit_code == 0, "help exits with code 0") &&
-         expect_contains(result.stdout_text, "--config", "help mentions --config") &&
-         expect_contains(result.stdout_text, "--validate-config-only",
-                         "help mentions --validate-config-only");
-}
-
-bool test_missing_config_file_fails_cleanly(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 20000);
-  return expect_true(result.exit_code == 2, "missing config exits with code 2") &&
-         expect_contains(result.stderr_text, "config file not found",
-                         "missing config error mentions config file not found");
-}
-
-bool test_validate_config_only_reports_every_stream_task(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_reports_every_stream_task",
-                                            std::string(kFourStreams) +
-                                                "input:\n"
-                                                "  codec: avc\n"
-                                                "inference:\n"
-                                                "  max_inflight_per_stream: 3\n" +
-                                                kInsightOutput);
-
-  const auto result = validate(binary, config_path);
-  const bool ok =
-      expect_true(result.exit_code == 0, "four-stream multi-model config validates") &&
-      expect_contains(result.stdout_text, "streams=4", "validate output reports stream count") &&
-      expect_contains(result.stdout_text, "tasks=detection,segmentation,pose,detection",
-                      "validate output reports the per-stream tasks in order") &&
-      expect_contains(result.stdout_text, "max_inflight_per_stream=3",
-                      "validate output reports per-stream inflight limit");
-  remove_dir(config_path.parent_path().string());
+  ok &= expect_true(outline.size() == 4U, "the outline has four corners: " + outline.dump());
+  ok &= expect_true(!xs.empty() && *std::min_element(xs.begin(), xs.end()) == 80 &&
+                        *std::max_element(xs.begin(), xs.end()) == 239 &&
+                        *std::min_element(ys.begin(), ys.end()) == 160 &&
+                        *std::max_element(ys.begin(), ys.end()) == 319,
+                    "the outline spans pixels 80-239 by 160-319: " + outline.dump());
   return ok;
 }
 
-bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_rejects_too_many_streams",
-                                            std::string(kFourStreams) +
-                                                "  - url: rtsp://127.0.0.1:8554/src5\n"
-                                                "    task: detection\n"
-                                                "    decode: yolo26\n"
-                                                "    model: models/yolo26m_w8a8_mpk.tar.gz\n" +
-                                                kInsightOutput);
-
-  const auto result = validate(binary, config_path);
-  const bool ok = expect_true(result.exit_code == 1, "five-stream config is rejected") &&
-                  expect_contains(result.stderr_text, "up to four streams",
-                                  "too-many-stream error mentions the four-stream limit");
-  remove_dir(config_path.parent_path().string());
+bool test_poses_round_to_whole_pixels_and_name_the_keypoints() {
+  const std::vector<float> boxes = {10.5f, 20.4f, 110.5f, 220.6f, 0.87654f, 0.0f};
+  std::vector<float> keypoints;
+  for (int k = 0; k < 17; ++k) {
+    keypoints.insert(keypoints.end(), {k * 10 + 0.5f, k * 5 + 0.4f, 0.5f});
+  }
+  const auto poses = insight_metadata::poses(boxes, keypoints);
+  if (!expect_true(poses.size() == 1U, "one pose")) {
+    return false;
+  }
+  const Entry& pose = poses[0];
+  bool ok = expect_true(pose["id"] == "pose_1" && pose["label"] == "person" &&
+                            pose["confidence"] == 0.877,
+                        "the pose is a person with a three-decimal score: " + pose.dump());
+  ok &= expect_true(pose["bbox"].dump() == "[11,20,100,200]",
+                    "the box rounds to whole pixels: " + pose["bbox"].dump());
+  ok &= expect_true(pose["keypoints"][0].dump() ==
+                        R"({"name":"nose","x":1,"y":0,"confidence":0.5})",
+                    "the first keypoint is the nose: " + pose["keypoints"][0].dump());
+  ok &= expect_true(pose["keypoints"][16].dump() ==
+                        R"({"name":"right_ankle","x":161,"y":80,"confidence":0.5})",
+                    "the last keypoint is the right ankle: " + pose["keypoints"][16].dump());
+  bool names = pose["keypoints"].size() == insight_metadata::kCocoKeypointNames.size();
+  for (std::size_t k = 0; names && k < insight_metadata::kCocoKeypointNames.size(); ++k) {
+    names = pose["keypoints"][k]["name"] == insight_metadata::kCocoKeypointNames[k];
+  }
+  ok &= expect_true(names, "the keypoints carry the 17 COCO names in order");
   return ok;
 }
 
-bool test_validate_config_only_rejects_empty_streams(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_rejects_empty_streams",
-                                            std::string("streams: []\n") + kInsightOutput);
-
-  const auto result = validate(binary, config_path);
-  const bool ok =
-      expect_true(result.exit_code == 1, "empty stream config is rejected") &&
-      expect_contains(result.stderr_text, "streams", "empty-stream error mentions streams");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_validate_config_only_rejects_unknown_task(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_unknown_task",
-                   std::string("streams:\n"
-                               "  - url: rtsp://127.0.0.1:8554/src1\n"
-                               "    task: tracking\n"
-                               "    model: models/yolo26m_w8a8_mpk.tar.gz\n") +
-                       kInsightOutput);
-
-  const auto result = validate(binary, config_path);
-  const bool ok = expect_true(result.exit_code == 1, "unknown task is rejected") &&
-                  expect_contains(result.stderr_text, "task must be one of",
-                                  "unknown-task error lists the supported tasks");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_validate_config_only_rejects_unknown_decode_family(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_unknown_decode_family",
-                   std::string("streams:\n"
-                               "  - url: rtsp://127.0.0.1:8554/src1\n"
-                               "    task: detection\n"
-                               "    decode: yolov5\n"
-                               "    model: models/yolo26m_w8a8_mpk.tar.gz\n") +
-                       kInsightOutput);
-
-  const auto result = validate(binary, config_path);
-  const bool ok = expect_true(result.exit_code == 1, "unknown decode family is rejected") &&
-                  expect_contains(result.stderr_text, "decode must be one of",
-                                  "unknown-decode error lists the supported head layouts");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_validate_config_only_rejects_stream_without_model(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_stream_without_model",
-                   std::string("streams:\n"
-                               "  - url: rtsp://127.0.0.1:8554/src1\n"
-                               "    task: detection\n") +
-                       kInsightOutput);
-
-  const auto result = validate(binary, config_path);
-  const bool ok = expect_true(result.exit_code == 1, "stream without a model is rejected") &&
-                  expect_contains(result.stderr_text, "streams[0].model must be set",
-                                  "missing-model error names the offending stream");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_invalid_inflight_limit",
-                   std::string(kOneStream) +
-                       "inference:\n"
-                       "  max_inflight_per_stream: 0\n" +
-                       kInsightOutput);
-
-  const auto result = validate(binary, config_path);
-  const bool ok = expect_true(result.exit_code == 1, "invalid inflight limit is rejected") &&
-                  expect_contains(result.stderr_text, "max_inflight_per_stream must be between 1 and 16",
-                                  "invalid inflight error names the setting");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_validate_config_only_rejects_inflight_above_decoder_cap(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_inflight_above_decoder_cap",
-                   std::string(kOneStream) + "inference:\n  max_inflight_per_stream: 17\n" +
-                       kInsightOutput);
-  const auto result = validate(binary, config_path);
-  const bool ok = expect_true(result.exit_code == 1, "inflight above the decoder cap is rejected") &&
-                  expect_contains(result.stderr_text, "max_inflight_per_stream must be between 1 and 16",
-                                  "inflight cap error names the limit");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_validate_config_only_rejects_frames_within_warmup(const std::string& binary) {
-  const fs::path rejected_path =
-      write_config("test_validate_config_only_rejects_frames_within_warmup",
-                   std::string(kOneStream) +
-                       "runtime:\n  warmup_frames: 30\ninference:\n  frames: 30\n" +
-                       kInsightOutput);
-  const auto rejected = validate(binary, rejected_path);
-  remove_dir(rejected_path.parent_path().string());
-  const fs::path accepted_path =
-      write_config("test_validate_config_only_accepts_frames_past_warmup",
-                   std::string(kOneStream) +
-                       "runtime:\n  warmup_frames: 30\ninference:\n  frames: 31\n" +
-                       kInsightOutput);
-  const auto accepted = validate(binary, accepted_path);
-  remove_dir(accepted_path.parent_path().string());
-  return expect_true(rejected.exit_code == 1, "frames within warmup are rejected") &&
-         expect_contains(rejected.stderr_text,
-                         "inference.frames must be 0 or greater than runtime.warmup_frames",
-                         "frames-within-warmup error names both settings") &&
-         expect_true(accepted.exit_code == 0, "frames past warmup are accepted");
-}
-
-bool test_validate_config_only_rejects_invalid_mask_threshold(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_invalid_mask_threshold",
-                   std::string(kOneStream) + "output:\n"
-                                             "  mask_threshold: 1.5\n"
-                                             "  insight:\n"
-                                             "    host: 127.0.0.1\n");
-
-  const auto result = validate(binary, config_path);
-  const bool ok = expect_true(result.exit_code == 1, "out-of-range mask threshold is rejected") &&
-                  expect_contains(result.stderr_text, "mask_threshold must be between 0 and 1",
-                                  "invalid mask threshold error names the setting");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-/// One stream entry carrying `value` for `key` and a valid value for the other field, so each
-/// field appears exactly once and the test does not depend on duplicate-key precedence.
-std::string stream_entry(const std::string& key, const std::string& value) {
-  const std::string url = key == "url" ? value : "rtsp://127.0.0.1:8554/src1";
-  const std::string model = key == "model" ? value : "models/model.tar.gz";
-  return "streams:\n  - url: " + url + "\n    model: " + model + "\n    task: detection\n" +
-         "    decode: yolov8\n";
-}
-
-bool test_stream_scalar_types(const std::string& binary) {
-  bool ok = true;
-  for (const std::string key : {"url", "model"}) {
-    for (const std::string value : {"null", "Null", "NULL", "~", "true", "false", "42", "1.5",
-                                    "[value]", "{path: value}", "", "\"  \""}) {
-      const auto path =
-          write_config("test_stream_scalar_types", stream_entry(key, value) + kInsightOutput);
-      const auto result = validate(binary, path);
-      ok &= expect_true(result.exit_code == 1, key + " rejects non-string or empty YAML value");
-      remove_dir(path.parent_path().string());
+std::string decode_error(bool pose) {
+  const std::vector<float> boxes(12, 0.0f);
+  try {
+    if (pose) {
+      insight_metadata::poses(boxes, std::vector<float>(17 * 3, 0.0f));
+    } else {
+      insight_metadata::segments(boxes, std::vector<std::uint8_t>(160 * 160, 0), 160, 160,
+                                 kLabels, 640, 640);
     }
-    const auto path =
-        write_config("test_quoted_stream_scalar", stream_entry(key, "\"null\"") + kInsightOutput);
-    ok &= expect_true(validate(binary, path).exit_code == 0, key + " accepts quoted string null");
-    remove_dir(path.parent_path().string());
+  } catch (const std::runtime_error& error) {
+    return error.what();
   }
+  return "";
+}
+
+bool test_decodes_with_fewer_rows_than_boxes_fail() {
+  bool ok = expect_true(decode_error(false) == "segmentation decode returned 2 boxes but 1 masks",
+                        "a short mask list fails: " + decode_error(false));
+  ok &= expect_true(decode_error(true) == "pose decode returned 2 boxes but 1 keypoint sets",
+                    "a short keypoint list fails: " + decode_error(true));
   return ok;
 }
 
-bool test_unsupported_fps_cap(const std::string& binary) {
-  bool ok = true;
-  for (int fps : {-1, 15, 60}) {
-    const auto path = write_config("test_unsupported_fps_cap", std::string(kOneStream) +
-        "inference:\n  fps: " + std::to_string(fps) + "\n" + kInsightOutput);
-    const auto result = validate(binary, path);
-    ok &= expect_true(result.exit_code == 1, "application FPS cap is rejected");
-    ok &= expect_contains(result.stderr_text, "configure frame rate at the RTSP source",
-                          "FPS error explains how to set source rate");
-    remove_dir(path.parent_path().string());
+bool test_data_json_leaves_out_the_lowest_confidence_entries() {
+  // Two entries fit the 32768-byte budget, three do not.
+  const std::string pad(15000, 'x');
+  const std::vector<Entry> entries = {{{"id", "a"}, {"confidence", 0.5}, {"pad", pad}},
+                                      {{"id", "b"}, {"confidence", 0.9}, {"pad", pad}},
+                                      {{"id", "c"}, {"confidence", 0.7}, {"pad", pad}}};
+  const auto [data, left_out] = insight_metadata::data_json("objects", entries);
+  std::vector<std::string> ids;
+  // A named Entry: a range-for over Entry::parse(data)["objects"] would keep only the reference
+  // operator[] returns, into a parse result destroyed before the loop.
+  const Entry parsed = Entry::parse(data);
+  for (const auto& entry : parsed["objects"]) {
+    ids.push_back(entry["id"].get<std::string>());
   }
+  bool ok = expect_true(left_out == 1, "one entry is left out");
+  ok &= expect_true(ids == std::vector<std::string>{"b", "c"},
+                    "the two highest-confidence entries are kept, best first");
+  const auto empty = insight_metadata::data_json("poses", {});
+  ok &= expect_true(empty.first == R"({"poses":[]})" && empty.second == 0,
+                    "no entries make an empty array");
   return ok;
 }
 
-bool test_negative_inflight_limit(const std::string& binary) {
-  const fs::path path = write_config("test_negative_inflight_limit",
-      std::string(kOneStream) + "inference:\n  max_inflight_per_stream: -1\n" + kInsightOutput);
-  const auto result = validate(binary, path);
-  remove_dir(path.parent_path().string());
-  return expect_true(result.exit_code == 1, "negative inflight limit is rejected");
+bool test_late_result_names_the_stream_and_model() {
+  PendingResults pending(2, "models/m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, 7, 7, 100.0);
+  ok &= expect_true(error_of(pending, 8, kNone, 101.0).empty(), "a frame is pending");
+  ok &= expect_true(error_of(pending, kNone, kNone, 111.0).empty(), "the deadline has not passed");
+  const std::string error = error_of(pending, kNone, kNone, 111.5);
+  ok &= expect_true(error == "stream 2: model models/m.tar.gz returned no result for 10 s while "
+                             "its decoder sent frames",
+                    "the error names the stream and model: " + error);
+  return ok;
 }
 
-bool test_insight_port_ranges(const std::string& binary) {
-  struct Case { int video; int metadata; bool enabled; bool valid; };
-  const Case cases[] = {{65532, 9100, true, true}, {65533, 9100, true, false},
-                        {9000, 65532, true, true}, {9000, 65533, true, false},
-                        {9000, 9003, true, false}, {9003, 9000, true, false},
-                        {9000, 9004, true, true}, {9000, 9000, false, true},
-                        {2147483647, 9100, true, false}};
-  bool ok = true;
-  for (const auto& item : cases) {
-    const fs::path path = write_config("test_insight_port_ranges",
-        std::string(kFourStreams) + "output:\n  video_enabled: " +
-        (item.enabled ? "true" : "false") + "\n  insight:\n    host: 127.0.0.1\n" +
-        "    video_port_base: " + std::to_string(item.video) + "\n" +
-        "    metadata_port_base: " + std::to_string(item.metadata) + "\n");
-    const auto result = validate(binary, path);
-    ok &= expect_true(result.exit_code == (item.valid ? 0 : 1),
-                      "Insight port range validation matches expected result");
-    if (!item.valid) {
-      ok &= expect_contains(result.stderr_text, "port", "invalid port error names port setting");
+bool test_later_frames_keep_the_first_pending_time() {
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, kNone, 7, 100.0);
+  ok &= observes(pending, 8, kNone, 101.0);
+  ok &= observes(pending, 9, kNone, 106.0);
+  ok &= expect_true(!error_of(pending, 10, kNone, 111.5).empty(),
+                    "the deadline counts from the first pending frame");
+  return ok;
+}
+
+bool test_result_clears_the_pending_frame() {
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, kNone, 7, 100.0);
+  ok &= observes(pending, 8, kNone, 101.0);
+  ok &= observes(pending, kNone, 8, 105.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 200.0).empty(),
+                    "a result clears the pending frame");
+  ok &= observes(pending, 9, kNone, 205.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 215.0).empty(),
+                    "the next frame starts a new deadline");
+  ok &= expect_true(!error_of(pending, kNone, kNone, 215.5).empty(), "the new deadline passes");
+  return ok;
+}
+
+bool test_frame_with_its_result_in_one_round_is_not_pending() {
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, 7, 7, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 1'000'000.0).empty(),
+                    "a frame with its result starts no deadline");
+  return ok;
+}
+
+bool test_newer_frame_with_a_result_in_one_round_starts_the_deadline() {
+  // The model holds frame 8 and returns nothing more, so no later frame restarts the deadline.
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, 8, 7, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 110.0).empty(), "the deadline has not passed");
+  const std::string error = error_of(pending, kNone, kNone, 110.5);
+  ok &= expect_true(
+      error == "stream 0: model m.tar.gz returned no result for 10 s while its decoder sent frames",
+      "a frame newer than the result starts the deadline: " + error);
+  return ok;
+}
+
+bool test_newer_frame_before_an_older_result_keeps_the_deadline() {
+  // Frame 9 arrives while frame 8 is pending, then the result for 8 comes in the next round.
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, kNone, 7, 90.0);
+  ok &= observes(pending, 8, kNone, 95.0);
+  ok &= observes(pending, 9, kNone, 99.0);
+  ok &= observes(pending, kNone, 8, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 110.0).empty(), "the deadline has not passed");
+  const std::string error = error_of(pending, kNone, kNone, 110.5);
+  ok &= expect_true(
+      error == "stream 0: model m.tar.gz returned no result for 10 s while its decoder sent frames",
+      "a newer frame pulled before an older result keeps the deadline: " + error);
+  return ok;
+}
+
+bool test_frame_no_newer_than_the_last_result_is_not_pending() {
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, kNone, 8, 100.0);
+  ok &= observes(pending, 7, kNone, 101.0);
+  ok &= observes(pending, 8, kNone, 102.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 1'000'000.0).empty(),
+                    "a frame no newer than the last result starts no deadline");
+  return ok;
+}
+
+bool test_frame_with_an_unknown_id_is_pending_only_without_a_result() {
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, -1, -1, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 1'000'000.0).empty(),
+                    "an unknown frame with a result starts no deadline");
+  ok &= observes(pending, -1, kNone, 1'000'001.0);
+  ok &= expect_true(!error_of(pending, kNone, kNone, 1'000'011.5).empty(),
+                    "an unknown frame without a result starts the deadline");
+  return ok;
+}
+
+bool test_first_result_has_its_own_deadline() {
+  PendingResults pending(1, "m.tar.gz", 10.0, 30.0);
+  bool ok = observes(pending, 0, kNone, 100.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 125.0).empty(), "the first result has 30 s");
+  const std::string error = error_of(pending, kNone, kNone, 130.5);
+  ok &= expect_true(
+      error == "stream 1: model m.tar.gz returned no result for 30 s while its decoder sent frames",
+      "the first deadline passes: " + error);
+  return ok;
+}
+
+bool test_paused_camera_waits_without_a_limit() {
+  PendingResults pending(0, "m.tar.gz", 10.0, 30.0);
+  bool ok =
+      expect_true(error_of(pending, kNone, kNone, 1'000'000.0).empty(), "no frame, no deadline");
+  ok &= observes(pending, kNone, 7, 1'000'001.0);
+  ok &= expect_true(error_of(pending, kNone, kNone, 2'000'000.0).empty(),
+                    "no frame after the last result, no deadline");
+  return ok;
+}
+
+// What mapping_list("model") throws for a config of `text`, or "" when it throws nothing.
+std::string mapping_list_error(const std::string& test_name, const std::string& text,
+                               std::string* config_path = nullptr) {
+  const std::string dir = create_test_scratch_dir(kExampleName, test_name);
+  const fs::path path = fs::path(dir) / "config.yaml";
+  std::ofstream(path) << text;
+  if (config_path != nullptr) {
+    *config_path = path.string();
+  }
+  std::string error;
+  try {
+    static_cast<void>(sima_examples::Config::load(path).mapping_list("model"));
+  } catch (const std::runtime_error& thrown) {
+    error = thrown.what();
+  }
+  remove_dir(dir);
+  return error;
+}
+
+const char* const kModels = "model:\n"
+                            "  - id: yolov8\n    path: a.tar.gz\n    labels: coco.txt\n"
+                            "  - id: 5\n    path: b.tar.gz\n";
+
+// The C++ side of tests/scripts/test_config.py: Config::mapping_list in support/.
+bool test_mapping_list_reads_each_entry_by_field() {
+  const std::string dir = create_test_scratch_dir(kExampleName, "mapping_list_reads");
+  const fs::path path = fs::path(dir) / "config.yaml";
+  std::ofstream(path) << kModels;
+  const auto entries = sima_examples::Config::load(path).mapping_list("model");
+  bool ok = expect_true(entries.size() == 2U, "two entries");
+  if (entries.size() == 2U) {
+    ok &= expect_true(entries[0].string("id") == "yolov8" &&
+                          entries[0].string("labels") == "coco.txt" &&
+                          entries[1].string("path") == "b.tar.gz",
+                      "each entry reads by field");
+    ok &= expect_true(entries[0].choice("id", std::map<std::string, int>{{"yolov8", 8}}) == 8,
+                      "choice reads an entry's field");
+    // C++ reads any scalar as a string, while Python rejects a number here.
+    ok &= expect_true(entries[1].string("id") == "5", "C++ reads id: 5 as \"5\"");
+    std::string error;
+    try {
+      static_cast<void>(entries[1].string("labels"));
+    } catch (const std::runtime_error& thrown) {
+      error = thrown.what();
     }
-    remove_dir(path.parent_path().string());
+    ok &= expect_true(error == path.string() + " is missing model[1].labels",
+                      "a missing field names the entry: " + error);
+    error.clear();
+    try {
+      static_cast<void>(entries[0].choice("id", std::map<std::string, int>{{"yolo26", 26}}));
+    } catch (const std::runtime_error& thrown) {
+      error = thrown.what();
+    }
+    ok &= expect_true(error == "model[0].id: unknown value 'yolov8' (expected yolo26)",
+                      "an unknown value names the entry: " + error);
   }
+  remove_dir(dir);
+  return ok;
+}
+
+bool test_mapping_list_rejects_what_is_not_a_list_of_mappings() {
+  std::string path;
+  std::string error = mapping_list_error("mapping_list_missing", "input:\n  fps: 30\n", &path);
+  bool ok = expect_true(error == path + " is missing model", "a missing list: " + error);
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"model:\n  path: a.tar.gz\n", "model must be a list of mappings, got a mapping"},
+      {"model: a.tar.gz\n", "model must be a list of mappings, got 'a.tar.gz'"},
+      {"model: []\n", "model must be a non-empty list of mappings"},
+      {"model:\n", "model must be a list of mappings, got null"},
+      {"model:\n  - path: a.tar.gz\n  -\n", "model[1] must be a mapping, got null"},
+      {"model:\n  - path: a.tar.gz\n  - [b, c]\n", "model[1] must be a mapping, got a list"},
+      {"model:\n  - path: a.tar.gz\n  - b.tar.gz\n", "model[1] must be a mapping, got 'b.tar.gz'"},
+  };
+  for (const auto& [text, expected] : cases) {
+    error = mapping_list_error("mapping_list_rejects", text);
+    ok &= expect_true(error == expected, expected + ": " + error);
+  }
+  return ok;
+}
+
+bool test_model_needs_one_entry_per_stream(const std::string& binary) {
+  auto models = shipped_models();
+  models.pop_back();
+  const std::string error = run_error(binary, "test_model_needs_one_entry_per_stream", models);
+  return expect_true(error ==
+                         "[ERR] model has 3 entries and input.source has 4: give one per stream",
+                     "a short model list fails with its key: " + error);
+}
+
+bool test_unknown_model_id_names_the_entry_and_the_choices(const std::string& binary) {
+  auto models = shipped_models();
+  models[1]["id"] = "yolo26-obb";
+  const std::string error =
+      run_error(binary, "test_unknown_model_id_names_the_entry_and_the_choices", models);
+  return expect_true(error == "[ERR] model[1].id: unknown value 'yolo26-obb' (expected yolo26, "
+                              "yolo26-pose, yolo26-seg, yolov8, yolov8-pose, yolov8-seg)",
+                     "an unknown model ID fails with the entry and the choices: " + error);
+}
+
+bool test_detection_model_without_labels_names_the_entry(const std::string& binary) {
+  auto models = shipped_models();
+  models[0].erase("labels");
+  const std::string error =
+      run_error(binary, "test_detection_model_without_labels_names_the_entry", models);
+  return expect_true(error == "[ERR] <dir>/config.yaml is missing model[0].labels",
+                     "a detection model without labels fails with the entry: " + error);
+}
+
+bool test_each_model_reads_its_own_labels(const std::string& binary) {
+  auto models = shipped_models();
+  models[1]["labels"] = "missing_labels.txt";
+  const std::string error = run_error(binary, "test_each_model_reads_its_own_labels", models);
+  return expect_true(error == "[ERR] labels file does not exist: missing_labels.txt",
+                     "model[1] reads its own labels: " + error);
+}
+
+bool test_pose_model_needs_no_labels(const std::string& binary) {
+  // The shipped pose entry has no labels. Every entry is read before the first model loads, so a
+  // run whose first model is missing gets past the config and fails on that model.
+  auto models = shipped_models();
+  bool ok = expect_true(models.at(2).count("labels") == 0, "the shipped pose entry has no labels");
+  models[0]["path"] = "missing_mpk.tar.gz";
+  std::string all;
+  const std::string error = run_error(binary, "test_pose_model_needs_no_labels", models, &all);
+  // Core's error for a missing package: a line that names model[0].path, then a hint.
+  const std::string first = all.substr(0, all.find('\n'));
+  const std::string named = "invalid_archive: archive path does not exist or is not a regular "
+                            "file: <dir>/missing_mpk.tar.gz";
+  ok &= expect_true(first.rfind("[ERR] ", 0) == 0 && first.size() >= named.size() &&
+                        first.compare(first.size() - named.size(), named.size(), named) == 0,
+                    "a pose model without labels fails on model[0].path: " + first);
+  ok &= expect_true(
+      error == "Hint: Re-export the model archive and verify it contains a valid MPK contract.",
+      "Core's hint follows: " + error);
   return ok;
 }
 
@@ -337,24 +552,30 @@ int main(int argc, char** argv) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
     return 2;
   }
-
   const std::string binary = argv[1];
-  bool ok = true;
-  ok &= test_stream_scalar_types(binary);
-  ok &= test_unsupported_fps_cap(binary);
-  ok &= test_negative_inflight_limit(binary);
-  ok &= test_insight_port_ranges(binary);
-  ok &= test_help_runs(binary);
-  ok &= test_missing_config_file_fails_cleanly(binary);
-  ok &= test_validate_config_only_reports_every_stream_task(binary);
-  ok &= test_validate_config_only_rejects_too_many_streams(binary);
-  ok &= test_validate_config_only_rejects_empty_streams(binary);
-  ok &= test_validate_config_only_rejects_unknown_task(binary);
-  ok &= test_validate_config_only_rejects_unknown_decode_family(binary);
-  ok &= test_validate_config_only_rejects_stream_without_model(binary);
-  ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
-  ok &= test_validate_config_only_rejects_inflight_above_decoder_cap(binary);
-  ok &= test_validate_config_only_rejects_frames_within_warmup(binary);
-  ok &= test_validate_config_only_rejects_invalid_mask_threshold(binary);
+  bool ok = test_shipped_config_is_usable();
+  ok &= test_objects_clamp_boxes_to_the_frame();
+  ok &= test_mask_rect_maps_the_frame_through_the_letterbox();
+  ok &= test_segment_outline_follows_the_mask();
+  ok &= test_poses_round_to_whole_pixels_and_name_the_keypoints();
+  ok &= test_decodes_with_fewer_rows_than_boxes_fail();
+  ok &= test_data_json_leaves_out_the_lowest_confidence_entries();
+  ok &= test_late_result_names_the_stream_and_model();
+  ok &= test_later_frames_keep_the_first_pending_time();
+  ok &= test_result_clears_the_pending_frame();
+  ok &= test_frame_with_its_result_in_one_round_is_not_pending();
+  ok &= test_newer_frame_with_a_result_in_one_round_starts_the_deadline();
+  ok &= test_newer_frame_before_an_older_result_keeps_the_deadline();
+  ok &= test_frame_no_newer_than_the_last_result_is_not_pending();
+  ok &= test_frame_with_an_unknown_id_is_pending_only_without_a_result();
+  ok &= test_first_result_has_its_own_deadline();
+  ok &= test_paused_camera_waits_without_a_limit();
+  ok &= test_mapping_list_reads_each_entry_by_field();
+  ok &= test_mapping_list_rejects_what_is_not_a_list_of_mappings();
+  ok &= test_model_needs_one_entry_per_stream(binary);
+  ok &= test_unknown_model_id_names_the_entry_and_the_choices(binary);
+  ok &= test_detection_model_without_labels_names_the_entry(binary);
+  ok &= test_each_model_reads_its_own_labels(binary);
+  ok &= test_pose_model_needs_no_labels(binary);
   return ok ? 0 : 1;
 }

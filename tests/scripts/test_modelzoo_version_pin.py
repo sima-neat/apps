@@ -14,7 +14,6 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
 # version at run time. These tests are what keeps that literal honest.
 DOCUMENTED_VERSION_RE = re.compile(r'export MODELZOO_VERSION="([^"]+)"')
 DOCUMENTED_MODEL_URL_LITERAL_RE = re.compile(r"pkg_downloads/SDK\d")
-PLATFORM_BADGE_RE = re.compile(r"Neat%20Development%20Environment-([^-]+)-")
 # Scope files interpolate the version at download time. A hardcoded SDK<version>
 # would still download successfully, so only a static check catches it.
 SCOPE_VERSION_LITERAL_RE = re.compile(r"SDK\d")
@@ -83,20 +82,11 @@ def test_documented_model_urls_do_not_hardcode_versions():
     assert offenders == []
 
 
-def test_readme_platform_badge_matches_manifest():
-    expected = _manifest()["platform-version"].strip()
-    readme = (APPS_ROOT / "README.md").read_text(encoding="utf-8")
-    badge = PLATFORM_BADGE_RE.search(readme)
-
-    assert badge is not None
-    assert badge.group(1) == expected
-
-
 def test_apps_surfaces_do_not_call_modelzoo_without_a_version():
     scanned = [
         *_documented_surfaces(),
         APPS_ROOT / "scripts" / "download_models.sh",
-        APPS_ROOT / "support" / "runtime" / "asset_utils.cpp",
+        APPS_ROOT / "support" / "cpp" / "sima_examples" / "asset_utils.cpp",
     ]
     offenders = [
         str(path.relative_to(APPS_ROOT))

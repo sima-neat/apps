@@ -1,15 +1,81 @@
 // E2E test for yolo26-object-detector.
-// Runs the binary with a real model, labels, and test images, verifies outputs.
-#include "support/testing/test_process.h"
-#include "support/testing/test_config.h"
+// Runs the binary with each scoped YOLO26 model and a local image folder, and verifies it exits
+// successfully, produces annotated output images, and detects objects in every image.
+#include "sima_examples/testing/source_cases.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <filesystem>
 #include <iostream>
+#include <regex>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
+
+namespace {
+
+constexpr const char* kExampleName = "yolo26-object-detector";
+
+int run_model_case(const std::string& binary, const std::string& model_path,
+                   const std::string& input_dir, const std::string& label) {
+  const std::string out_dir = create_test_output_dir(kExampleName, label);
+  if (out_dir.empty()) {
+    return 1;
+  }
+
+  const fs::path config_path = fs::path(out_dir).parent_path() / (label + "_config.yaml");
+  write_e2e_config(
+      kExampleName, config_path,
+      {{"model.path", model_path}, {"input.source", input_dir}, {"output.dir", out_dir}});
+  const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+
+  const auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
+  if (r.exit_code != 0) {
+    std::cerr << "[FAIL] " << label << ": exit code " << r.exit_code << "\n";
+    std::cerr << "stderr:\n" << r.stderr_text << "\n";
+    remove_dir(out_dir);
+    return 1;
+  }
+
+  const int output_files = count_output_files(out_dir);
+  const std::string output_problem =
+      saved_frames_problem(out_dir, supported_image_count(input_dir));
+  if (!output_problem.empty()) {
+    std::cerr << "[FAIL] " << label << ": " << output_problem << "\n";
+    remove_dir(out_dir);
+    return 1;
+  }
+
+  // Every packaged COCO test image shows at least one object above the threshold.
+  const std::regex detection_line(R"(\[\d+/\d+\] (\S+): (\d+) detections -> )");
+  int reported_images = 0;
+  for (std::sregex_iterator it(r.stdout_text.begin(), r.stdout_text.end(), detection_line), end;
+       it != end; ++it) {
+    ++reported_images;
+    if (std::stoi((*it)[2].str()) == 0) {
+      std::cerr << "[FAIL] " << label << ": no detections for " << (*it)[1].str() << "\nstdout:\n"
+                << r.stdout_text << "\n";
+      remove_dir(out_dir);
+      return 1;
+    }
+  }
+  if (reported_images != supported_image_count(input_dir)) {
+    std::cerr << "[FAIL] " << label << ": expected a detection line per image, got "
+              << reported_images << "\nstdout:\n"
+              << r.stdout_text << "\n";
+    remove_dir(out_dir);
+    return 1;
+  }
+
+  remove_dir(out_dir);
+  std::cout << "[OK] " << label << ": produced " << output_files
+            << " output files with detections in every image\n";
+  return 0;
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -19,77 +85,31 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
-
-  const std::string model_path = configured_model_path("yolo26-object-detector", models_dir);
-  if (model_path.empty() || !fs::exists(model_path)) {
-    return skip_or_fail("configured YOLO26 model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
-  }
-
-  std::string labels_file;
-  if (const char* labels_env = env_or_null("SIMANEAT_APPS_TEST_LABELS_FILE")) {
-    labels_file = labels_env;
-  }
-
-  std::string example_dir = fs::path(binary).parent_path().string();
-  std::vector<std::string> label_search = {
-      "examples/object-detection/yolo26-object-detector/"
-      "src/common/coco_label.txt",
-      example_dir + "/src/common/coco_label.txt",
-  };
-  for (const auto& p : label_search) {
-    if (!labels_file.empty()) {
-      break;
-    }
-    if (fs::exists(p)) {
-      labels_file = p;
-    }
-  }
-  if (labels_file.empty()) {
-    return skip_or_fail("src/common/coco_label.txt not found; set SIMANEAT_APPS_TEST_LABELS_FILE "
-                        "or ensure example label file is available");
-  }
-
-  const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
-  const std::string input_dir = images_raw ? images_raw : "assets/datasets-test/coco";
-  if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
-    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-                "directory with test images (assets/datasets-test/coco is empty or missing)");
-  }
-
-  auto out_dir = create_test_output_dir("yolo26-object-detector", "test_full_pipeline");
-  if (out_dir.empty())
-    return 1;
-
-  const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
-  write_e2e_config("yolo26-object-detector", config_path,
-                   {{"model.path", model_path},
-                    {"model.labels", labels_file},
-                    {"io.input_dir", input_dir},
-                    {"io.output_dir", out_dir},
-                    {"runtime.num_runs", "1"}});
-
-  int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-
-  auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
-
-  const int expected_images = supported_image_count(input_dir);
-  const int output_files = count_output_files(out_dir);
-  const std::string output_problem = saved_frames_problem(out_dir, expected_images);
+  // The application reads a relative model.path from the config file's folder.
+  const std::string models_dir = fs::absolute(models_dir_raw ? models_dir_raw : "models").string();
 
   int rc = 0;
-  if (r.exit_code != 0) {
-    std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
-    std::cerr << "stderr:\n" << r.stderr_text << "\n";
-    rc = 1;
-  } else if (!output_problem.empty()) {
-    std::cerr << "[FAIL] " << output_problem << "\n";
-    rc = 1;
-  } else {
-    std::cout << "[OK] yolo26m object detection overlay produced " << output_files
-              << " output files\n";
+  const std::vector<std::string> model_paths =
+      available_model_paths(configured_model_paths(kExampleName, models_dir), rc);
+  if (model_paths.empty()) {
+    return skip_or_fail("YOLO26 model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
-  remove_dir(out_dir);
+  const char* input_dir_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
+  const std::string input_dir = input_dir_raw ? input_dir_raw : "assets/datasets-test/coco";
+
+  if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
+    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
+                "directory containing test images (defaults to assets/datasets-test/coco)");
+    return kSkipCode;
+  }
+
+  for (const std::string& model_path : model_paths) {
+    const std::string label =
+        model_case_label("test_full_pipeline", model_path, model_paths.size());
+    if (run_model_case(binary, model_path, input_dir, label) != 0) {
+      rc = 1;
+    }
+  }
   return rc;
 }

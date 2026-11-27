@@ -10,28 +10,10 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
-sima_neat_apps_module(
-  "single-stream-object-detector"
-  OUTPUT_TARGET_VAR YOLO26_ONE_RTSP_INSIGHT_TARGET
-  UNIT_TEST
-  METADATA_E2E_TEST
-)
+sima_neat_apps_module("single-stream-object-detector" UNIT_TEST E2E_TEST)
 
 if (BUILD_TESTING)
-  add_test(
-    NAME single-stream-object-detector.requires_rtsp
-    COMMAND $<TARGET_FILE:${YOLO26_ONE_RTSP_INSIGHT_TARGET}> --config /nonexistent/single-rtsp-config.yaml
-  )
-  set_tests_properties(single-stream-object-detector.requires_rtsp PROPERTIES
-    WILL_FAIL TRUE
-    LABELS "unit"
-  )
-endif()
-
-# The unit test exercises the shared pull-outcome helper, which needs the Neat headers.
-if (TARGET single-stream-object-detector_unit_test)
-  target_link_libraries(single-stream-object-detector_unit_test
-    PRIVATE
-      SimaNeatApps::support_runtime
-  )
+  # The e2e test reads each test stream's frame size, which the config must state.
+  find_package(OpenCV REQUIRED COMPONENTS core videoio)
+  target_link_libraries(single-stream-object-detector_e2e_test PRIVATE opencv_videoio)
 endif()

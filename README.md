@@ -11,7 +11,6 @@
 
 <p align="center">
   <a href="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml"><img src="https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg" alt="Vulcan CI"></a>
-  <img src="https://img.shields.io/badge/Neat%20Development%20Environment-3.0.1-green" alt="Neat Development Environment 3.0.1">
   <img src="https://img.shields.io/badge/C%2B%2B-20-informational" alt="C++ 20">
   <img src="https://img.shields.io/badge/Python-3-informational" alt="Python 3">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License Apache 2.0"></a>
@@ -176,13 +175,29 @@ it needs, such as HTTP MJPEG. The DevKit must be able to reach each URL.
 
 ## Build From Source
 
-Build inside the Neat Development Environment:
+Build inside the Palette SDK:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
 cd apps
 ./build.sh --clean
 ```
+
+In each new build directory, including every `./build.sh --clean`, the
+configure step downloads the yaml-cpp 0.8.0 source from github.com. Without
+network access, download
+`https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz` and copy it
+to the build machine. Only this file passes the SHA-256 check. Pass its
+absolute path:
+
+```bash
+YAML_CPP_SOURCE_URL=<path>/0.8.0.tar.gz ./build.sh --clean
+```
+
+`FETCHCONTENT_SOURCE_DIR_YAML_CPP` instead takes the unpacked `yaml-cpp-0.8.0`
+folder (absolute path). Set either one as an environment variable, because
+`build.sh` rejects `-D` options. The build directory keeps the last value of
+each variable, so run `./build.sh --clean` after you unset one.
 
 `build.sh` does not run tests. To fetch one example without cloning the
 repository:

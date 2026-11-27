@@ -48,7 +48,7 @@ PROBABILITY_DECIMALS = 6
 # Directory of the configuration in use, set once in main(); see
 # bundled_candidates().
 CONFIG_DIRECTORY: Path | None = None
-# The C++ ScalarConfig parses scalars with std::stoi, which is limited to int32.
+# The C++ Config parses scalars with std::stoi, which is limited to int32.
 # Reject anything outside that range so both entrypoints accept the same values.
 INT32_MIN, INT32_MAX = -2**31, 2**31 - 1
 
@@ -300,13 +300,13 @@ def decode_yaml_escapes(text: str) -> str:
     """Decode the escapes a double-quoted YAML scalar carries.
 
     PyYAML decodes them for a quoted value and leaves them literal for an
-    unquoted one; ScalarConfig unquotes without decoding, so C++ never sees the
+    unquoted one; Config unquotes without decoding, so C++ never sees the
     difference. Decoding unconditionally on both sides is what makes the same
     file mean the same thing - the alternative leaves one spelling agreeing and
     the other not. The cost is that a literal backslash in a value is read as an
     escape, identically in both entrypoints."""
     # A single-quoted YAML scalar escapes an apostrophe by doubling it, so
-    # `'report''s'` is `report's`. ScalarConfig strips the outer quotes and
+    # `'report''s'` is `report's`. Config strips the outer quotes and
     # leaves the pair, and the quote style is gone before either side sees it,
     # so both collapse unconditionally.
     text = text.replace("''", "'")
@@ -381,7 +381,7 @@ def parse_yaml_bool(text: str) -> bool | None:
     """Recognise the YAML 1.1 Boolean spellings PyYAML resolves.
 
     PyYAML turns `yes` into True and Python renders that as "true", while
-    ScalarConfig passes the word `yes` through unchanged. Both sides canonicalise
+    Config passes the word `yes` through unchanged. Both sides canonicalise
     so the same file names the same thing."""
     lowered = text.strip().lower()
     if lowered in {"true", "yes", "on"}:
@@ -394,7 +394,7 @@ def parse_yaml_bool(text: str) -> bool | None:
 def parse_yaml_int(text: str) -> int | None:
     """Parse an integer with the YAML 1.1 rules PyYAML applies to a bare scalar.
 
-    A quoted `"010"` reaches this function as text, and ScalarConfig cannot see
+    A quoted `"010"` reaches this function as text, and Config cannot see
     the quotes, so C++ reads every value as YAML and gets 8. Reading it as base
     10 here would make the same file mean 10 to one entrypoint and 8 to the
     other."""
@@ -443,7 +443,7 @@ def yaml_text(value: Any) -> str:
     Error messages name the offending value, and repr() is the wrong renderer
     for that: it writes a string in quotes and a bool as `True`, neither of
     which is what the customer wrote or what the C++ entrypoint prints for the
-    same file. A collection is named by its shape, because ScalarConfig keeps
+    same file. A collection is named by its shape, because Config keeps
     `[a,b]` verbatim while PyYAML hands back a parsed list - the two can agree
     on the shape but never on the spelling."""
     if value is None:
@@ -451,7 +451,7 @@ def yaml_text(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (datetime.date, datetime.datetime)):
-        # PyYAML resolves an unquoted `2026-10-02` to a date; ScalarConfig hands
+        # PyYAML resolves an unquoted `2026-10-02` to a date; Config hands
         # C++ the text. isoformat() is that text, so a dated output directory
         # names the same thing in both instead of being rejected here.
         return value.isoformat()
@@ -463,7 +463,7 @@ def yaml_text(value: Any) -> str:
 
 
 def config_int(value: Any, key: str, default: int) -> int:
-    """Read an integer config value the way the C++ ScalarConfig does.
+    """Read an integer config value the way the C++ Config does.
 
     PyYAML hands back real Python objects, so `top_k: 1.9` arrives as a float
     that int() would silently truncate to 1 while C++ rejects the same file as
@@ -487,9 +487,9 @@ def config_int(value: Any, key: str, default: int) -> int:
 
 
 def config_float(value: Any, key: str, default: float) -> float:
-    """Read a floating-point config value the way the C++ ScalarConfig does.
+    """Read a floating-point config value the way the C++ Config does.
 
-    ScalarConfig parses every scalar from text, so a quoted `"0.2"` is a number
+    Config parses every scalar from text, so a quoted `"0.2"` is a number
     there; rejecting it here would make the two entrypoints accept different
     configurations."""
     if value is None:
@@ -529,7 +529,7 @@ def normalize_extension(value: str) -> str:
 
 
 def scalar_text(value: str) -> str | None:
-    """Apply ScalarConfig's scalar rules to a string, or None when it reads as null.
+    """Apply Config's scalar rules to a string, or None when it reads as null.
 
     One place, because every reader needs it: C++ takes its text from
     config_scalar, so decoding or null-handling in only the string path left the
@@ -550,7 +550,7 @@ def config_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
     value = raw.get(name)
     if value is None:
         return {}
-    # ScalarConfig unquotes before testing for null, so `io: "null"` is absent to
+    # Config unquotes before testing for null, so `io: "null"` is absent to
     # C++ and the defaults apply. Python saw a string and rejected the file.
     if isinstance(value, str) and scalar_text(value) is None:
         return {}
@@ -560,7 +560,7 @@ def config_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def config_str(value: Any, key: str, default: str | None) -> str | None:
-    """Read a string config value the way the C++ ScalarConfig does.
+    """Read a string config value the way the C++ Config does.
 
     `key: null` means "not set" and falls back to the default rather than
     becoming the text "None". Other scalars are rendered as the text C++ reads

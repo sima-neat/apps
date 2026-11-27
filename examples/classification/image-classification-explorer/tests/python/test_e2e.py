@@ -301,7 +301,7 @@ class TestE2E:
     # this PR were error paths where one language exited 2 and the other 6.
     # Two failures are reported by code neither entrypoint owns, so their text
     # cannot be aligned from here:
-    #   * a top-level scalar is rejected by ScalarConfig, which sees a file of
+    #   * a top-level scalar is rejected by Config, which sees a file of
     #     `key: value` lines and reports the offending line; PyYAML parses the
     #     whole document first and reports the shape. Matching them means
     #     teaching the shared reader to parse YAML, which is its owners' call.
@@ -412,7 +412,7 @@ class TestE2E:
         # `012` is octal 10 to PyYAML. If C++ went back to base-10 stoi it would
         # ask for 12 entries and the message would stop matching, so this pins
         # the YAML integer grammar in both.
-        # ScalarConfig unquotes before the null test, so `io: "null"` is absent
+        # Config unquotes before the null test, so `io: "null"` is absent
         # to C++ and the defaults apply; Python saw a string and rejected it.
         ("quoted null section",
          "io: \"null\"\nmodels:\n  m:\n    path: /nonexistent/m.tar.gz\n", 6),
@@ -421,7 +421,7 @@ class TestE2E:
         # PyYAML decodes this to 0.2; the float reader must see decoded text.
         # A collection where a scalar belongs: both reject it rather than one
         # creating a directory literally named "[a, b]".
-        # PyYAML normalises a quoted mapping key; ScalarConfig keeps the quotes,
+        # PyYAML normalises a quoted mapping key; Config keeps the quotes,
         # so `models.` lookups missed and every profile was discarded.
         # `1_000.0` is a YAML float PyYAML accepts; std::stod stopped at the
         # underscore, so C++ rejected a threshold Python took.
@@ -503,7 +503,7 @@ class TestE2E:
         ("sexagesimal accumulation overflows long long",
          "models:\n  m:\n    path: m.tar.gz\n    top_k: 9223372036854775807:59\n", 2),
         # A duplicate profile used to configure the two entrypoints differently:
-        # PyYAML dropped the first mapping whole, ScalarConfig merged the two
+        # PyYAML dropped the first mapping whole, Config merged the two
         # field by field, so C++ kept the invalid top_k (exit 2) while Python
         # used the default and failed loading a different model (exit 6). Both
         # refuse the duplicate now, with the same message.

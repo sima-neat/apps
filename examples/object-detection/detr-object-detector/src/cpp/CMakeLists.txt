@@ -9,4 +9,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
-sima_neat_apps_module("detr-object-detector" UNIT_TEST E2E_TEST)
+sima_neat_apps_module("detr-object-detector" UNIT_TEST E2E_TEST OUTPUT_TARGET_VAR DETR_TARGET)
+
+# The image size; the unit test includes the same header.
+target_sources(${DETR_TARGET} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/utils/images.h")

@@ -19,6 +19,7 @@ pkg_check_modules(GST REQUIRED IMPORTED_TARGET
   gstreamer-rtsp-1.0
   glib-2.0
 )
+pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
 
 get_filename_component(APPS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 get_filename_component(APP_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
@@ -27,13 +28,14 @@ set(APP_COMMON_DIR "${APP_ROOT}/src/common")
 add_executable(pcie-high-density-multi-stream-object-detector-host
   main.cpp
   "${APP_COMMON_DIR}/app_config.cpp"
-  "${APPS_ROOT}/support/runtime/config_utils.cpp"
+  "${APPS_ROOT}/support/cpp/sima_examples/config.cpp"
 )
 
 target_link_libraries(pcie-high-density-multi-stream-object-detector-host
   PRIVATE
     SimaPCIeHost::sima_neat_pcie_host
     PkgConfig::GST
+    PkgConfig::YAML_CPP
     nlohmann_json::nlohmann_json
 )
 
@@ -41,6 +43,7 @@ target_include_directories(pcie-high-density-multi-stream-object-detector-host
   PRIVATE
     "${APP_COMMON_DIR}"
     "${APPS_ROOT}"
+    "${APPS_ROOT}/support/cpp"
 )
 
 target_compile_definitions(pcie-high-density-multi-stream-object-detector-host

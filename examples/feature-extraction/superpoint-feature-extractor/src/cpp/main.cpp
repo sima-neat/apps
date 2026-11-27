@@ -1,379 +1,269 @@
-/**
- * @example superpoint-feature-extractor.cpp
- * Run SuperPoint on an RTSP stream and send the feature-point overlay to Insight.
- *
- * Usage: superpoint-feature-extractor [--config <path>]
- */
+// Copyright 2026 SiMa Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Finds SuperPoint feature points in one H.264 RTSP stream, shown in Insight.
+// The decoded frames feed the model. Insight receives the video as received and every frame's
+// feature points.
+
 #include "neat.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
-#include "support/runtime/pull_status.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/pull_status.h"
+#include "sima_examples/rtsp_probe.h"
+#include "sima_examples/stop_signals.h"
+#include "utils/feature_points.h"
 
-#include <opencv2/imgproc.hpp>
+#include <opencv2/core.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <csignal>
-#include <cstdlib>
-#include <cstring>
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
 namespace neat = simaai::neat;
+namespace groups = simaai::neat::nodes::groups;
 
 namespace {
 
-constexpr int kDescriptorDim = 256;
-constexpr int kMaxPoints = 600;
-volatile std::sig_atomic_t stop_requested = 0;
+constexpr int kPullTimeoutMs = 100;
 
-void request_stop(int) { stop_requested = 1; }
-
-struct Config {
-  fs::path model;
-  std::string rtsp_url;
-  bool tcp = true;
-  int latency_ms = 100;
-  std::string insight_host;
-  int video_port = 9000;
-  int channel = 0;
-  int bitrate_kbps = 1000;
+struct FeatureCounts {
   int frames = 0;
+  std::int64_t points = 0;
+  std::int64_t descriptor_dim = 0;
 };
 
-Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::ScalarConfig::load(path);
-  Config cfg;
-  cfg.model = raw.string_or("model.path", "models/superpoint/w8a8/superpoint_w8a8_mpk.tar.gz");
-  cfg.rtsp_url = raw.string_or("source.rtsp_url", "");
-  cfg.tcp = raw.bool_or("source.tcp", true);
-  cfg.latency_ms = raw.int_or("source.latency_ms", 100);
-  cfg.insight_host = raw.string_or("output.insight.host", "127.0.0.1");
-  cfg.video_port = raw.int_or("output.insight.video_port", 9000);
-  cfg.channel = raw.int_or("output.insight.channel", 0);
-  cfg.bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", 1000);
-  cfg.frames = raw.int_or("runtime.frames", 0);
-  if (cfg.frames < 0) {
-    throw std::runtime_error("runtime.frames must be >= 0");
-  }
-  if (cfg.rtsp_url.empty() || cfg.latency_ms < 0) {
-    throw std::runtime_error("set source.rtsp_url and a non-negative source.latency_ms");
-  }
-  if (cfg.insight_host.empty()) {
-    throw std::runtime_error("output.insight.host must be set");
-  }
-  if (cfg.video_port <= 0 || cfg.video_port > 65535) {
-    throw std::runtime_error("output.insight.video_port must be in [1, 65535]");
-  }
-  if (cfg.channel < 0 || cfg.video_port + cfg.channel > 65535) {
-    throw std::runtime_error("output.insight channel selects an invalid UDP port");
-  }
-  if (cfg.bitrate_kbps <= 0) {
-    throw std::runtime_error("output.insight.bitrate_kbps must be > 0");
-  }
-  return cfg;
-}
-
-Config parse_config(int argc, char** argv) {
-  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+fs::path parse_args(int argc, char** argv) {
+  const fs::path adjacent_config = fs::path(argv[0]).parent_path() / "config.yaml";
+  fs::path config_path = fs::exists(adjacent_config)
+                             ? adjacent_config
+                             : sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--config") {
-      if (i + 1 >= argc) {
-        throw std::runtime_error("--config requires a path");
-      }
+    if (arg == "--config" && i + 1 < argc) {
       config_path = argv[++i];
-    } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
-      std::exit(0);
     } else {
-      throw std::runtime_error("unknown argument: " + arg);
+      throw std::runtime_error("usage: " + std::string(argv[0]) + " [--config <path>]");
     }
   }
-  return load_config(config_path);
+  return config_path;
 }
 
-std::vector<float> tensor_floats(const neat::Tensor& tensor) {
-  if (tensor.dtype != neat::TensorDType::Float32) {
-    throw std::runtime_error("SuperPoint keypoints must be Float32");
-  }
-  const auto bytes = tensor.copy_dense_bytes_tight();
-  if (bytes.size() % sizeof(float) != 0) {
-    throw std::runtime_error("invalid SuperPoint keypoint byte count");
-  }
-  std::vector<float> values(bytes.size() / sizeof(float));
-  if (!values.empty()) {
-    std::memcpy(values.data(), bytes.data(), bytes.size());
-  }
-  return values;
-}
-
-struct FrameSize {
-  int width = 0;
-  int height = 0;
-};
-
-FrameSize model_input_size(const neat::Model& model) {
-  const auto contract = model.resolved_preprocess_plan().mla_contract;
-  if (contract.width <= 0 || contract.height <= 0) {
-    throw std::runtime_error("SuperPoint model input size is unresolved");
-  }
-  return {contract.width, contract.height};
-}
-
-// Validates the decoded feature set and returns its keypoints in model-input pixels.
-std::vector<float> keypoints(const neat::FeaturePointTensors& features) {
-  if (features.keypoints.shape.size() != 2 || features.keypoints.shape[1] != 2 ||
-      features.scores.shape.size() != 1 || features.descriptors.shape.size() != 2) {
-    throw std::runtime_error("invalid SuperPoint output ranks");
-  }
-
-  const auto count = features.keypoints.shape[0];
-  if (count < 0 || count > kMaxPoints || features.scores.shape[0] != count ||
-      features.descriptors.shape[0] != count || features.descriptors.shape[1] != kDescriptorDim) {
-    throw std::runtime_error("invalid SuperPoint output shapes");
-  }
-  if (features.scores.dtype != neat::TensorDType::Float32 ||
-      features.descriptors.dtype != neat::TensorDType::Float32) {
-    throw std::runtime_error("unexpected SuperPoint output dtype");
-  }
-
-  auto points = tensor_floats(features.keypoints);
-  if (points.size() != static_cast<std::size_t>(count) * 2U) {
-    throw std::runtime_error("SuperPoint keypoint data does not match its shape");
-  }
-  return points;
-}
-
-// Maps decoder keypoints (model-input pixels, interleaved x,y; sima-neat/core#1328) onto the
-// source frame that Preproc stretched to the model input, and drops points on or beyond a source
-// frame edge.
-std::vector<float> source_points(const std::vector<float>& model_points,
-                                 const FrameSize& model_size, const FrameSize& source_size) {
-  const float scale_x =
-      static_cast<float>(source_size.width) / static_cast<float>(model_size.width);
-  const float scale_y =
-      static_cast<float>(source_size.height) / static_cast<float>(model_size.height);
-  std::vector<float> points;
-  points.reserve(model_points.size());
-  for (std::size_t i = 0; i + 1 < model_points.size(); i += 2) {
-    const float x = model_points[i] * scale_x;
-    const float y = model_points[i + 1] * scale_y;
-    // The frame edges are exclusive coordinates. Discard isolated decoder outliers instead of
-    // aborting the stream when a point lands on or beyond an edge.
-    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0F || y < 0.0F ||
-        x >= static_cast<float>(source_size.width) || y >= static_cast<float>(source_size.height)) {
-      continue;
-    }
-    points.push_back(x);
-    points.push_back(y);
-  }
-  return points;
-}
-
-void draw_points(cv::Mat& frame, const std::vector<float>& points) {
-  for (std::size_t i = 0; i < points.size(); i += 2) {
-    cv::circle(frame, cv::Point(cvRound(points[i]), cvRound(points[i + 1])), 2,
-               cv::Scalar(0, 255, 0), cv::FILLED, cv::LINE_AA);
-  }
-  cv::putText(frame, "points: " + std::to_string(points.size() / 2), cv::Point(12, 26),
-              cv::FONT_HERSHEY_SIMPLEX, 0.65, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
-}
-
-neat::Tensor prepare_input(const cv::Mat& frame) {
-  return neat::Tensor::from_cv_mat(frame, neat::ImageSpec::PixelFormat::BGR,
-                                   neat::TensorMemory::EV74);
-}
-
-struct Source {
-  neat::Graph graph{"rtsp"};
-  neat::Run run;
-};
-
-Source build_source(const Config& cfg, const sima_examples::RtspStreamInfo& stream) {
-  neat::nodes::groups::RtspDecodedInputOptions options;
-  options.url = cfg.rtsp_url;
-  options.tcp = cfg.tcp;
-  options.latency_ms = cfg.latency_ms;
-  options.fallback_h264_width = stream.width;
-  options.fallback_h264_height = stream.height;
-  options.fallback_h264_fps = stream.fps;
-  auto output = neat::OutputOptions::Latest();
-  output.max_buffers = 4;
-  Source source;
-  source.graph.connect(neat::nodes::groups::RtspDecodedInput(options),
-                       neat::nodes::Output("frame", output));
-  neat::RunOptions run_options;
-  run_options.preset = neat::RunPreset::Realtime;
-  run_options.queue_depth = 4;
-  run_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
-  run_options.output_memory = neat::OutputMemory::ZeroCopy;
-  source.run = source.graph.build(run_options);
-  return source;
-}
-
-cv::Mat pull_frame(neat::Run& run) {
-  neat::Sample sample;
-  neat::PullError error;
-  const auto status = run.pull("frame", 20000, sample, &error);
-  if (!sima_examples::pull_status_has_sample(status, "frame", error, run.last_error())) {
-    throw std::runtime_error("timed out waiting for an RTSP frame");
-  }
-  const neat::Sample* field = &sample;
-  for (const auto& part : sample.fields) {
-    if (part.stream_label == "frame")
-      field = &part;
-  }
-  const auto tensors = neat::tensors_from_sample(*field);
-  cv::Mat frame;
-  std::string message;
-  sima_examples::require(!tensors.empty(), "decoded frame has no tensor");
-  sima_examples::require(sima_examples::nv12_to_bgr(tensors.front(), frame, message), message);
-  return frame; // The CPU copy outlives the decoder loan held by sample.
-}
-
-neat::Model::Options model_options(int input_width, int input_height) {
+// SuperPoint on the gray frames, stretched to the model input, with its keypoints and descriptors
+// decoded.
+neat::Model::Options model_options(const sima_examples::RtspStreamInfo& stream) {
   neat::Model::Options options;
   options.preprocess.kind = neat::InputKind::Image;
   options.preprocess.enable = neat::AutoFlag::On;
-  options.preprocess.input_max_width = input_width;
-  options.preprocess.input_max_height = input_height;
-  options.preprocess.input_max_depth = 3;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::GRAY8;
+  options.preprocess.input_max_width = stream.width;
+  options.preprocess.input_max_height = stream.height;
   options.preprocess.resize.enable = neat::AutoFlag::On;
   options.preprocess.resize.mode = neat::ResizeMode::Stretch;
-  options.preprocess.color_convert.enable = neat::AutoFlag::On;
-  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
-  options.preprocess.color_convert.output_format = neat::PreprocessColorFormat::GRAY8;
-  options.preprocess.normalize.enable = neat::AutoFlag::On;
-  options.preprocess.normalize.mean = {0.0F, 0.0F, 0.0F};
-  options.preprocess.normalize.stddev = {1.0F, 1.0F, 1.0F};
+  // The default mean 0 and stddev 1, marked explicit, turn normalization on: pixels / 255.
   options.preprocess.normalize.has_explicit_stats = true;
   options.decode_type = neat::BoxDecodeType::SuperPoint;
+  // A65V1 sets the decoder's numerics and its defaults: score threshold 0.1 while
+  // score_threshold is 0, and border margin 0. Auto would also give A65V1 for this package,
+  // which names no profile, but would follow a package that does. The 600-point limit is
+  // Core's default top_k for every profile.
   options.superpoint.profile = neat::SuperPointProfile::A65V1;
-  options.superpoint.output_format = neat::SuperPointOutputFormat::FeaturePointsV1;
-  options.superpoint.descriptor_output_dtype = neat::TensorDType::Float32;
-  options.processcvu.post_run_target = "A65";
   return options;
 }
 
-struct VideoSender {
-  neat::Graph graph{"insight"};
-  neat::Run run;
-  int port = 0;
-};
-
-VideoSender build_video_sender(const Config& cfg, double fps, int width, int height) {
-  const int output_fps = std::max(1, cvRound(fps));
-  neat::InputOptions input_options;
-  input_options.payload_type = neat::PayloadType::Image;
-  input_options.format = "BGR";
-  input_options.width = width;
-  input_options.height = height;
-  input_options.depth = 3;
-  input_options.fps_n = output_fps;
-  input_options.fps_d = 1;
-
-  auto sender_options = neat::nodes::groups::VideoSenderOptions::FromRaw({.fps = output_fps});
-  sender_options.host = cfg.insight_host;
-  sender_options.channel = cfg.channel;
-  sender_options.video_port_base = cfg.video_port;
-  sender_options.encoder.bitrate_kbps = cfg.bitrate_kbps;
-
-  VideoSender sender;
-  sender.port = sender_options.video_port();
-  sender.graph.add(neat::nodes::Input(input_options));
-  sender.graph.add(neat::nodes::groups::VideoSender(sender_options));
-  cv::Mat seed(height, width, CV_8UC3, cv::Scalar(0, 0, 0));
-  const auto tensor =
-      neat::Tensor::from_cv_mat(seed, neat::ImageSpec::PixelFormat::BGR, neat::TensorMemory::CPU);
-  sender.run = sender.graph.build(neat::TensorList{tensor});
-  return sender;
+// The frame the decoded keypoints are in: the model input.
+superpoint::FrameSize model_size(const neat::Model& model) {
+  const auto contract = model.resolved_preprocess_plan().mla_contract;
+  sima_examples::require(contract.width > 0 && contract.height > 0,
+                         "SuperPoint model input size is unresolved");
+  return {contract.width, contract.height};
 }
 
-void stream_frame(neat::Run& run, const cv::Mat& frame) {
-  const auto tensor =
-      neat::Tensor::from_cv_mat(frame, neat::ImageSpec::PixelFormat::BGR, neat::TensorMemory::CPU);
-  if (!run.push(neat::TensorList{tensor})) {
-    throw std::runtime_error("Insight video push failed");
-  }
+groups::RtspEncodedInputOptions rtsp_options(const sima_examples::Config& config,
+                                             const sima_examples::RtspStreamInfo& stream) {
+  groups::RtspEncodedInputOptions options;
+  options.url = config.string("input.source");
+  options.tcp = config.boolean("input.rtsp.tcp");
+  options.latency_ms = config.integer("input.rtsp.latency_ms");
+  // With input.fps at 0, Core also takes the caps from the stream: above 60 fps, caps set from
+  // the probed values alone failed to negotiate in some runs.
+  options.auto_caps_from_stream = config.integer("input.fps") == 0;
+  options.source_fps = stream.fps;
+  options.fallback_h264_width = stream.width;
+  options.fallback_h264_height = stream.height;
+  return options;
 }
 
-void validate_frame(const cv::Mat& frame, int expected_width = 0, int expected_height = 0) {
-  if (frame.empty() || frame.cols <= 0 || frame.rows <= 0 || frame.type() != CV_8UC3) {
-    throw std::runtime_error("SuperPoint input must be a non-empty BGR video frame");
+// Hardware decode of the H.264 stream to NV12 frames. The "frames" output keeps only the newest,
+// so a pull loop slower than the stream cannot hold back the video sender.
+neat::Graph decoder_graph(const sima_examples::RtspStreamInfo& stream) {
+  neat::SimaDecodeOptions decode;
+  decode.dec_width = stream.width;
+  decode.dec_height = stream.height;
+  decode.dec_fps = stream.fps;
+  neat::Graph graph("decoder");
+  graph.add(neat::nodes::SimaDecode(std::move(decode)));
+  graph.add(neat::nodes::Output("frames", neat::OutputOptions::Latest()));
+  return graph;
+}
+
+// The H.264 stream goes to Insight as received.
+groups::VideoSenderOptions video_options(const sima_examples::Config& config) {
+  auto options = groups::VideoSenderOptions::Passthrough(groups::RtspCodec::H264);
+  options.host = config.string("output.insight.host");
+  options.video_port_base = config.integer("output.insight.video_port_base");
+  return options;
+}
+
+neat::MetadataSenderOptions metadata_options(const sima_examples::Config& config) {
+  neat::MetadataSenderOptions options;
+  options.host = config.string("output.insight.host");
+  options.metadata_port_base = config.integer("output.insight.metadata_port_base");
+  return options;
+}
+
+neat::RunOptions run_options() {
+  neat::RunOptions options;
+  options.preset = neat::RunPreset::Realtime;
+  options.output_memory = neat::OutputMemory::ZeroCopy;
+  return options;
+}
+
+// A gray image as the model's input tensor, copied into EV74 memory, from_cv_mat's default.
+neat::Tensor gray_tensor(const cv::Mat& gray) {
+  return neat::Tensor::from_cv_mat(gray, neat::ImageSpec::PixelFormat::GRAY8);
+}
+
+// The Y plane of a decoded NV12 frame: the gray image SuperPoint reads. The only copy is the one
+// into EV74 memory, made from a view of the mapped frame while the mapping lives.
+neat::Tensor luma(const neat::Sample& sample, const sima_examples::RtspStreamInfo& stream) {
+  // Core candidate: Preproc converts no YUV format to gray, and a VideoConvert before the model
+  // drops the frame metadata Preproc needs, so the host hands the model the Y plane.
+  const auto tensors = neat::tensors_from_sample(sample, /*require_nonempty=*/false);
+  sima_examples::require(!tensors.empty(), "decoded frame has no tensor");
+  const auto nv12 = tensors.front().map_nv12_read();
+  sima_examples::require(nv12.has_value(), "decoded frame is not NV12");
+  const int width = nv12->view.width;
+  const int height = nv12->view.height;
+  sima_examples::require(width == stream.width && height == stream.height,
+                         "frame size " + std::to_string(width) + "x" + std::to_string(height) +
+                             " differs from the stream's " + std::to_string(stream.width) + "x" +
+                             std::to_string(stream.height) + "; the stream must keep one size");
+  // from_cv_mat only reads the view, so dropping const here writes nothing.
+  const cv::Mat y_plane(height, width, CV_8UC1, const_cast<std::uint8_t*>(nv12->view.y),
+                        static_cast<std::size_t>(nv12->view.y_stride));
+  return gray_tensor(y_plane);
+}
+
+// Run the model on every frame and send its feature points to Insight until `frames` (0: no
+// limit) or a stop signal; return the frame count, the point count, and the descriptor length.
+FeatureCounts send_feature_points(neat::Run& run, neat::Model::Runner& runner,
+                                  neat::MetadataSender& metadata_sender,
+                                  const superpoint::FrameSize& model_size,
+                                  const sima_examples::RtspStreamInfo& stream, int frames,
+                                  const std::atomic<bool>& stop) {
+  FeatureCounts counts;
+  while (!stop && (frames == 0 || counts.frames < frames)) {
+    neat::Sample sample;
+    neat::PullError error;
+    const auto status = run.pull("frames", kPullTimeoutMs, sample, &error);
+    if (!sima_examples::pull_status_has_sample(status, "frames", error, run.last_error())) {
+      continue;
+    }
+
+    const auto features =
+        neat::decode_superpoint(runner.run(neat::TensorList{luma(sample, stream)})).at(0);
+    const auto points = superpoint::source_points(superpoint::floats(features.keypoints),
+                                                  model_size, {stream.width, stream.height});
+    // A nonblocking send drops the message while the socket buffer is full; the drops are
+    // counted in the sender's stats and reported when the run ends. Any other failure throws.
+    // The frame's timestamp lets Insight draw the points on the video frame they belong to.
+    std::string send_error;
+    if (!metadata_sender.send_metadata("pose-estimation", superpoint::points_json(points),
+                                       sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1,
+                                       sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "",
+                                       &send_error) &&
+        !send_error.empty()) {
+      throw std::runtime_error("metadata send failed: " + send_error);
+    }
+    ++counts.frames;
+    counts.points += static_cast<std::int64_t>(points.size());
+    counts.descriptor_dim = features.descriptors.shape.at(1);
   }
-  if ((expected_width > 0 && frame.cols != expected_width) ||
-      (expected_height > 0 && frame.rows != expected_height)) {
-    throw std::runtime_error("SuperPoint input resolution changed after pipeline construction");
+  return counts;
+}
+
+int run_app(const fs::path& config_path) {
+  const auto config = sima_examples::Config::load(config_path);
+  // The stream's size and rate come from the probe for each value the config leaves at 0.
+  const auto stream = sima_examples::probe_rtsp_stream_info(
+      config.string("input.source"), config.boolean("input.rtsp.tcp"),
+      {config.integer("input.width"), config.integer("input.height"), config.integer("input.fps")});
+  const fs::path model_path = fs::absolute(config_path).parent_path() / config.string("model.path");
+  neat::Model model(model_path.string(), model_options(stream));
+  auto runner = model.build(
+      neat::TensorList{gray_tensor(cv::Mat::zeros(stream.height, stream.width, CV_8UC1))});
+  const neat::Graph video = groups::VideoSender(video_options(config));
+
+  neat::Graph graph;
+  const neat::Graph source = groups::RtspEncodedInput(rtsp_options(config, stream));
+  graph.connect(source, decoder_graph(stream));
+  // A plain link lets Core tee the encoded stream to the decoder and the video sender.
+  graph.connect(source, video);
+
+  std::string error;
+  neat::MetadataSender metadata_sender(metadata_options(config), &error);
+  sima_examples::require(metadata_sender.ok(), error);
+  const std::atomic<bool>& stop = sima_examples::stop_on_signals();
+  // The Run's and the runner's destructors close them when send_feature_points throws.
+  neat::Run run = graph.build(run_options());
+  const std::string host = config.string("output.insight.host");
+  const int video_port = config.integer("output.insight.video_port_base");
+  std::cout << "source=" << config.string("input.source") << " stream=" << stream.width << "x"
+            << stream.height << "@" << stream.fps << " insight=" << host << " video=" << video_port
+            << " metadata=" << config.integer("output.insight.metadata_port_base") << "\n";
+  const auto counts = send_feature_points(run, runner, metadata_sender, model_size(model), stream,
+                                          config.integer("inference.frames"), stop);
+  run.close();
+  runner.close();
+
+  const double average = counts.frames ? static_cast<double>(counts.points) / counts.frames : 0.0;
+  // std::endl flushes the summary when it is written, so a pipe or a file gets it even if the
+  // process later ends without flushing stdout (sima-neat/apps#673).
+  std::cout << "frames=" << counts.frames << " average_points=" << std::fixed
+            << std::setprecision(1) << average << " descriptor_dim=" << counts.descriptor_dim
+            << " video_sender=" << host << ":" << video_port << std::endl;
+  const auto failures = metadata_sender.stats().send_failures;
+  if (failures > 0) {
+    std::cout << failures << " metadata messages dropped" << std::endl;
   }
+  return 0;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
   try {
-    const Config cfg = parse_config(argc, argv);
-    if (!fs::is_regular_file(cfg.model)) {
-      throw std::runtime_error("model does not exist: " + cfg.model.string());
-    }
-    sima_examples::RtspProbeOptions probe;
-    probe.rtsp_tcp = cfg.tcp;
-    probe.latency_ms = cfg.latency_ms;
-    sima_examples::RtspStreamInfo stream;
-    sima_examples::require(
-        sima_examples::probe_rtsp_stream_info(cfg.rtsp_url, probe, stream) &&
-            stream.width > 0 && stream.height > 0 && stream.fps > 0,
-        "could not read the frame size and rate of " + cfg.rtsp_url);
-    auto source = build_source(cfg, stream);
-    cv::Mat frame = pull_frame(source.run);
-    validate_frame(frame, stream.width, stream.height);
-    const int input_width = stream.width, input_height = stream.height;
-    const FrameSize source_size{input_width, input_height};
-
-    neat::Model model(cfg.model.string(), model_options(input_width, input_height));
-    const auto model_size = model_input_size(model);
-    auto input = prepare_input(frame);
-    auto runner = model.build(neat::TensorList{input});
-    auto video_sender = build_video_sender(cfg, stream.fps, input_width, input_height);
-
-    for (const auto sig : {SIGINT, SIGTERM, SIGHUP})
-      std::signal(sig, request_stop);
-
-    std::size_t total_points = 0;
-    int processed = 0;
-    while (!stop_requested && (cfg.frames <= 0 || processed < cfg.frames)) {
-      const auto decoded = neat::decode_superpoint(runner.run(neat::TensorList{input}));
-      if (decoded.size() != 1) {
-        throw std::runtime_error("SuperPoint must return one feature set per frame");
-      }
-      const auto points = source_points(keypoints(decoded.front()), model_size, source_size);
-      total_points += points.size() / 2;
-      draw_points(frame, points);
-      stream_frame(video_sender.run, frame);
-      ++processed;
-
-      if (stop_requested || (cfg.frames > 0 && processed >= cfg.frames)) {
-        break;
-      }
-      frame = pull_frame(source.run);
-      validate_frame(frame, input_width, input_height);
-      input = prepare_input(frame);
-    }
-
-    runner.close();
-    video_sender.run.close();
-    source.run.close();
-    const double average = processed ? static_cast<double>(total_points) / processed : 0.0;
-    std::cout << "frames=" << processed << " average_points=" << cv::format("%.1f", average)
-              << " descriptor_dim=" << kDescriptorDim << " video_sender=" << cfg.insight_host << ":"
-              << video_sender.port << "\n";
-    return 0;
+    return run_app(parse_args(argc, argv));
   } catch (const std::exception& error) {
-    std::cerr << "Error: " << error.what() << "\n";
-    return 2;
+    std::cerr << "[ERR] " << error.what() << "\n";
+    return 1;
   }
 }

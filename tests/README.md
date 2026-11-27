@@ -1,7 +1,7 @@
 # SiMa NEAT Apps Testing
 
 `tests/test.sh` is the single test entrypoint for CI, VS Code tasks, and manual
-Neat Development Environment runs. Build and Neat Library install stay in `build.sh`.
+Palette SDK runs. Build and Neat Library install stay in `build.sh`.
 
 ## Quick Start
 
@@ -278,10 +278,10 @@ failure.
 
 For a persistent local override, set `PYTHON_TEST_BIN` in `tests/configs/.env.local`.
 
-## VS Code From Neat Development Environment
+## VS Code From the Palette SDK
 
-Launch the VS Code tasks from the Neat Development Environment workspace under `/workspace`.
-The task wrapper builds in the Neat Development Environment, then calls `tests/test.sh` on the
+Launch the VS Code tasks from the Palette SDK workspace under `/workspace`.
+The task wrapper builds in the Palette SDK, then calls `tests/test.sh` on the
 board-side workspace through `dk`.
 
 ```bash
@@ -367,15 +367,17 @@ MJPEG URLs.
 
 ## Two-Stage Vulcan CI
 
-- Stage 1 (eLxr runner): `./build.sh --all --clean` validates the Apps and portal
-  builds, then creates a runtime candidate and an ephemeral test bundle.
+- Stage 1 (eLxr runner): `./build.sh --all --clean` builds the Apps, then
+  `scripts/ci/package-apps.sh` creates a runtime candidate and an ephemeral test
+  bundle, which the post-build step validates. The published portal builds in
+  its own job on branch pushes.
 - Stage 2 (Modalix runner): overlays the test bundle, runs
   `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
   every activated test passes.
 - Alongside both, an Ubuntu job runs the repository contract tests under
   `tests/scripts` against the source checkout, because they read `build.sh`, the
-  workflows and the portal sources, which the test bundle does not carry.
-  Publishing waits for it too.
+  workflows and the portal sources, which the test bundle does not carry. That
+  job also builds the portal on every ref. Publishing waits for it too.
 
 ## Nightly Integration
 

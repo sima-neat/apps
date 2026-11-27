@@ -1,49 +1,34 @@
+# YOLO26 object detection of one RTSP, HTTP MJPEG, or USB camera stream, shown in Insight.
 model:
-  path: <model-path>         # Example: models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
-  labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt
+  # Compiled model package; a relative path starts at this file.
+  path: ../../../../../models/yolo26m/w16a16/yolo26m_w16a16_mpk.tar.gz
+  # Class labels, one per line; a relative path starts at the working directory.
+  labels: support/labels/coco80.txt
 
-source:
-  type: rtsp                 # rtsp, http or usb. Only the matching section below is read.
-
+input:
+  # rtsp, http, or usb. For http, delete codec and rtsp, set source to the http:// or
+  # https:// MJPEG URL, set width, height, and fps to the stream's, and add "app:" with
+  # "ssl_strict: true" (false accepts a self-signed certificate). For usb, delete codec and
+  # rtsp, set source to a camera ID from pyneat.usb_camera_ids(), and set width, height, and
+  # fps to one of its modes.
+  type: rtsp
+  source: rtsp://<rtsp-source-ip>:<port>/<stream-name>  # The RTSP URL.
+  codec: h264                   # h264, h265, or mjpeg.
+  width: 0                      # 0 reads the RTSP stream's frame size and rate with a probe.
+  height: 0                     # Set them only for a stream that does not report them.
+  fps: 0
   rtsp:
-    url: <rtsp-url-1>        # rtsp://<rtsp-source-ip>:<port>/<stream-name>
-    codec: h264              # h264, h265 or mjpeg.
-    tcp: true                # RTSP over TCP.
-    latency_ms: 100          # Receive latency.
-    fps: 0                   # 0 detects it from the stream. Set it for MJPEG streams that don't report one.
-
-  http:
-    url: <http-mjpeg-url>    # http(s)://... MJPEG streams only.
-    ssl_strict: true         # false accepts self-signed HTTPS certificates.
-    fps: 0                   # 0 detects it from the stream.
-
-  usb:
-    camera: ""               # A camera ID from pyneat.usb_camera_ids().
-    width: 1280              # One of the camera's MJPEG modes, exactly: width, height and fps.
-    height: 720              # Multiples of 8, at most 2040 (RTP/JPEG limit).
-    fps: 30
+    tcp: true                   # Receive RTSP over TCP.
+    latency_ms: 100             # RTSP jitter buffer.
 
 inference:
-  frames: 0                  # Frame limit. 0 means run continuously.
-  min_score: 0.30            # Detection score threshold.
-  nms_iou: 0.60              # NMS IoU threshold.
-  max_detections: 50         # Max detections to keep per frame.
-
-runtime:
-  profile: false             # Print aggregate profiling summaries.
-  profile_interval: 100      # Rolling profile window in published frames.
+  frames: 0                     # Frames to process before stopping; 0 runs until stopped.
+  min_score: 0.30               # Lowest score a detection needs.
+  nms_iou: 0.60                 # Overlap at which NMS drops the weaker box.
+  max_detections: 50            # Boxes kept per frame.
 
 output:
-  save_dir: ""               # Optional directory for annotated frames. Adds a decoded-frame branch.
-  save_every: 0              # Save every Nth output frame. 0 disables saving.
   insight:
-    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
-    video_port: 9000         # UDP video port.
-    metadata_port: 9100      # UDP metadata port.
-
-# Test harness settings only. Normal example runs ignore this section.
-testing:
-  e2e:
-    output:
-      save_every: 10
-      total_saved_frames: 20
+    host: <insight-host-ip>     # Machine running Insight.
+    video_port_base: 9000       # Insight video port.
+    metadata_port_base: 9100    # Insight metadata port.

@@ -7,8 +7,9 @@
  */
 #include "clip_tokenizer.h"
 #include "neat.h"
-#include "support/runtime/config_utils.h"
-#include "support/runtime/example_utils.h"
+#include "sima_examples/config.h"
+#include "sima_examples/example_utils.h"
+#include "sima_examples/rtsp_probe.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -89,7 +90,7 @@ std::string lowercase(std::string text) {
 }
 
 Config load_config(const fs::path& path) {
-  const auto raw = sima_examples::ScalarConfig::load(path);
+  const auto raw = sima_examples::Config::load(path);
   Config cfg;
   cfg.model_path = raw.string_or("model.path", "");
   cfg.text_encoder = raw.string_or("model.text_encoder", "");

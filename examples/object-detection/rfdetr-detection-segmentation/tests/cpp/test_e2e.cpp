@@ -1,6 +1,7 @@
-#include "support/testing/metadata_json_listener.h"
-#include "support/testing/test_config.h"
-#include "support/testing/test_process.h"
+#include "sima_examples/labels.h"
+#include "sima_examples/testing/metadata_json_listener.h"
+#include "sima_examples/testing/test_config.h"
+#include "sima_examples/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
 
@@ -11,7 +12,9 @@
 #include <array>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -20,7 +23,7 @@ using namespace sima_examples::testing;
 namespace {
 
 struct Variant {
-  std::string name;
+  std::string id;
   std::string backbone;
   std::string transformer;
 };
@@ -36,41 +39,30 @@ struct TestCase {
   SourceCase source;
 };
 
-bool valid_metadata(const MetadataJsonListenerResult& result, bool segmentation) {
+// Every result names a label from the label file and passes inference.min_score (0.2), and
+// every segment carries a polygon.
+bool valid_metadata(const MetadataJsonListenerResult& result, bool segmentation,
+                    const std::set<std::string>& labels) {
   const char* data_key = segmentation ? "segments" : "objects";
   for (const auto& message : result.messages) {
     if (message.frame_id.empty() ||
         message.frame_id.find_first_not_of("0123456789") != std::string::npos ||
         message.timestamp_ms < 0) {
+      std::cerr << "[FAIL] bad frame identity: " << message.frame_id << "\n";
       return false;
     }
     const auto payload = nlohmann::json::parse(message.payload);
     for (const auto& entry : payload.at("data").at(data_key)) {
-      if (!entry.contains("label") || entry.at("label").get<std::string>().empty() ||
-          !entry.contains("confidence") || !entry.at("confidence").is_number() ||
-          entry.at("confidence").get<double>() < 0.0 ||
-          entry.at("confidence").get<double>() > 1.0 ||
-          !entry.contains("bbox") || !entry.at("bbox").is_array() ||
-          entry.at("bbox").size() != 4U) {
+      const double confidence = entry.at("confidence").get<double>();
+      if (labels.count(entry.at("label").get<std::string>()) != 1 || confidence < 0.2 ||
+          confidence > 1.0 || entry.at("bbox").size() != 4U) {
+        std::cerr << "[FAIL] result outside the label file or below min_score: " << entry.dump()
+                  << "\n";
         return false;
       }
-      for (const auto& value : entry.at("bbox")) {
-        if (!value.is_number() || value.get<double>() < 0.0) {
-          return false;
-        }
-      }
-      if (!segmentation) {
-        continue;
-      }
-      if (!entry.contains("mask_format") || entry.at("mask_format") != "polygon" ||
-          !entry.contains("mask") || !entry.at("mask").is_array() || entry.at("mask").size() < 3U) {
+      if (segmentation && (entry.at("mask_format") != "polygon" || entry.at("mask").size() < 3U)) {
+        std::cerr << "[FAIL] segment without a polygon: " << entry.dump() << "\n";
         return false;
-      }
-      for (const auto& point : entry.at("mask")) {
-        if (!point.is_array() || point.size() != 2U || !point[0].is_number() ||
-            !point[1].is_number() || point[0].get<double>() < 0.0 || point[1].get<double>() < 0.0) {
-          return false;
-        }
       }
     }
   }
@@ -87,22 +79,22 @@ int main(int argc, char** argv) {
   const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
   const std::vector<Variant> detection_models = {
-      {"nano", "rf_detr_nano_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+      {"det-nano", "rf_detr_nano_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
        "rf_detr_nano_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
-      {"small", "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+      {"det-small", "rf_detr_small_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
        "rf_detr_small_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
-      {"medium", "rf_detr_medium_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+      {"det-medium", "rf_detr_medium_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
        "rf_detr_medium_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
-      {"large", "rf_detr_large_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
+      {"det-large", "rf_detr_large_w8a8_mixed_w16a16_backbone_mpk.tar.gz",
        "rf_detr_large_w8a8_mixed_w16a16_decoder_mpk.tar.gz"},
   };
   // Each segmentation size uses the registry build profile config.yaml ships with.
   const std::vector<Variant> segmentation_models = {
-      {"nano", "rf_detr_seg_nano_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+      {"seg-nano", "rf_detr_seg_nano_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
        "rf_detr_seg_nano_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
-      {"small", "rf_detr_seg_small_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+      {"seg-small", "rf_detr_seg_small_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
        "rf_detr_seg_small_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
-      {"medium", "rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
+      {"seg-medium", "rf_detr_seg_medium_w8a16_w8a8_mixed_backbone_mpk.tar.gz",
        "rf_detr_seg_medium_w8a16_w8a8_mixed_decoder_mpk.tar.gz"},
   };
   const std::vector<SourceCase> sources = {
@@ -122,8 +114,11 @@ int main(int argc, char** argv) {
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+  const char* apps_root = env_or_null("APPS_ROOT");
   const fs::path labels =
-      example_common_config_path("rfdetr-detection-segmentation").parent_path() / "coco-labels.txt";
+      fs::path(apps_root != nullptr ? apps_root : ".") / "support" / "labels" / "coco91.txt";
+  const auto label_list = sima_examples::load_labels(labels);
+  const std::set<std::string> label_set(label_list.begin(), label_list.end());
 
   for (const auto& test : cases) {
     const char* rtsp_url = env_or_null(test.source.environment);
@@ -135,30 +130,31 @@ int main(int argc, char** argv) {
     if (!fs::exists(backbone) || !fs::exists(transformer)) {
       return skip_or_fail("missing RF-DETR " + test.task + " artifacts");
     }
-    const std::string case_name = test.task + "_" + test.model.name + "_" + test.source.codec;
+    const std::string case_name = test.model.id + "_" + test.source.codec;
     const std::string output_dir =
         create_test_output_dir("rfdetr-detection-segmentation", "test_" + case_name);
     if (output_dir.empty()) {
       return 1;
     }
     const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
-    ConfigScalars overrides = {
-        {"model.task", test.task},
+    const bool segmentation = test.task == "segmentation";
+    const ConfigScalars overrides = {
+        {"model.id", test.model.id},
+        {"model.path", backbone.string()},
         {"model.labels", labels.string()},
-        {"source.rtsp_url", rtsp_url},
-        {"source.codec", test.source.codec},
+        {"input.source", rtsp_url},
+        {"input.codec", test.source.codec},
         {"inference.frames", "20"},
-        {"inference." + test.task + ".min_score", "0.2"},
+        {"inference.min_score", "0.2"},
+        // The config comments recommend 100 results per frame for detection, 24 for
+        // segmentation.
+        {"inference.max_detections", segmentation ? "24" : "100"},
         {"output.insight.host", "127.0.0.1"},
-        {"output.insight.video_port", std::to_string(video_port)},
-        {"output.insight.metadata_port", std::to_string(metadata_port)},
+        {"output.insight.video_port_base", std::to_string(video_port)},
+        {"output.insight.metadata_port_base", std::to_string(metadata_port)},
     };
-    overrides["model." + test.task + ".variant"] = test.model.name;
-    overrides["model." + test.task + "." + test.model.name + ".backbone"] = backbone.string();
-    overrides["model." + test.task + "." + test.model.name + ".transformer"] = transformer.string();
     write_e2e_config("rfdetr-detection-segmentation", config_path, overrides);
 
-    const bool segmentation = test.task == "segmentation";
     MetadataJsonListenerOptions options;
     options.host = "127.0.0.1";
     options.base_port = metadata_port;
@@ -202,8 +198,9 @@ int main(int argc, char** argv) {
     }
     const auto metadata = listener.wait_for_messages();
     const auto following = listener.wait_for_messages();
-    if (!metadata.success || !following.success || !valid_metadata(metadata, segmentation) ||
-        !valid_metadata(following, segmentation)) {
+    if (!metadata.success || !following.success ||
+        !valid_metadata(metadata, segmentation, label_set) ||
+        !valid_metadata(following, segmentation, label_set)) {
       std::cerr << "[FAIL] invalid RF-DETR " << case_name << " metadata: " << metadata.error
                 << "\n";
       return 1;
@@ -212,13 +209,16 @@ int main(int argc, char** argv) {
     const auto& last = following.messages.back();
     if (std::stoll(last.frame_id) <= std::stoll(first.frame_id) ||
         last.timestamp_ms <= first.timestamp_ms ||
-        process.stdout_text.find("RF-DETR " + test.task + ": completed=20 ") == std::string::npos) {
+        process.stdout_text.find("RF-DETR " + test.model.id + ": sent 20 results to Insight") ==
+            std::string::npos) {
       std::cerr << "[FAIL] RF-DETR " << case_name
                 << " did not complete with progressing frame identities\n";
       return 1;
     }
-    // VideoSender uses RTP H.265 (98) or H.264 (96). MJPEG is re-encoded as H.264.
-    const int payload_type = test.source.codec == "h265" ? 98 : 96;
+    // VideoSender forwards the stream as received: RTP H.264 (96), H.265 (98), or JPEG (26).
+    const int payload_type = test.source.codec == "h265"    ? 98
+                             : test.source.codec == "mjpeg" ? 26
+                                                            : 96;
     if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 ||
         (video_packet[1] & 0x7f) != payload_type) {
       std::cerr << "[FAIL] RF-DETR " << case_name << " did not publish the expected RTP video\n";
