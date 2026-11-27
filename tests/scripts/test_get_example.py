@@ -149,7 +149,7 @@ def path_without(tmp_path: Path, *tools: str, extra: dict[str, str] | None = Non
         for folder in ("/usr/bin", "/bin"):
             for tool in Path(folder).iterdir():
                 link = bin_dir / tool.name
-                if tool.name not in tools and not link.exists():
+                if tool.name not in tools and not os.path.lexists(link):
                     link.symlink_to(tool)
         for name, target in (extra or {}).items():
             (bin_dir / name).unlink(missing_ok=True)
