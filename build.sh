@@ -616,27 +616,6 @@ run_privileged() {
   fi
 }
 
-# The support library reads config.yaml with yaml-cpp. Neat already depends on
-# its runtime package, so the board has it; the SDK sysroot lacks the headers.
-# Unpack its headers package into the sysroot, as Core's build does.
-ensure_yaml_cpp_sdk_deps() {
-  is_elxr_sdk || return 0
-  local sysroot="${SYSROOT:-/opt/toolchain/aarch64/modalix}"
-  if [[ -f "${sysroot}/usr/include/yaml-cpp/yaml.h" &&
-        -f "${sysroot}/usr/lib/aarch64-linux-gnu/pkgconfig/yaml-cpp.pc" &&
-        -e "${sysroot}/usr/lib/aarch64-linux-gnu/libyaml-cpp.so" ]]; then
-    return 0
-  fi
-  echo "  Adding yaml-cpp headers to ${sysroot}..."
-  local stage deb
-  stage="$(mktemp -d /tmp/neat-apps-yaml-cpp.XXXXXX)"
-  (cd "${stage}" && apt-get download libyaml-cpp-dev:arm64)
-  for deb in "${stage}"/*.deb; do
-    dpkg-deb -x "${deb}" "${sysroot}" 2>/dev/null || run_privileged dpkg-deb -x "${deb}" "${sysroot}"
-  done
-  rm -rf "${stage}"
-}
-
 sync_sysroot_from_core_artifact() (
   local sima_cli_bin="$1"
   local branch="$2"
@@ -972,10 +951,6 @@ if [[ -z "${TOOLCHAIN_FILE}" ]]; then
 fi
 
 echo "  Toolchain file         : ${TOOLCHAIN_FILE:-"(none)"}"
-
-if [[ "${BUILD_CPP}" == "ON" ]]; then
-  ensure_yaml_cpp_sdk_deps
-fi
 
 if [[ -n "${TOOLCHAIN_FILE}" ]]; then
   cmake -S . -B "${BUILD_DIR}" \
