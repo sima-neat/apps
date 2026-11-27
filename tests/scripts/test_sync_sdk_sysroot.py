@@ -365,7 +365,7 @@ def test_pin_without_root_or_sudo_fails(tmp_path):
     tools.mkdir()
     for directory in (Path("/usr/bin"), Path("/bin")):
         for tool in directory.iterdir():
-            if tool.name != "sudo" and not (tools / tool.name).exists():
+            if tool.name != "sudo" and not os.path.lexists(tools / tool.name):
                 (tools / tool.name).symlink_to(tool)
     env["PATH"] = f"{tmp_path / 'bin'}:{tools}"
     (tmp_path / "bin/sudo").unlink()
