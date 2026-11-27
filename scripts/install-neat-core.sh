@@ -212,7 +212,10 @@ PY
   revision="$(sed -n 1p <<<"${resolved}")"
   metadata_url="$(sed -n 2p <<<"${resolved}")"
   # sima-cli names an exact revision's URL without fetching it.
-  if [[ "${spec}" != "latest" ]] && ! python3 - "${metadata_url}" <<'PY'
+  local check_status=0
+  if [[ "${spec}" != "latest" ]]; then
+    python3 - "${metadata_url}" <<'PY' || check_status=$?
+import http.client
 import sys
 import urllib.error
 import urllib.request
@@ -220,12 +223,18 @@ import urllib.request
 try:
     urllib.request.urlopen(sys.argv[1], timeout=60).close()
 except urllib.error.HTTPError as exc:
-    raise SystemExit(f"HTTP {exc.code}")
-except (OSError, ValueError) as exc:
-    raise SystemExit(f"cannot reach artifact host: {getattr(exc, 'reason', exc)}")
+    print(f"HTTP {exc.code}", file=sys.stderr)
+    raise SystemExit(2)
+except (OSError, ValueError, http.client.HTTPException) as exc:
+    print(f"cannot reach artifact host: {getattr(exc, 'reason', exc)}", file=sys.stderr)
+    raise SystemExit(3)
 PY
-  then
+  fi
+  if [[ "${check_status}" -eq 2 ]]; then
     echo "ERROR: unavailable NEAT core artifact '${ref}-${spec}': ${metadata_url}" >&2
+    return 1
+  elif [[ "${check_status}" -ne 0 ]]; then
+    echo "ERROR: cannot check NEAT core artifact '${ref}-${spec}': ${metadata_url}" >&2
     return 1
   fi
 

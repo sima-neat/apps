@@ -488,6 +488,9 @@ def test_unreachable_artifact_host_is_not_called_a_missing_artifact(tmp_path):
 
     assert proc.returncode == 1
     assert "cannot reach artifact host:" in proc.stderr
+    assert "Connection refused" in proc.stderr
+    assert "ERROR: cannot check NEAT core artifact 'develop-devsha1'" in proc.stderr
+    assert "unavailable" not in proc.stderr
     assert "HTTP " not in proc.stderr
 
 
@@ -692,9 +695,10 @@ def test_install_from_a_terminal_keeps_the_update_question(tmp_path, answer):
      ({"SIMA_CLI_AUTO_ACCEPT_UPDATE": "True"}, ["check=1", "check=1"]),
      ({"SIMA_CLI_AUTO_ACCEPT_UPDATE": "yes"}, ["check=1", "check=1"]),
      ({"SIMA_CLI_AUTO_ACCEPT_UPDATE": "ON"}, ["check=1", "check=1"]),
-     ({"SIMA_CLI_AUTO_ACCEPT_UPDATE": "0"}, ["check=0", "check=0"])],
+     ({"SIMA_CLI_AUTO_ACCEPT_UPDATE": "0"}, ["check=0", "check=0"]),
+     ({"SIMA_CLI_AUTO_ACCEPT_UPDATE": "1x"}, ["check=0", "check=0"])],
     ids=["check-off", "auto-accept-1", "auto-accept-true", "auto-accept-yes", "auto-accept-on",
-         "auto-accept-0"],
+         "auto-accept-0", "auto-accept-1x"],
 )
 def test_lookups_keep_the_callers_update_setting(tmp_path, caller_env, checks):
     proc = _run(tmp_path, env={"FAKE_UPDATE_AVAILABLE": "1", **caller_env})
@@ -964,16 +968,19 @@ def _workflow_step_text(job: str, step: str | None) -> str:
 
 
 @pytest.mark.parametrize(
-    ("job", "step", "line"),
-    [("build", None, '-e SIMA_NEAT_BASE_URL="${artifact_base_url%/}" \\'),
+    ("job", "step", "line", "env_line"),
+    [("build", None, '-e SIMA_NEAT_BASE_URL="${artifact_base_url%/}" \\',
+      '-e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \\'),
      ("test-runtime-shard", "Install Apps Core for runtime tests",
-      'SIMA_NEAT_BASE_URL="${artifact_base_url%/}" \\')],
+      'SIMA_NEAT_BASE_URL="${artifact_base_url%/}" \\',
+      'NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \\')],
     ids=["build", "devkit-core-install"],
 )
-def test_ci_passes_the_artifact_root_to_sima_cli(job, step, line):
+def test_ci_passes_the_artifact_root_to_sima_cli(job, step, line, env_line):
     text = _workflow_step_text(job, step)
     lines = [entry.strip() for entry in text.splitlines()]
 
     assert line in lines
+    assert env_line in lines
     assert not any("SIMA_NEAT_BASE_URL" in entry and "/core" in entry for entry in lines)
     assert "NEAT_ARTIFACTS_BASE_URL" not in text
