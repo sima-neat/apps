@@ -419,14 +419,14 @@ parse_core_ref() {
   local branch version
 
   if [[ "${ref}" != *-* ]]; then
-    echo "ERROR: ${label} must use branch-version (example: main-latest)." >&2
+    echo "ERROR: ${label} must use <ref>-<spec> (example: main-latest)." >&2
     return 1
   fi
 
   branch="${ref%-*}"
   version="${ref##*-}"
   if [[ -z "${branch}" || -z "${version}" ]]; then
-    echo "ERROR: ${label} must provide exactly one non-empty branch and version." >&2
+    echo "ERROR: ${label} must provide exactly one non-empty ref and spec." >&2
     return 1
   fi
 
@@ -557,8 +557,8 @@ load_neat_core_target() {
   NEAT_CORE_TARGET_VERSION="$(second_line "${target_output}")"
 }
 
-# Records an exact spec, never "latest", in deps/neat-core.json, so the CI sysroot sync
-# and the install after it select the same Core.
+# Resolves "latest" to an exact spec before the installed-state check, and records it in
+# deps/neat-core.json, which packaging reads.
 resolve_neat_core_spec() {
   load_neat_core_target
   if [[ "${NEAT_CORE_TARGET_VERSION}" == "latest" ]]; then

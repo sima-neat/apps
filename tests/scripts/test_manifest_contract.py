@@ -1290,6 +1290,24 @@ def test_build_help_names_the_resolve_option_and_the_override_form():
     ]
 
 
+@pytest.mark.parametrize(
+    ("target", "message"),
+    [
+        ("develop", "ERROR: --neat-core-version must use <ref>-<spec> (example: main-latest)."),
+        ("develop-", "ERROR: --neat-core-version must provide exactly one non-empty ref and spec."),
+        ("-devsha1", "ERROR: --neat-core-version must provide exactly one non-empty ref and spec."),
+    ],
+)
+def test_malformed_core_override_names_the_ref_spec_form(tmp_path, target, message):
+    proc = _run_build(
+        tmp_path, neat_core={"ref": "develop"},
+        args=["--only-resolve-neat-core", "--neat-core-version", target],
+    )
+
+    assert proc.returncode != 0
+    assert message in proc.stderr.splitlines()
+
+
 def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     package_dir = tmp_path / "package"
     runtime_dir = _write_vulcan_runtime(package_dir)
