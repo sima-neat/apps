@@ -112,13 +112,13 @@ and requires no `rtsp` label.
 
 CI places a suite whose E2E scope sets `runner_labels` on a shard whose runner
 selector has all of those labels. If only a busy DevKit has them, that shard
-queues. It carries only the suites that need its labels, unless every DevKit is
-busy. If no planned shard has the labels, the suite runs on any shard. The
-planner then warns in the log and the step summary with the suite, the labels,
-and one of these reasons:
+queues. It carries only the suites that need its labels, unless every eligible
+DevKit is busy. If no planned shard has the labels, the suite runs on any shard.
+The planner then warns in the log and the step summary with the suite, the
+labels, and one of these reasons:
 
-- No registered DevKit has the labels.
-- Those DevKits are offline or on other firmware.
+- No DevKit in the runner group has the labels.
+- Those DevKits are offline or lack this run's platform or firmware labels.
 - Every selector with the labels also matches a DevKit in `APPS_UNREADY_RUNNERS`.
 - The fleet cap is reached.
 

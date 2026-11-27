@@ -154,8 +154,9 @@ Pretty-print structured output examples.
 
 ## Test Scope
 
-`tests/test-scope.yaml` is the source of truth for enabled tests and model
-artifacts required by e2e coverage.
+`tests/test-scope.yaml` is the source of truth for enabled tests, model artifacts
+required by e2e coverage, and CI runner labels. Scope validation rejects any key
+under `e2e.<language>` other than those in the example below and `reason`.
 
 ```yaml
 models:

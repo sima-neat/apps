@@ -95,8 +95,8 @@ Place each piece of code by the first question it answers yes to:
 - `agents/skills/apps-write-example-tests/SKILL.md` decides which tests an example has.
 - Each example's `tests/test-scope.yaml` decides which of its tests run and with which models.
   When an e2e assertion holds only on some DevKit hardware, set `e2e.<language>.runner_labels`
-  to the label that hardware carries. CI then prefers those DevKits and warns when none is
-  ready.
+  to the label that hardware carries. CI then prefers those DevKits and warns when no planned
+  DevKit has it.
   Register enabled C++ tests with CMake. `build.sh`, `tests/test.sh`, and workflow filters
   name no individual test, so one registration serves local runs and CI.
 - Unit tests check what the application leaves to its config: every shipped config loads
