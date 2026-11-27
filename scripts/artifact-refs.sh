@@ -1,6 +1,7 @@
 # shellcheck shell=bash
-# Branch key and release tag for artifact names, shared by build.sh and
-# scripts/ci/package-apps.sh. The caller sets ROOT_DIR to the repository root.
+# Branch key and release tag for artifact names. scripts/ci/package-apps.sh uses
+# both, and scripts/install-neat-core.sh uses current_dependency_tag. The caller
+# sets ROOT_DIR to the repository root.
 
 sanitize_branch_key() {
   printf '%s' "$1" | tr '/ ' '--'

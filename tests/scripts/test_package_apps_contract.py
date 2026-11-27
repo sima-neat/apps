@@ -5,7 +5,8 @@ whether git can read the checkout or not, for a checkout with no untracked
 files under assets/. In a container git can refuse a checkout that another
 user owns (a dubious directory), so packaging must not need it.
 
-build.sh and package-apps.sh both name artifacts with sanitize_branch_key and
+package-apps.sh names artifacts with sanitize_branch_key and
+current_dependency_tag, and install-neat-core.sh selects Core with
 current_dependency_tag. A regex check keeps their one definition in
 scripts/artifact-refs.sh.
 """
@@ -286,10 +287,12 @@ def test_package_apps_names_a_tag_build_after_the_tag(tmp_path, packaged_without
     assert packaged["neat-apps-contract-1.2.3.tar.gz"] == packaged_without_git[RUNTIME_ARCHIVE]
 
 
-@pytest.mark.parametrize("script", ["build.sh", "scripts/ci/package-apps.sh"])
+@pytest.mark.parametrize(
+    "script", ["scripts/install-neat-core.sh", "scripts/ci/package-apps.sh"]
+)
 def test_branch_key_and_tag_live_only_in_artifact_refs(script):
-    # build.sh resolves Core and package-apps.sh versions the archive with the
-    # same two functions, so both must source the one definition.
+    # package-apps.sh uses both functions and install-neat-core.sh uses
+    # current_dependency_tag, so both source the one definition.
     text = (APPS_ROOT / script).read_text(encoding="utf-8")
     assert 'source "${ROOT_DIR}/scripts/artifact-refs.sh"' in text
     for function in ("sanitize_branch_key", "current_dependency_tag"):
