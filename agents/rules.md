@@ -46,12 +46,22 @@ Place each piece of code by the first question it answers yes to:
 - The C++ `utils/` files join the example's target through `target_sources`. A Python
   entrypoint imports them with `from utils import <module>`.
 - A Python entrypoint finds `support/python` in a folder above itself, as the high-density
-  example does. `scripts/ci/package-apps.sh` and `scripts/get-example.sh` ship that folder,
-  `support/README.md`, `support/labels/`, and `support/cpp/sima_examples/` without `testing/`
-  as reference source.
+  example does. `scripts/ci/package-apps.sh` ships that folder, `support/README.md`,
+  `support/labels/`, and `support/cpp/sima_examples/` without `testing/` as reference source.
+  `scripts/get-example.sh` copies the bundle's whole `support/`.
 - When a pull request adds a `support/` folder that configs or code read, it adds that folder
-  to `scripts/ci/package-apps.sh` and `scripts/get-example.sh`, because the installed bundle
-  and a fetched example hold only the folders those scripts copy.
+  to `scripts/ci/package-apps.sh`. The installed bundle and a fetched example hold only the
+  folders that script ships.
+- When `scripts/ci/package-apps.sh` ships a new top-level folder outside `support/` that
+  examples read, the same pull request adds it to the folder list in `scripts/get-example.sh`.
+  A fetched example holds only the top-level folders that list names.
+- An example names each dataset it reads by its path, `assets/datasets/<folder>`, in its
+  config, source, or README. `scripts/get-example.sh` copies only the dataset folders an
+  example's files name, so a dataset path built in code is missing from a fetched example.
+- When an example runs another example, it names that example as `<category>/<name>` in a
+  file other than its `README.md`, tests and docs included. `scripts/get-example.sh` then
+  refuses it and points to the whole bundle, because a fetched folder holds one example. A
+  mention in `README.md` does not count.
 - A label file moves from an example's `src/common/` to `support/labels/` when a second
   example's model uses the same classes in the same class-ID order. An example that keeps a
   copy deletes it and names the shared file in its own conversion pull request. A config

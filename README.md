@@ -135,6 +135,35 @@ asks before replacing an installation, keeps `models/`, and moves the other
 old files to `.prebuilt-apps-backup/`. If that backup already exists, it warns
 before replacing it.
 
+To fetch one example of the bundle without installing all of Apps:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- <example>
+cd <example>
+APP_DIR=examples/<category>/<example>
+```
+
+The script installs neither the Neat Library nor Insight. `deps/neat-core.json`
+in the folder names the Core version the example needs. The script checks the
+bundle's SHA-256 before it extracts anything. The folder has the
+`prebuilt-apps/` layout, so the commands after Install Apps in the example's
+README run from it. It holds the example and the `assets/datasets/` folders the
+example names. It also holds `support/` and `deps/`, which names the Apps ref
+and commit, when the bundle has them. The `develop` and `main` bundles have no
+`support/`. An example that
+runs other examples, such as `docker/parallel-apps`, needs the whole bundle.
+
+`--ref <branch|tag>` picks the bundle, and the default is `main`. `--dest <dir>`
+picks the folder. `--force` replaces the folder of one fetched example, which
+holds `deps/neat-apps.json`. It keeps the folder's `models/` and deletes
+everything else in it. It also replaces an empty folder or a file. It refuses
+any other folder, such as a `sima-cli` install with many examples. Options go
+after `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- --ref v0.6.2 <example>
+```
+
 ## Models and Datasets
 
 Models are not included in the Apps package. Store them under `models/`, or
@@ -199,12 +228,7 @@ folder (absolute path). Set either one as an environment variable, because
 `build.sh` rejects `-D` options. The build directory keeps the last value of
 each variable, so run `./build.sh --clean` after you unset one.
 
-`build.sh` does not run tests. To fetch one example without cloning the
-repository:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- <example>
-```
+`build.sh` does not run tests.
 
 Layouts, dependency selection, the example scaffold, tests, and the review
 checklist are in [CONTRIBUTING.md](./CONTRIBUTING.md).

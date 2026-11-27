@@ -318,13 +318,16 @@ def validate_install_workflow(
         )
     if uses_bundle and "cd prebuilt-apps" not in install:
         errors.append("Bundle installation must enter the prebuilt-apps directory")
-    expected_app_dir = f"APP_DIR=examples/{category}/{example}"
-    if uses_bundle and expected_app_dir not in install:
-        errors.append(
-            f"Bundle installation must define '{expected_app_dir}'"
-        )
     if uses_standalone and f"cd {example}" not in install:
         errors.append(f"Standalone installation must enter the {example} directory")
+    # get-example.sh lays the example out as in prebuilt-apps/, so both define APP_DIR
+    # and run the same commands.
+    expected_app_dir = f"APP_DIR=examples/{category}/{example}"
+    if (uses_bundle or uses_standalone) and expected_app_dir not in install:
+        errors.append(
+            f"{'Bundle' if uses_bundle else 'Standalone'} installation must define "
+            f"'{expected_app_dir}'"
+        )
 
     for command in SOURCE_ONLY_COMMANDS:
         if command in install or command in run:
@@ -341,25 +344,13 @@ def validate_install_workflow(
     if "C++" in languages:
         binary = metadata.get("Binary Name", "").strip()
         expected_paths = (
-            (
-                f"${{APP_DIR}}/src/cpp/pre-built/{binary}",
-                f"$APP_DIR/src/cpp/pre-built/{binary}",
-            )
-            if uses_bundle
-            else (f"src/cpp/pre-built/{binary}",)
+            f"${{APP_DIR}}/src/cpp/pre-built/{binary}",
+            f"$APP_DIR/src/cpp/pre-built/{binary}",
         )
         if binary and not any(path in run for path in expected_paths):
-            errors.append(
-                "Run must reference the packaged C++ binary through APP_DIR"
-                if uses_bundle
-                else f"Run must reference packaged C++ binary '{expected_paths[0]}'"
-            )
+            errors.append("Run must reference the packaged C++ binary through APP_DIR")
     if "Python" in languages:
-        expected_python_paths = (
-            ("${APP_DIR}/src/python/", "$APP_DIR/src/python/")
-            if uses_bundle
-            else ("src/python/",)
-        )
+        expected_python_paths = ("${APP_DIR}/src/python/", "$APP_DIR/src/python/")
         if not any(path in run for path in expected_python_paths):
             errors.append(
                 f"Run must reference a packaged Python entrypoint through "
@@ -370,7 +361,7 @@ def validate_install_workflow(
     run_without_assignment = "\n".join(
         line for line in run.splitlines() if line.strip() != expected_app_dir
     )
-    if uses_bundle and repeated_path in run_without_assignment:
+    if repeated_path in run_without_assignment:
         errors.append("Run must reuse APP_DIR instead of repeating the example path")
 
     if CONTRIBUTING_URL not in development:

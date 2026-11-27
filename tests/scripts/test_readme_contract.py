@@ -99,16 +99,12 @@ VALID_STANDALONE_INSTALL = """Fetch only this example.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- sample
 cd sample
+APP_DIR=examples/classification/sample
 ```"""
 
 VALID_RUN = """```bash
 ./${APP_DIR}/src/cpp/pre-built/sample
 python3 ${APP_DIR}/src/python/main.py
-```"""
-
-VALID_STANDALONE_RUN = """```bash
-./src/cpp/pre-built/sample
-python3 src/python/main.py
 ```"""
 
 
@@ -119,13 +115,62 @@ def test_installed_readme_contract_accepts_packaged_commands(tmp_path: Path) -> 
 
 
 def test_readme_contract_accepts_single_example_install(tmp_path: Path) -> None:
-    readme = write_readme(
-        tmp_path,
-        install=VALID_STANDALONE_INSTALL,
-        run=VALID_STANDALONE_RUN,
-    )
+    readme = write_readme(tmp_path, install=VALID_STANDALONE_INSTALL, run=VALID_RUN)
 
     assert validate_readme(readme) == []
+
+
+def test_readme_contract_requires_app_dir_after_single_example_install(
+    tmp_path: Path,
+) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_STANDALONE_INSTALL.replace(
+            "APP_DIR=examples/classification/sample\n", ""
+        ),
+        run=VALID_RUN,
+    )
+
+    assert (
+        "Standalone installation must define 'APP_DIR=examples/classification/sample'"
+        in validate_readme(readme)
+    )
+
+
+def test_readme_contract_requires_cd_after_single_example_install(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path, install=VALID_STANDALONE_INSTALL.replace("cd sample\n", ""), run=VALID_RUN
+    )
+
+    assert "Standalone installation must enter the sample directory" in validate_readme(readme)
+
+
+def test_readme_contract_rejects_a_repeated_path_after_single_example_install(
+    tmp_path: Path,
+) -> None:
+    run = VALID_RUN + "\n\n```bash\npython3 examples/classification/sample/src/python/main.py\n```"
+    readme = write_readme(tmp_path, install=VALID_STANDALONE_INSTALL, run=run)
+
+    assert "Run must reuse APP_DIR instead of repeating the example path" in validate_readme(readme)
+
+
+def test_readme_contract_rejects_the_old_standalone_run_commands(tmp_path: Path) -> None:
+    run = """```bash
+./src/cpp/pre-built/sample
+python3 src/python/main.py
+```"""
+    errors = validate_readme(write_readme(tmp_path, install=VALID_STANDALONE_INSTALL, run=run))
+
+    assert "Run must reference the packaged C++ binary through APP_DIR" in errors
+    assert "Run must reference a packaged Python entrypoint through '${APP_DIR}/src/python/'" in errors
+
+
+def test_readme_contract_rejects_a_wrong_app_dir_after_single_example_install(tmp_path: Path) -> None:
+    install = VALID_STANDALONE_INSTALL.replace("APP_DIR=examples/classification/sample", "APP_DIR=examples/other/sample")
+
+    errors = validate_readme(write_readme(tmp_path, install=install, run=VALID_RUN))
+
+    assert "Standalone installation must define 'APP_DIR=examples/classification/sample'" in errors
 
 
 def test_readme_contract_accepts_experimental_status(tmp_path: Path) -> None:
